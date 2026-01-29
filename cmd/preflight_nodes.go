@@ -39,9 +39,10 @@ func init() {
 type checkStatus string
 
 const (
-	statusPass checkStatus = "PASS"
-	statusWarn checkStatus = "WARN"
-	statusFail checkStatus = "FAIL"
+	statusPass    checkStatus = "PASS"
+	statusWarn    checkStatus = "WARN"
+	statusFail    checkStatus = "FAIL"
+	statusSkipped checkStatus = "SKIPPED"
 )
 
 type nodeCheck struct {
@@ -90,31 +91,47 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	passCnt := 0
 	warnCnt := 0
 	failCnt := 0
+	skippedCnt := 0
 
 	var warnedNodes []string
 	var failedNodes []string
+	var skippedNodes []string
+	kernels := make(map[string]struct{})
+	oses := make(map[string]struct{})
+	var nodeStatus checkStatus
 
 	for i := range nodes {
 		n := nodes[i]
 		checked++
-
-		hf := hostFacts[n.Name] // zero value if missing (e.g. scan failed hard)
-		checks, err := buildNodeChecks(ctx, clientset, &n, hf)
-		if err != nil {
-			checks = append(checks, nodeCheck{
-				title:  "node_checks",
-				status: statusFail,
-				detail: fmt.Sprintf("error: %v", err),
-			})
+		var checks []nodeCheck
+		if !isNodeReady(&n) {
+			nodeStatus = statusSkipped
+		} else {
+			hf := hostFacts[n.Name] // zero value if missing (e.g. scan failed hard)
+			checks, err = buildNodeChecks(ctx, clientset, &n, hf)
+			if err != nil {
+				checks = append(checks, nodeCheck{
+					title:  "node_checks",
+					status: statusFail,
+					detail: fmt.Sprintf("error: %v", err),
+				})
+			}
+			nodeStatus = aggregateNodeStatus(checks)
+			kernels[n.Status.NodeInfo.KernelVersion] = struct{}{}
+			oses[hf.OSRelease] = struct{}{}
 		}
 
-		nodeStatus := aggregateNodeStatus(checks)
 		switch nodeStatus {
 		case statusPass:
 			passCnt++
 		case statusWarn:
 			warnCnt++
 			warnedNodes = append(warnedNodes, n.Name)
+		case statusSkipped:
+			skippedCnt++
+			skippedNodes = append(skippedNodes, n.Name)
+			printNodeHeader(n.Name, nodeStatus)
+			continue
 		default:
 			failCnt++
 			failedNodes = append(failedNodes, n.Name)
@@ -136,16 +153,29 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	// Summary
 	fmt.Println("Summary:")
 	fmt.Printf("  Eligible nodes:      %d\n", len(nodes))
+	fmt.Printf("  Nodes skipped:       %s\n", cyan(fmt.Sprintf("%d", skippedCnt)))
 	fmt.Printf("  Nodes checked:       %d\n", checked)
 	fmt.Printf("  Nodes passed:        %s\n", green(fmt.Sprintf("%d", passCnt)))
 	fmt.Printf("  Nodes warned:        %s\n", yellow(fmt.Sprintf("%d", warnCnt)))
 	fmt.Printf("  Nodes failed:        %s\n", red(fmt.Sprintf("%d", failCnt)))
 
+	if skippedCnt > 0 {
+		fmt.Printf("  Skipped nodes:       %s\n", strings.Join(skippedNodes, ", "))
+	}
 	if warnCnt > 0 {
 		fmt.Printf("  Warned nodes:        %s\n", strings.Join(warnedNodes, ", "))
 	}
 	if failCnt > 0 {
 		fmt.Printf("  Failed nodes:        %s\n", strings.Join(failedNodes, ", "))
+	}
+	fmt.Printf("  Unique OSes:         %d\n", len(oses))
+	fmt.Printf("  Unique Kernels:      %d\n", len(kernels))
+
+	if len(oses) > 1 {
+		fmt.Printf("Warning: Multiple OSes detected: %s\n", strings.Join(mapKeysToList(oses), ", "))
+	}
+	if len(kernels) > 1 {
+		fmt.Printf("Warning: Multiple OSes detected: %s\n", strings.Join(mapKeysToList(kernels), ", "))
 	}
 
 	// WARN does not fail preflight, FAIL does.
@@ -153,6 +183,14 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("preflight nodes failed")
 	}
 	return nil
+}
+
+func mapKeysToList(m map[string]struct{}) []string {
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func buildNodeChecks(
@@ -346,27 +384,25 @@ func nonEmpty(a, b string) string {
 	return b
 }
 
-func printNodeHeader(name string, st checkStatus) {
-	switch st {
+func statusString(s checkStatus) string {
+	switch s {
 	case statusPass:
-		fmt.Printf("  %s: %s\n", name, green("PASS"))
+		return green("PASS")
 	case statusWarn:
-		fmt.Printf("  %s: %s\n", name, yellow("WARN"))
+		return yellow("WARN")
+	case statusSkipped:
+		return cyan("SKIPPED")
 	default:
-		fmt.Printf("  %s: %s\n", name, red("FAIL"))
+		return red("FAIL")
 	}
 }
 
+func printNodeHeader(name string, st checkStatus) {
+	fmt.Printf("  %s: %s\n", name, statusString(st))
+}
+
 func printNodeSubcheck(c nodeCheck) {
-	statusStr := ""
-	switch c.status {
-	case statusPass:
-		statusStr = green("PASS")
-	case statusWarn:
-		statusStr = yellow("WARN")
-	default:
-		statusStr = red("FAIL")
-	}
+	statusStr := statusString(c.status)
 
 	// Base prefix up to '['
 	prefix := fmt.Sprintf("     %s: %s [", c.title, statusStr)
@@ -387,5 +423,14 @@ func printNodeSubcheck(c nodeCheck) {
 		fmt.Printf("%s%s\n", indent, parts[i])
 	}
 	// close bracket on last line
-	fmt.Printf("%s]\n", strings.Repeat(" ", len(prefix)-11))
+	fmt.Printf("%s]\n", strings.Repeat(" ", len(prefix)-10))
+}
+
+func isNodeReady(n *corev1.Node) bool {
+	for _, c := range n.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }

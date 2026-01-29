@@ -409,6 +409,7 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 
 	pods := make([]podRef, 0, len(nodes))
 
+	fmt.Printf("Creating pods to verify node information...")
 	// Create pods (bounded parallel)
 	{
 		eg, egCtx := errgroupWithLimit(ctx, 20) // tune: 10-50 depending on cluster/apiserver
@@ -417,6 +418,20 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 		for i := range nodes {
 			nodeName := nodes[i].Name
 			podName := fmt.Sprintf("weka-preflight-hostchk-%s-%s", sanitizeName(nodeName), rand.String(5))
+			node := nodes[i]
+			if !isNodeReady(&node) {
+				results[node.Name] = HostChecksResult{
+					WekaDirOK:        false,
+					WekaDirDetail:    "skipped: node not Ready",
+					XFSInstalled:     false,
+					XFSDetail:        "skipped: node not Ready",
+					WekaClientClean:  false,
+					WekaClientDetail: "skipped: node not Ready",
+					BondLACPOk:       true, // not evaluated
+					BondLACPDetail:   "skipped: node not Ready",
+				}
+				continue
+			}
 
 			eg.Go(func() error {
 				p := makeHostChecksPod(ns, nodeName, podName, labelKey, labelVal)
@@ -452,6 +467,7 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 
 	// Ensure cleanup no matter what
 	defer func() {
+		fmt.Println("Cleaning up host checks pods...")
 		eg, _ := errgroupWithLimit(context.Background(), 30)
 		for _, pr := range pods {
 			pr := pr
@@ -475,6 +491,23 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 				mu.Lock()
 				defer mu.Unlock()
 				if err != nil {
+					// Skip: pod didn't start quickly (node not ready / unschedulable)
+					if se, ok := err.(SkipHostCheckError); ok {
+						results[pr.node] = HostChecksResult{
+							WekaDirOK:        false,
+							WekaDirDetail:    "skipped: " + se.Reason,
+							XFSInstalled:     false,
+							XFSDetail:        "skipped: " + se.Reason,
+							WekaClientClean:  false,
+							WekaClientDetail: "skipped: " + se.Reason,
+							// Mellanox inventory unavailable too
+							// (you can add a dedicated boolean like HostChecksSkipped if you want)
+						}
+						// record as an error only if you want to count it
+						errs = append(errs, hostScanError{node: pr.node, err: err})
+						return nil
+					}
+
 					results[pr.node] = HostChecksResult{
 						WekaDirOK:        false,
 						WekaDirDetail:    fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
@@ -495,6 +528,7 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 
 		_ = eg.Wait()
 	}
+	fmt.Println("Checking host checks...")
 
 	// Optional: also verify we saw all nodes; missing ones treated as error
 	for i := range nodes {
@@ -523,10 +557,12 @@ func errgroupWithLimit(ctx context.Context, limit int) (*errgroup.Group, context
 	return eg, egCtx
 }
 func waitHostChecksResult(ctx context.Context, clientset *kubernetes.Clientset, ns, podName, nodeName string) (HostChecksResult, error) {
-	deadline := time.Now().Add(90 * time.Second)
+	startDeadline := time.Now().Add(30 * time.Second) // must leave Pending by then
+	doneDeadline := time.Now().Add(120 * time.Second) // overall completion timeout
 
 	for {
-		if time.Now().After(deadline) {
+		if time.Now().After(doneDeadline) {
+			_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
 			return HostChecksResult{}, fmt.Errorf("timeout waiting for hostchecks pod on node %s", nodeName)
 		}
 
@@ -540,19 +576,41 @@ func waitHostChecksResult(ctx context.Context, clientset *kubernetes.Clientset, 
 		}
 
 		switch p.Status.Phase {
+		case corev1.PodPending:
+			// If it's still Pending after 10s, delete + skip.
+			if time.Now().After(startDeadline) {
+				// best-effort delete
+				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
+
+				reason := pendingReason(p)
+				if reason == "" {
+					reason = "pod stayed Pending >10s (node may be NotReady / unschedulable)"
+				}
+				return HostChecksResult{}, SkipHostCheckError{Node: nodeName, Reason: reason}
+			}
+			time.Sleep(300 * time.Millisecond)
+
+		case corev1.PodRunning:
+			// Great: started. Now wait for it to complete.
+			time.Sleep(300 * time.Millisecond)
+
 		case corev1.PodSucceeded, corev1.PodFailed:
 			logs, err := readPodLogs(ctx, clientset, ns, podName, "hostchecks")
 			if err != nil {
+				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
 				return HostChecksResult{}, err
 			}
-			line := strings.TrimSpace(logs)
 
+			line := strings.TrimSpace(logs)
 			var res HostChecksResult
 			if err := json.Unmarshal([]byte(line), &res); err != nil {
+				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
 				return HostChecksResult{}, fmt.Errorf("failed to parse hostchecks JSON on %s: %v (raw=%q)", nodeName, err, line)
 			}
 			return res, nil
+
 		default:
+			// Unknown state, keep polling.
 			time.Sleep(300 * time.Millisecond)
 		}
 	}
