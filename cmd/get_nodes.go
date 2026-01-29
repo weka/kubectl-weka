@@ -8,15 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
-
-var getCmd = &cobra.Command{
-	Use:   "get",
-	Short: "Get Weka resources",
-}
 
 var getNodesCmd = &cobra.Command{
 	Use:   "nodes",
@@ -29,13 +24,11 @@ func init() {
 }
 
 func runGetNodes(cmd *cobra.Command, args []string) error {
-	// Load kubeconfig (same logic kubectl uses)
+	ctx := context.Background()
+
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	configOverrides := &clientcmd.ConfigOverrides{}
-	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		loadingRules,
-		configOverrides,
-	)
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
 
 	restConfig, err := kubeConfig.ClientConfig()
 	if err != nil {
@@ -47,32 +40,30 @@ func runGetNodes(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	nodes, err := clientset.CoreV1().Nodes().List(
-		context.Background(),
-		metav1.ListOptions{},
-	)
+	nodes, err := clientset.CoreV1().Nodes().List(ctx, v1.ListOptions{})
 	if err != nil {
 		return err
 	}
 
-	// Table output similar to kubectl
 	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
 
-	fmt.Fprintln(w,
-		"NAME\tIP\tOS\tARCH\tKERNEL\tHP_SET\tHP_FREE\tCORES\tRAM\tCLTROLE\tBKNDROLE",
-	)
+	if !flagNoHeaders {
+		fmt.Fprintln(w,
+			"NAME\tIP\tOS\tARCH\tKERNEL\tHP_SET\tHP_FREE\tCORES\tRAM\tCLTROLE\tBKNDROLE",
+		)
+	}
 
 	for _, n := range nodes.Items {
-		printNode(w, &n)
+		printNodeRow(w, &n)
 	}
 
 	w.Flush()
 	return nil
 }
 
-func printNode(w *tabwriter.Writer, n *corev1.Node) {
+func printNodeRow(w *tabwriter.Writer, n *corev1.Node) {
 	name := n.Name
-	ip := firstAddress(n)
+	ip := firstInternalIP(n)
 	osImage := n.Status.NodeInfo.OSImage
 	arch := n.Status.NodeInfo.Architecture
 	kernel := n.Status.NodeInfo.KernelVersion
@@ -108,16 +99,4 @@ func printNode(w *tabwriter.Writer, n *corev1.Node) {
 		cltRole,
 		bkndRole,
 	)
-}
-
-func firstAddress(n *corev1.Node) string {
-	for _, addr := range n.Status.Addresses {
-		if addr.Type == corev1.NodeInternalIP {
-			return addr.Address
-		}
-	}
-	if len(n.Status.Addresses) > 0 {
-		return n.Status.Addresses[0].Address
-	}
-	return ""
 }

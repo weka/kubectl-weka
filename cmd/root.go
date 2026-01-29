@@ -34,5 +34,5 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&flagWide, "wide", false, "When using the default output format, print more information")
 
 	rootCmd.AddCommand(getCmd)
-	rootCmd.AddCommand(verifyCmd)
+	rootCmd.AddCommand(preflightCmd)
 }
