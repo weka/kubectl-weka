@@ -35,4 +35,6 @@ func init() {
 
 	rootCmd.AddCommand(getCmd)
 	rootCmd.AddCommand(preflightCmd)
+	rootCmd.AddCommand(logsCmd)
+
 }
