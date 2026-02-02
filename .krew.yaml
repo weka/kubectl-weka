@@ -1,0 +1,51 @@
+apiVersion: krew.googlecontainertools.github.com/v1alpha2
+kind: Plugin
+metadata:
+  name: weka
+spec:
+  version: "{{ .TagName }}"
+  homepage: https://github.com/weka/kubectl-weka
+  shortDescription: "WEKA kubectl plugin"
+  description: |
+    Kubectl plugin for WEKA operator and cluster management (status, preflight, logs, instances).
+
+  platforms:
+    - selector:
+        matchLabels:
+          os: linux
+          arch: amd64
+      {{addURIAndSha "https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .Version }}_linux_amd64.tar.gz"}}
+      files:
+        - from: "kubectl-weka"
+          to: "."
+      bin: "kubectl-weka"
+
+    - selector:
+        matchLabels:
+          os: linux
+          arch: arm64
+      {{addURIAndSha "https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .Version }}_linux_arm64.tar.gz"}}
+      files:
+        - from: "kubectl-weka"
+          to: "."
+      bin: "kubectl-weka"
+
+    - selector:
+        matchLabels:
+          os: darwin
+          arch: amd64
+      {{addURIAndSha "https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .Version }}_darwin_amd64.tar.gz"}}
+      files:
+        - from: "kubectl-weka"
+          to: "."
+      bin: "kubectl-weka"
+
+    - selector:
+        matchLabels:
+          os: darwin
+          arch: arm64
+      {{addURIAndSha "https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .Version }}_darwin_arm64.tar.gz"}}
+      files:
+        - from: "kubectl-weka"
+          to: "."
+      bin: "kubectl-weka"
