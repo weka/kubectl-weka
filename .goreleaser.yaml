@@ -1,0 +1,46 @@
+version: 2
+
+project_name: kubectl-weka
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: kubectl-weka
+    main: .
+    binary: kubectl-weka
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  # 1) Keep tar.gz archives (for Krew + standard)
+  - id: tgz
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE*
+      - README*
+      - CHANGELOG.md
+
+  # 2) Also upload the raw binaries (no archive)
+  - id: raw
+    format: binary
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github
