@@ -2,12 +2,52 @@ package cmd
 
 import (
 	"fmt"
+	"time"
+
+	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
-	"time"
 )
+
+// -----------------------------
+// Typed helpers (WEKA CRDs)
+// -----------------------------
+
+func inferWekaContainerStatusTyped(wc *wekaapi.WekaContainer) string {
+	if wc == nil {
+		return "<missing>"
+	}
+	// primary status field
+	if s := string(wc.Status.Status); s != "" {
+		return s
+	}
+	// fallback: JoinedCluster condition is often the most meaningful
+	if j := findConditionStatusTyped(wc.Status.Conditions, "JoinedCluster"); j != "<none>" {
+		return "JoinedCluster=" + j
+	}
+	return "<unknown>"
+}
+
+func findConditionStatusTyped(conds []metav1.Condition, condType string) string {
+	if len(conds) == 0 {
+		return "<none>"
+	}
+	for _, c := range conds {
+		if c.Type != condType {
+			continue
+		}
+		if c.Status == "" {
+			return "<none>"
+		}
+		return string(c.Status)
+	}
+	return "<none>"
+}
+
+// -----------------------------
+// Legacy helpers (unstructured)
+// -----------------------------
 
 func inferWekaContainerStatus(u *unstructured.Unstructured) string {
 	for _, path := range [][]string{
@@ -78,80 +118,12 @@ func getString(obj map[string]any, fields ...string) string {
 	}
 }
 
-func getStringSlice(obj map[string]any, fields ...string) []string {
-	cur := any(obj)
-	for _, f := range fields {
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return nil
-		}
-		cur, ok = m[f]
-		if !ok {
-			return nil
-		}
-	}
-	arr, ok := cur.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(arr))
-	for _, it := range arr {
-		if s, ok := it.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func discoverGVR(disc discovery.DiscoveryInterface, group string, versions []string, resources []string) (schema.GroupVersionResource, error) {
-	for _, v := range versions {
-		gv := group + "/" + v
-		l, err := disc.ServerResourcesForGroupVersion(gv)
-		if err != nil || l == nil {
-			continue
-		}
-		for _, r := range l.APIResources {
-			for _, want := range resources {
-				if r.Name == want {
-					return schema.GroupVersionResource{Group: group, Version: v, Resource: want}, nil
-				}
-			}
-		}
-	}
-	return schema.GroupVersionResource{}, fmt.Errorf("not found (group=%s resources=%v)", group, resources)
-}
-
 func selectorMapToSelector(m map[string]string) string {
 	if len(m) == 0 {
 		return ""
 	}
 	ls := labels.Set(m)
 	return labels.SelectorFromSet(ls).String()
-}
-
-func getStringMap(obj map[string]any, fields ...string) map[string]string {
-	cur := any(obj)
-	for _, f := range fields {
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return nil
-		}
-		cur, ok = m[f]
-		if !ok {
-			return nil
-		}
-	}
-	raw, ok := cur.(map[string]any)
-	if !ok {
-		return nil
-	}
-	out := make(map[string]string, len(raw))
-	for k, v := range raw {
-		if s, ok := v.(string); ok {
-			out[k] = s
-		}
-	}
-	return out
 }
 
 func findConditionStatus(u *unstructured.Unstructured, condType string) string {

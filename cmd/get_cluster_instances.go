@@ -1,10 +1,8 @@
-// cmd/get_cluster_instances.go
 package cmd
 
 import (
 	"context"
 	"fmt"
-	"k8s.io/apimachinery/pkg/types"
 	"os"
 	"sort"
 	"strings"
@@ -15,12 +13,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/dynamic"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	crclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 )
 
 var (
@@ -38,7 +36,6 @@ var getClusterInstancesCmd = &cobra.Command{
 }
 
 func init() {
-	// assumes you already have getCmd under wekaCmd
 	getCmd.AddCommand(getClusterInstancesCmd)
 
 	getClusterInstancesCmd.Flags().BoolVarP(&getClusterInstancesAllNamespaces, "all-namespaces", "A", false, "If present, list WekaCluster resources across all namespaces")
@@ -66,6 +63,9 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if currentNS == "" {
+		currentNS = "default"
+	}
 	if getClusterInstancesNamespace != "" {
 		currentNS = getClusterInstancesNamespace
 	}
@@ -75,25 +75,9 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	dc, err := dynamic.NewForConfig(restCfg)
+	crClient, err := newWekaCRClient(ctx, restCfg)
 	if err != nil {
 		return err
-	}
-
-	disc, err := discovery.NewDiscoveryClientForConfig(restCfg)
-	if err != nil {
-		return err
-	}
-
-	// Discover GVRs
-	wekaClusterGVR, err := discoverGVR(disc, "weka.weka.io", []string{"v1", "v1beta1", "v1alpha1"}, []string{"wekaclusters"})
-	if err != nil {
-		return fmt.Errorf("failed to discover WekaCluster GVR: %w", err)
-	}
-
-	wekaContainerGVR, err := discoverGVR(disc, "weka.weka.io", []string{"v1", "v1beta1", "v1alpha1"}, []string{"wekacontainers"})
-	if err != nil {
-		return fmt.Errorf("failed to discover WekaContainer GVR: %w", err)
 	}
 
 	var targetCluster string
@@ -104,8 +88,7 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Get or list WekaClusters
-	clusters, err := getWekaClusters(ctx, dc, wekaClusterGVR, currentNS, getClusterInstancesAllNamespaces, targetCluster)
+	clusters, err := getWekaClustersTyped(ctx, crClient, currentNS, getClusterInstancesAllNamespaces, targetCluster)
 	if err != nil {
 		return err
 	}
@@ -120,7 +103,6 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Output table
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
 	defer w.Flush()
 
@@ -132,28 +114,22 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// We list WekaContainers per namespace once and pods per namespace once (fast)
-	// Then for each cluster, filter containers by:
-	//   - label weka.weka.io/cluster == clusterName (preferred if present)
-	//   - else name prefix clusterName + "-"
-	nsToContainers := map[string][]unstructured.Unstructured{}
-	nsToPods := map[string]map[string]*corev1.Pod{}
-
-	// Gather namespaces we need
+	// Preload WekaContainers + Pods per namespace once
 	needNS := map[string]struct{}{}
-	for _, c := range clusters {
-		needNS[c.GetNamespace()] = struct{}{}
+	for i := range clusters {
+		needNS[clusters[i].GetNamespace()] = struct{}{}
 	}
 
-	// Preload data per namespace
+	nsToContainers := map[string][]wekaapi.WekaContainer{}
+	nsToPods := map[string]map[string]*corev1.Pod{}
+
 	for ns := range needNS {
-		lst, err := dc.Resource(wekaContainerGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
-		if err != nil {
+		var contList wekaapi.WekaContainerList
+		if err := crClient.List(ctx, &contList, crclient.InNamespace(ns)); err != nil {
 			return fmt.Errorf("failed to list WekaContainer CRs in namespace %q: %w", ns, err)
 		}
-		nsToContainers[ns] = lst.Items
+		nsToContainers[ns] = contList.Items
 
-		// Pods: list once, index by name
 		podList, err := k8s.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to list pods in namespace %q: %w", ns, err)
@@ -168,7 +144,7 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 
 	now := time.Now()
 
-	// Print per cluster, sorted by ns/name
+	// Sort stable by ns/name
 	sort.Slice(clusters, func(i, j int) bool {
 		if clusters[i].GetNamespace() != clusters[j].GetNamespace() {
 			return clusters[i].GetNamespace() < clusters[j].GetNamespace()
@@ -176,16 +152,15 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 		return clusters[i].GetName() < clusters[j].GetName()
 	})
 
-	for _, cluster := range clusters {
+	for i := range clusters {
+		cluster := &clusters[i]
 		clusterName := cluster.GetName()
-		clusterUid := cluster.GetUID()
 		ns := cluster.GetNamespace()
 
 		containers := nsToContainers[ns]
 		podsByName := nsToPods[ns]
 
-		// Filter containers for this cluster
-		matching := filterClusterContainers(containers, clusterUid)
+		matching := filterClusterContainersTyped(containers, cluster)
 
 		// Sort stable by node, then name
 		sort.Slice(matching, func(i, j int) bool {
@@ -207,10 +182,15 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 
 		for _, wc := range matching {
 			wcName := wc.GetName()
-			wcStatus := inferWekaContainerStatus(&wc)
+			wcStatus := inferWekaContainerStatusTyped(&wc)
 
-			mgmtIP := firstOrNone(getStringSlice(wc.Object, "status", "managementIPs"))
-			containerID := getString(wc.Object, "status", "containerID")
+			ips := wc.Status.GetManagementIps()
+			mgmtIP := firstOrNone(ips)
+
+			containerID := "<none>"
+			if wc.Status.ClusterContainerID != nil {
+				containerID = fmt.Sprintf("%d", *wc.Status.ClusterContainerID)
+			}
 
 			podPhase := "<not-found>"
 			nodeName := "<unknown>"
@@ -223,7 +203,7 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 
 			if getClusterInstancesWide {
 				age := humanAge(now.Sub(wc.GetCreationTimestamp().Time))
-				cpuUtil := getString(wc.Object, "status", "stats", "cpuUtilization")
+				cpuUtil := string(wc.Status.Stats.CpuUsage)
 				if cpuUtil == "" {
 					cpuUtil = "<none>"
 				}
@@ -234,53 +214,50 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 					clusterName, ns, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID)
 			}
 		}
-
-		// If no containers match, still show a single row? (kubectl usually prints nothing)
 	}
 
 	return nil
 }
 
-//
 // ---- helpers ----
-//
 
-func getWekaClusters(ctx context.Context, dc dynamic.Interface, gvr schema.GroupVersionResource, ns string, allNS bool, name string) ([]unstructured.Unstructured, error) {
+func getWekaClustersTyped(ctx context.Context, c crclient.Client, ns string, allNS bool, name string) ([]wekaapi.WekaCluster, error) {
 	if name != "" {
-		u, err := dc.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		var wc wekaapi.WekaCluster
+		err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &wc)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return nil, nil
 			}
 			return nil, fmt.Errorf("failed to get WekaCluster %q in namespace %q: %w", name, ns, err)
 		}
-		return []unstructured.Unstructured{*u}, nil
+		return []wekaapi.WekaCluster{wc}, nil
 	}
 
-	var lst *unstructured.UnstructuredList
-	var err error
-	if allNS {
-		lst, err = dc.Resource(gvr).List(ctx, metav1.ListOptions{})
-	} else {
-		lst, err = dc.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{})
+	var lst wekaapi.WekaClusterList
+	opts := []crclient.ListOption{}
+	if !allNS {
+		opts = append(opts, crclient.InNamespace(ns))
 	}
-	if err != nil {
+	if err := c.List(ctx, &lst, opts...); err != nil {
 		return nil, fmt.Errorf("failed to list WekaCluster CRs: %w", err)
 	}
 	return lst.Items, nil
 }
 
-func filterClusterContainers(all []unstructured.Unstructured, clusterUid types.UID) []unstructured.Unstructured {
-	var out []unstructured.Unstructured
+func filterClusterContainersTyped(all []wekaapi.WekaContainer, cluster *wekaapi.WekaCluster) []wekaapi.WekaContainer {
+	if cluster == nil {
+		return nil
+	}
 
+	out := make([]wekaapi.WekaContainer, 0, len(all))
 	for i := range all {
-		u := all[i]
+		wc := all[i]
 
-		// Prefer label match if present
-		lbls := u.GetLabels()
-		if v := lbls["weka.io/cluster-id"]; v != "" {
-			if v == string(clusterUid) {
-				out = append(out, u)
+		// Preferred match: label weka.io/cluster-id == cluster UID
+		for _, ref := range wc.GetOwnerReferences() {
+			if ref.Kind == "WekaCluster" && ref.UID == cluster.GetUID() {
+				out = append(out, wc)
 			}
 		}
 	}
