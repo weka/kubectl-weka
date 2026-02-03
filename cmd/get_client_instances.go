@@ -20,13 +20,13 @@ import (
 )
 
 var (
-	getClientNodesAllNamespaces bool
-	getClientNodesNamespace     string
-	getClientNodesNoHeaders     bool
-	getClientNodesWide          bool
+	getClientInstancesAllNamespaces bool
+	getClientInstancesNamespace     string
+	getClientInstancesNoHeaders     bool
+	getClientInstancesWide          bool
 )
 
-var getClientNodesCmd = &cobra.Command{
+var getClientInstancesCmd = &cobra.Command{
 	Use:   "client-instances [WEKACLIENT]",
 	Short: "Display WEKA client instances and status (derived from WekaClient configuration)",
 	Args:  cobra.MaximumNArgs(1),
@@ -34,18 +34,23 @@ var getClientNodesCmd = &cobra.Command{
 }
 
 func init() {
-	getCmd.AddCommand(getClientNodesCmd)
+	getCmd.AddCommand(getClientInstancesCmd)
 
-	getClientNodesCmd.Flags().BoolVarP(&getClientNodesAllNamespaces, "all-namespaces", "A", false, "If present, list WekaClient resources across all namespaces")
-	getClientNodesCmd.Flags().StringVarP(&getClientNodesNamespace, "namespace", "n", "", "Namespace. Defaults to current kubeconfig namespace")
-	getClientNodesCmd.Flags().BoolVar(&getClientNodesNoHeaders, "no-headers", false, "Don't print headers")
-	getClientNodesCmd.Flags().BoolVar(&getClientNodesWide, "wide", false, "Wide output (adds selector and all mgmt IPs)")
+	getClientInstancesCmd.Flags().BoolVarP(&getClientInstancesAllNamespaces, "all-namespaces", "A", false, "If present, list WekaClient resources across all namespaces")
+	getClientInstancesCmd.Flags().StringVarP(&getClientInstancesNamespace, "namespace", "n", "", "Namespace. Defaults to current kubeconfig namespace")
+	getClientInstancesCmd.Flags().BoolVar(&getClientInstancesNoHeaders, "no-headers", false, "Don't print headers")
+	getClientInstancesCmd.Flags().BoolVar(&getClientInstancesWide, "wide", false, "Wide output (adds selector and all mgmt IPs)")
 
-	getClientNodesCmd.SilenceUsage = true
+	getClientInstancesCmd.SilenceUsage = true
 }
 
 func runGetClientNodes(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
+
+	includeNamespaceColumn := false
+	if getClusterInstancesAllNamespaces {
+		includeNamespaceColumn = true
+	}
 
 	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		clientcmd.NewDefaultClientConfigLoadingRules(),
@@ -64,8 +69,8 @@ func runGetClientNodes(cmd *cobra.Command, args []string) error {
 	if currentNS == "" {
 		currentNS = "default"
 	}
-	if getClientNodesNamespace != "" {
-		currentNS = getClientNodesNamespace
+	if getClientInstancesNamespace != "" {
+		currentNS = getClientInstancesNamespace
 	}
 
 	k8s, err := kubernetes.NewForConfig(restCfg)
@@ -86,7 +91,7 @@ func runGetClientNodes(cmd *cobra.Command, args []string) error {
 	// ----- List/Get WekaClients (typed) -----
 	var wekaClients []wekaapi.WekaClient
 	if targetName != "" {
-		if getClientNodesAllNamespaces {
+		if getClientInstancesAllNamespaces {
 			return fmt.Errorf("cannot use -A/--all-namespaces when specifying a WekaClient name; use -n to choose namespace")
 		}
 		var wc wekaapi.WekaClient
@@ -101,7 +106,7 @@ func runGetClientNodes(cmd *cobra.Command, args []string) error {
 	} else {
 		var lst wekaapi.WekaClientList
 		opts := []crclient.ListOption{}
-		if !getClientNodesAllNamespaces {
+		if !getClientInstancesAllNamespaces {
 			opts = append(opts, crclient.InNamespace(currentNS))
 		}
 		err := crClient.List(ctx, &lst, opts...)
@@ -114,7 +119,7 @@ func runGetClientNodes(cmd *cobra.Command, args []string) error {
 	if len(wekaClients) == 0 {
 		if targetName != "" {
 			fmt.Printf("WekaClient %q not found.\n", targetName)
-		} else if getClientNodesAllNamespaces {
+		} else if getClientInstancesAllNamespaces {
 			fmt.Println("No WekaClient resources found.")
 		} else {
 			fmt.Printf("No WekaClient resources found in namespace %q.\n", currentNS)
@@ -134,11 +139,19 @@ func runGetClientNodes(cmd *cobra.Command, args []string) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
 	defer w.Flush()
 
-	if !getClientNodesNoHeaders {
-		if getClientNodesWide {
-			fmt.Fprintln(w, "WEKACLIENT\tNODE\tNAMESPACE\tWEKACONTAINER\tWC_STATUS\tPOD\tJOINED\tCONTAINER_ID\tMGMT_IPS\tACTIVE_MOUNTS\tCPU_UTIL\tNODE_SELECTOR")
+	if !getClientInstancesNoHeaders {
+		if includeNamespaceColumn {
+			if getClientInstancesWide {
+				fmt.Fprintln(w, "WEKACLIENT\tNAMESPACE\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tJOINED\tCONTAINER_ID\tMGMT_IPS\tACTIVE_MOUNTS\tCPU_UTIL\tNODE_SELECTOR")
+			} else {
+				fmt.Fprintln(w, "WEKACLIENT\tNAMESPACE\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tJOINED\tCONTAINER_ID\tMGMT_IP\tACTIVE_MOUNTS\tCPU_UTIL")
+			}
 		} else {
-			fmt.Fprintln(w, "WEKACLIENT\tNODE\tNAMESPACE\tWEKACONTAINER\tWC_STATUS\tPOD\tJOINED\tCONTAINER_ID\tMGMT_IP\tACTIVE_MOUNTS\tCPU_UTIL")
+			if getClientInstancesWide {
+				fmt.Fprintln(w, "WEKACLIENT\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tJOINED\tCONTAINER_ID\tMGMT_IPS\tACTIVE_MOUNTS\tCPU_UTIL\tNODE_SELECTOR")
+			} else {
+				fmt.Fprintln(w, "WEKACLIENT\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tJOINED\tCONTAINER_ID\tMGMT_IP\tACTIVE_MOUNTS\tCPU_UTIL")
+			}
 		}
 	}
 
@@ -153,7 +166,7 @@ func runGetClientNodes(cmd *cobra.Command, args []string) error {
 		nodes, err := k8s.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: selectorStr})
 		if err != nil {
 			// show a single error row for this client
-			if getClientNodesWide {
+			if getClientInstancesWide {
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 					clientName, "<nodes?>", clientNS, "<none>", "FAIL", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", selectorStr)
 			} else {
@@ -214,7 +227,7 @@ func runGetClientNodes(cmd *cobra.Command, args []string) error {
 				}
 			}
 
-			if getClientNodesWide {
+			if getClientInstancesWide {
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 					clientName, n.Name, clientNS, wContName, wContStatus, podPhase, joined, containerID, mgmtIPsAll, activeMounts, cpuUtil, selectorStr)
 			} else {

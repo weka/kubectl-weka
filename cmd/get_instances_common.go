@@ -6,13 +6,8 @@ import (
 
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 )
-
-// -----------------------------
-// Typed helpers (WEKA CRDs)
-// -----------------------------
 
 func inferWekaContainerStatusTyped(wc *wekaapi.WekaContainer) string {
 	if wc == nil {
@@ -46,27 +41,6 @@ func findConditionStatusTyped(conds []metav1.Condition, condType string) string 
 }
 
 // -----------------------------
-// Legacy helpers (unstructured)
-// -----------------------------
-
-func inferWekaContainerStatus(u *unstructured.Unstructured) string {
-	for _, path := range [][]string{
-		{"status", "phase"},
-		{"status", "state"},
-		{"status", "status"},
-	} {
-		if s := getString(u.Object, path...); s != "" {
-			return s
-		}
-	}
-	// fallback: JoinedCluster is often useful
-	j := findConditionStatus(u, "JoinedCluster")
-	if j != "<none>" {
-		return "JoinedCluster=" + j
-	}
-	return "<unknown>"
-}
-
 func humanAge(d time.Duration) string {
 	if d < 0 {
 		d = -d
@@ -124,30 +98,4 @@ func selectorMapToSelector(m map[string]string) string {
 	}
 	ls := labels.Set(m)
 	return labels.SelectorFromSet(ls).String()
-}
-
-func findConditionStatus(u *unstructured.Unstructured, condType string) string {
-	conds, ok, err := unstructured.NestedSlice(u.Object, "status", "conditions")
-	if err != nil {
-		return "<none>"
-	}
-	if !ok || len(conds) == 0 {
-		return "<none>"
-	}
-	for _, c := range conds {
-		m, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-		t, _ := m["type"].(string)
-		if t != condType {
-			continue
-		}
-		s, _ := m["status"].(string)
-		if s == "" {
-			return "<none>"
-		}
-		return s
-	}
-	return "<none>"
 }

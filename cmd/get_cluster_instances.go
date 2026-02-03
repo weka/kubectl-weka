@@ -48,6 +48,10 @@ func init() {
 
 func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
+	includeNamespaceColumn := false
+	if getClusterInstancesAllNamespaces {
+		includeNamespaceColumn = true
+	}
 
 	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		clientcmd.NewDefaultClientConfigLoadingRules(),
@@ -87,7 +91,6 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("cannot use -A/--all-namespaces when specifying a WekaCluster name; use -n to choose namespace")
 		}
 	}
-
 	clusters, err := getWekaClustersTyped(ctx, crClient, currentNS, getClusterInstancesAllNamespaces, targetCluster)
 	if err != nil {
 		return err
@@ -107,11 +110,20 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 	defer w.Flush()
 
 	if !getClusterInstancesNoHeaders {
-		if getClusterInstancesWide {
-			fmt.Fprintln(w, "WEKACLUSTER\tNAMESPACE\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID\tAGE\tCPU_UTIL")
+		if includeNamespaceColumn {
+			if getClusterInstancesWide {
+				fmt.Fprintln(w, "WEKACLUSTER\tNAMESPACE\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID\tAGE\tCPU_UTIL")
+			} else {
+				fmt.Fprintln(w, "WEKACLUSTER\tNAMESPACE\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID")
+			}
 		} else {
-			fmt.Fprintln(w, "WEKACLUSTER\tNAMESPACE\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID")
+			if getClusterInstancesWide {
+				fmt.Fprintln(w, "WEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID\tAGE\tCPU_UTIL")
+			} else {
+				fmt.Fprintln(w, "WEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID")
+			}
 		}
+
 	}
 
 	// Preload WekaContainers + Pods per namespace once
@@ -207,11 +219,21 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 				if cpuUtil == "" {
 					cpuUtil = "<none>"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					clusterName, ns, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil)
+				if includeNamespaceColumn {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						clusterName, ns, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil)
+				} else {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil)
+				}
 			} else {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					clusterName, ns, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID)
+				if includeNamespaceColumn {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						clusterName, ns, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID)
+				} else {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID)
+				}
 			}
 		}
 	}
@@ -250,17 +272,20 @@ func filterClusterContainersTyped(all []wekaapi.WekaContainer, cluster *wekaapi.
 		return nil
 	}
 
+	clusterUID := string(cluster.GetUID())
+
 	out := make([]wekaapi.WekaContainer, 0, len(all))
 	for i := range all {
 		wc := all[i]
 
-		// Preferred match: label weka.io/cluster-id == cluster UID
-		for _, ref := range wc.GetOwnerReferences() {
-			if ref.Kind == "WekaCluster" && ref.UID == cluster.GetUID() {
+		for _, o := range wc.GetOwnerReferences() {
+			if o.Kind == "WekaCluster" && string(o.UID) == clusterUID {
 				out = append(out, wc)
+				break
 			}
 		}
 	}
+
 	return out
 }
 
