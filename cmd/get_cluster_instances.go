@@ -215,8 +215,10 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 
 			if getClusterInstancesWide {
 				age := humanAge(now.Sub(wc.GetCreationTimestamp().Time))
-				cpuUtil := string(wc.Status.Stats.CpuUsage)
-				if cpuUtil == "" {
+				cpuUtil := ""
+				if wc.Status.Stats != nil {
+					cpuUtil = string(wc.Status.Stats.CpuUsage)
+				} else {
 					cpuUtil = "<none>"
 				}
 				if includeNamespaceColumn {
