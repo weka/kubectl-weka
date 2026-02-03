@@ -213,9 +213,8 @@ func runGetClientNodes(cmd *cobra.Command, args []string) error {
 				}
 
 				activeMounts = string(wCont.Status.GetPrinterColumns().ActiveMounts)
-				cpuUtil = string(wCont.Status.Stats.CpuUsage)
-				if cpuUtil == "" {
-					cpuUtil = "<none>"
+				if wCont.Status.Stats != nil {
+					cpuUtil = string(wCont.Status.Stats.CpuUsage)
 				}
 
 				// Pod has same name as the WekaContainer CR
