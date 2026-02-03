@@ -225,13 +225,22 @@ func runGetClientNodes(cmd *cobra.Command, args []string) error {
 					podPhase = "<not-found>"
 				}
 			}
-
-			if getClientInstancesWide {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					clientName, n.Name, clientNS, wContName, wContStatus, podPhase, joined, containerID, mgmtIPsAll, activeMounts, cpuUtil, selectorStr)
+			if includeNamespaceColumn {
+				if getClientInstancesWide {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						clientName, n.Name, clientNS, wContName, wContStatus, podPhase, joined, containerID, mgmtIPsAll, activeMounts, cpuUtil, selectorStr)
+				} else {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						clientName, n.Name, clientNS, wContName, wContStatus, podPhase, joined, containerID, mgmtIPShort, activeMounts, cpuUtil)
+				}
 			} else {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					clientName, n.Name, clientNS, wContName, wContStatus, podPhase, joined, containerID, mgmtIPShort, activeMounts, cpuUtil)
+				if getClientInstancesWide {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						clientName, n.Name, wContName, wContStatus, podPhase, joined, containerID, mgmtIPsAll, activeMounts, cpuUtil, selectorStr)
+				} else {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						clientName, n.Name, wContName, wContStatus, podPhase, joined, containerID, mgmtIPShort, activeMounts, cpuUtil)
+				}
 			}
 		}
 	}
