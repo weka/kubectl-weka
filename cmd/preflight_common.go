@@ -12,12 +12,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Shared selection flag (used by both preflight subcommands)
 var preflightNodeSelector string
 
-func resolveNodes(ctx context.Context, clientset *kubernetes.Clientset, names []string, selector string) ([]corev1.Node, error) {
+func resolveNodes(ctx context.Context, client crclient.Client, names []string, selector string) ([]corev1.Node, error) {
 	if len(names) > 0 {
 		out := make([]corev1.Node, 0, len(names))
 		for _, n := range names {
@@ -25,25 +26,42 @@ func resolveNodes(ctx context.Context, clientset *kubernetes.Clientset, names []
 			if n == "" {
 				continue
 			}
-			obj, err := clientset.CoreV1().Nodes().Get(ctx, n, metav1.GetOptions{})
-			if err != nil {
+			var node corev1.Node
+			if err := client.Get(ctx, crclient.ObjectKey{Name: n}, &node); err != nil {
 				return nil, err
 			}
-			out = append(out, *obj)
+			out = append(out, node)
 		}
 		return out, nil
 	}
 
-	opts := metav1.ListOptions{}
+	var nodeList corev1.NodeList
+	opts := []crclient.ListOption{}
 	if selector != "" {
-		opts.LabelSelector = selector
+		opts = append(opts, crclient.MatchingLabels(parseSelector(selector)))
 	}
 
-	list, err := clientset.CoreV1().Nodes().List(ctx, opts)
-	if err != nil {
+	if err := client.List(ctx, &nodeList, opts...); err != nil {
 		return nil, err
 	}
-	return list.Items, nil
+	return nodeList.Items, nil
+}
+
+// parseSelector converts a label selector string to a map for crclient.MatchingLabels
+func parseSelector(selector string) map[string]string {
+	result := make(map[string]string)
+	if selector == "" {
+		return result
+	}
+
+	pairs := strings.Split(selector, ",")
+	for _, pair := range pairs {
+		kv := strings.Split(strings.TrimSpace(pair), "=")
+		if len(kv) == 2 {
+			result[kv[0]] = kv[1]
+		}
+	}
+	return result
 }
 
 func firstInternalIP(n *corev1.Node) string {

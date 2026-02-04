@@ -24,6 +24,7 @@ var (
 	getClientInstancesNamespace     string
 	getClientInstancesNoHeaders     bool
 	getClientInstancesWide          bool
+	getClientInstancesWatch         bool
 )
 
 var getClientInstancesCmd = &cobra.Command{
@@ -40,17 +41,13 @@ func init() {
 	getClientInstancesCmd.Flags().StringVarP(&getClientInstancesNamespace, "namespace", "n", "", "Namespace. Defaults to current kubeconfig namespace")
 	getClientInstancesCmd.Flags().BoolVar(&getClientInstancesNoHeaders, "no-headers", false, "Don't print headers")
 	getClientInstancesCmd.Flags().BoolVar(&getClientInstancesWide, "wide", false, "Wide output (adds selector and all mgmt IPs)")
+	getClientInstancesCmd.Flags().BoolVar(&getClientInstancesWatch, "watch", false, "Watch for changes and recalculate information")
 
 	getClientInstancesCmd.SilenceUsage = true
 }
 
 func runGetClientNodes(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
-
-	includeNamespaceColumn := false
-	if getClusterInstancesAllNamespaces {
-		includeNamespaceColumn = true
-	}
 
 	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		clientcmd.NewDefaultClientConfigLoadingRules(),
@@ -78,11 +75,15 @@ func runGetClientNodes(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	crClient, err := newWekaCRClient(ctx, restCfg)
+	cachedClient, err := newWekaCRClient(ctx, restCfg)
 	if err != nil {
 		return err
 	}
+	defer cachedClient.Stop()
 
+	crClient := cachedClient.Client
+
+	includeNamespaceColumn := getClientInstancesAllNamespaces
 	var targetName string
 	if len(args) == 1 {
 		targetName = args[0]

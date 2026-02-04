@@ -79,10 +79,13 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	crClient, err := newWekaCRClient(ctx, restCfg)
+	cachedClient, err := newWekaCRClient(ctx, restCfg)
 	if err != nil {
 		return err
 	}
+	defer cachedClient.Stop()
+
+	crClient := cachedClient.Client
 
 	var targetCluster string
 	if len(args) == 1 {

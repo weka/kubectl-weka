@@ -2,23 +2,39 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 )
 
-// newWekaCRClient returns a controller-runtime client with the WEKA API types
-// registered into the scheme.
+// CachedClient wraps a controller-runtime client with caching capabilities
+type CachedClient struct {
+	crclient.Client
+	cache  cache.Cache
+	cancel context.CancelFunc
+}
+
+// Stop stops the cache and cleans up resources
+func (c *CachedClient) Stop() {
+	if c.cancel != nil {
+		c.cancel()
+	}
+}
+
+// newWekaCRClient returns a controller-runtime client with caching enabled.
+// The cache is started in the background and the client is ready to use after
+// the cache has synced.
 //
-// We keep using client-go Clientset in other places for core resources (Pods,
-// Nodes, etc.). This helper is strictly for interacting with WEKA CRDs using
-// strongly-typed objects.
-func newWekaCRClient(ctx context.Context, restCfg *rest.Config) (crclient.Client, error) {
+// The caller should call Stop() on the returned CachedClient when done to
+// clean up resources.
+func newWekaCRClient(ctx context.Context, restCfg *rest.Config) (*CachedClient, error) {
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
 		return nil, err
@@ -27,11 +43,60 @@ func newWekaCRClient(ctx context.Context, restCfg *rest.Config) (crclient.Client
 		return nil, err
 	}
 
-	c, err := crclient.New(restCfg, crclient.Options{Scheme: scheme})
+	// Create a cache for efficient listing and watching
+	cacheObj, err := cache.New(restCfg, cache.Options{
+		Scheme: scheme,
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create cache: %w", err)
 	}
-	return c, nil
+
+	// Start the cache in the background
+	cacheCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		_ = cacheObj.Start(cacheCtx)
+	}()
+
+	// Wait for cache to sync
+	if !cacheObj.WaitForCacheSync(cacheCtx) {
+		cancel()
+		return nil, fmt.Errorf("failed to sync cache")
+	}
+
+	// Create a standard client for writes (and fallback reads)
+	directClient, err := crclient.New(restCfg, crclient.Options{Scheme: scheme})
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create client: %w", err)
+	}
+
+	// Wrap the client to use cache for reads
+	cachedClient := &cachedClientImpl{
+		Client: directClient,
+		cache:  cacheObj,
+	}
+
+	return &CachedClient{
+		Client: cachedClient,
+		cache:  cacheObj,
+		cancel: cancel,
+	}, nil
+}
+
+// cachedClientImpl is a client wrapper that uses cache for Get and List operations
+type cachedClientImpl struct {
+	crclient.Client
+	cache cache.Cache
+}
+
+// Get retrieves an object from the cache
+func (c *cachedClientImpl) Get(ctx context.Context, key crclient.ObjectKey, obj crclient.Object, opts ...crclient.GetOption) error {
+	return c.cache.Get(ctx, key, obj, opts...)
+}
+
+// List retrieves a list of objects from the cache
+func (c *cachedClientImpl) List(ctx context.Context, list crclient.ObjectList, opts ...crclient.ListOption) error {
+	return c.cache.List(ctx, list, opts...)
 }
 
 // getRESTConfigAndDefaultNS returns REST config and the default namespace from

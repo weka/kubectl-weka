@@ -392,7 +392,7 @@ printf '}\n'
 
 func boolPtr(b bool) *bool { return &b }
 
-func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node) (map[string]HostChecksResult, []hostScanError) {
+func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node) (map[string]HostChecksResult, []hostScanError, *sync.WaitGroup) {
 	results := make(map[string]HostChecksResult, len(nodes))
 	var errs []hostScanError
 
@@ -400,7 +400,7 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 	labelKey := "app"
 	labelVal := "weka-preflight-hostchecks"
 
-	// --- Phase 1: create all pods quickly (sequential create is OK; it’s fast),
+	// --- Phase 1: create all pods quickly (sequential create is OK; it's fast),
 	// but we still do it concurrently with a limit to be safe.
 	type podRef struct {
 		node    string
@@ -409,15 +409,36 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 
 	pods := make([]podRef, 0, len(nodes))
 
+	// Background cleanup tracker - pods are deleted as soon as logs are collected
+	var cleanupWg sync.WaitGroup
+	cleanupChan := make(chan podRef, len(nodes))
+
+	// Start background cleanup goroutine that processes pods as they complete
+	go func() {
+		eg, _ := errgroupWithLimit(context.Background(), 5) // conservative to avoid throttling
+		for pr := range cleanupChan {
+			pr := pr
+			cleanupWg.Add(1)
+			eg.Go(func() error {
+				defer cleanupWg.Done()
+				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), pr.podName, metav1.DeleteOptions{})
+				return nil
+			})
+		}
+		_ = eg.Wait()
+	}()
+
+	// Close channel when function returns, but DON'T wait for cleanup here
+	// The caller can wait if needed, but we return results immediately
+	defer close(cleanupChan)
+
 	fmt.Printf("Creating pods to verify node information...")
-	// Create pods (bounded parallel)
 	{
-		eg, egCtx := errgroupWithLimit(ctx, 20) // tune: 10-50 depending on cluster/apiserver
+		eg, egCtx := errgroupWithLimit(ctx, 10) // very low concurrency to avoid throttling (was 20)
 		mu := &sync.Mutex{}
 
 		for i := range nodes {
 			nodeName := nodes[i].Name
-			podName := fmt.Sprintf("weka-preflight-hostchk-%s-%s", sanitizeName(nodeName), rand.String(5))
 			node := nodes[i]
 			if !isNodeReady(&node) {
 				results[node.Name] = HostChecksResult{
@@ -430,8 +451,11 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 					BondLACPOk:       true, // not evaluated
 					BondLACPDetail:   "skipped: node not Ready",
 				}
-				continue
+				continue // Skip pod creation for NotReady nodes
 			}
+
+			// Only create pod for Ready nodes
+			podName := fmt.Sprintf("weka-preflight-hostchk-%s-%s", sanitizeName(nodeName), rand.String(5))
 
 			eg.Go(func() error {
 				p := makeHostChecksPod(ns, nodeName, podName, labelKey, labelVal)
@@ -465,29 +489,19 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 		_ = eg.Wait()
 	}
 
-	// Ensure cleanup no matter what
-	defer func() {
-		fmt.Println("Cleaning up host checks pods...")
-		eg, _ := errgroupWithLimit(context.Background(), 30)
-		for _, pr := range pods {
-			pr := pr
-			eg.Go(func() error {
-				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), pr.podName, metav1.DeleteOptions{})
-				return nil
-			})
-		}
-		_ = eg.Wait()
-	}()
-
 	// --- Phase 2: wait for completion + fetch logs in parallel
 	{
-		eg, egCtx := errgroupWithLimit(ctx, 30) // waiting/log reads can be parallel
+		eg, egCtx := errgroupWithLimit(ctx, 5) // very low concurrency to avoid throttling (was 30)
 		mu := &sync.Mutex{}
 
 		for _, pr := range pods {
 			pr := pr
 			eg.Go(func() error {
 				res, err := waitHostChecksResult(egCtx, clientset, ns, pr.podName, pr.node)
+
+				// Immediately queue pod for deletion (happens in background)
+				cleanupChan <- pr
+
 				mu.Lock()
 				defer mu.Unlock()
 				if err != nil {
@@ -528,7 +542,6 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 
 		_ = eg.Wait()
 	}
-	fmt.Println("Checking host checks...")
 
 	// Optional: also verify we saw all nodes; missing ones treated as error
 	for i := range nodes {
@@ -548,7 +561,7 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 		}
 	}
 
-	return results, errs
+	return results, errs, &cleanupWg
 }
 
 func errgroupWithLimit(ctx context.Context, limit int) (*errgroup.Group, context.Context) {
@@ -560,6 +573,9 @@ func waitHostChecksResult(ctx context.Context, clientset *kubernetes.Clientset, 
 	startDeadline := time.Now().Add(30 * time.Second) // must leave Pending by then
 	doneDeadline := time.Now().Add(120 * time.Second) // overall completion timeout
 
+	// Start with longer sleep to reduce API calls
+	sleepInterval := time.Second
+
 	for {
 		if time.Now().After(doneDeadline) {
 			_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
@@ -569,7 +585,7 @@ func waitHostChecksResult(ctx context.Context, clientset *kubernetes.Clientset, 
 		p, err := clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				time.Sleep(250 * time.Millisecond)
+				time.Sleep(sleepInterval)
 				continue
 			}
 			return HostChecksResult{}, err
@@ -577,22 +593,22 @@ func waitHostChecksResult(ctx context.Context, clientset *kubernetes.Clientset, 
 
 		switch p.Status.Phase {
 		case corev1.PodPending:
-			// If it's still Pending after 10s, delete + skip.
+			// If it's still Pending after 30s, delete + skip.
 			if time.Now().After(startDeadline) {
 				// best-effort delete
 				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
 
 				reason := pendingReason(p)
 				if reason == "" {
-					reason = "pod stayed Pending >10s (node may be NotReady / unschedulable)"
+					reason = "pod stayed Pending >30s (node may be NotReady / unschedulable)"
 				}
 				return HostChecksResult{}, SkipHostCheckError{Node: nodeName, Reason: reason}
 			}
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(sleepInterval)
 
 		case corev1.PodRunning:
 			// Great: started. Now wait for it to complete.
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(sleepInterval)
 
 		case corev1.PodSucceeded, corev1.PodFailed:
 			logs, err := readPodLogs(ctx, clientset, ns, podName, "hostchecks")
@@ -611,7 +627,7 @@ func waitHostChecksResult(ctx context.Context, clientset *kubernetes.Clientset, 
 
 		default:
 			// Unknown state, keep polling.
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(sleepInterval)
 		}
 	}
 }

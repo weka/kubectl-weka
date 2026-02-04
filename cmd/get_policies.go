@@ -45,11 +45,14 @@ func runGetPolicies(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Create typed CR client
-	crClient, err := newWekaCRClient(ctx, restCfg)
+	// Create typed CR client with caching
+	cachedClient, err := newWekaCRClient(ctx, restCfg)
 	if err != nil {
 		return err
 	}
+	defer cachedClient.Stop()
+
+	crClient := cachedClient.Client
 
 	includeNamespaceColumn := false
 

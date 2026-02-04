@@ -18,6 +18,7 @@ var (
 
 	preflightFailFast    bool
 	preflightSummaryOnly bool
+	preflightFailedOnly  bool
 )
 
 var preflightNodesCmd = &cobra.Command{
@@ -32,8 +33,8 @@ func init() {
 	preflightNodesCmd.Flags().StringVar(&preflightNodeSelector, "node-selector", "", "Label selector to filter nodes")
 	preflightNodesCmd.Flags().BoolVar(&preflightFailFast, "fail-fast", false, "Stop on first failed node")
 	preflightNodesCmd.Flags().BoolVar(&preflightSummaryOnly, "summary-only", false, "Only print summary (no per-node details)")
+	preflightNodesCmd.Flags().BoolVar(&preflightFailedOnly, "failed-only", false, "Only show failed nodes")
 	preflightNodesCmd.SilenceUsage = true
-	// preflightNodesCmd.SilenceErrors = true // only if you print errors yourself
 }
 
 type checkStatus string
@@ -64,12 +65,22 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Use standard kubernetes.Clientset for host checks via pods
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return err
 	}
 
-	nodes, err := resolveNodes(ctx, clientset, args, preflightNodeSelector)
+	// Use cached client for node reads
+	cachedClient, err := newWekaCRClient(ctx, restCfg)
+	if err != nil {
+		return err
+	}
+	defer cachedClient.Stop()
+
+	crClient := cachedClient.Client
+
+	nodes, err := resolveNodes(ctx, crClient, args, preflightNodeSelector)
 	if err != nil {
 		return err
 	}
@@ -78,14 +89,18 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	printCheckResult("Checking total number of eligible nodes...", true, fmt.Sprintf("%d", len(nodes)))
 
 	// Run host checks via per-node pods (PCI, /etc/os-release, filesystem, processes, systemd units)
-	hostFacts, scanErrs := scanHostChecksByPod(ctx, clientset, nodes)
+	hostFacts, scanErrs, cleanupWg := scanHostChecksByPod(ctx, clientset, nodes)
+
+	fmt.Println("Checking host checks...")
+
+	// Ensure cleanup completes before exiting (even on SIGTERM/Ctrl+C)
+	defer cleanupWg.Wait()
+
 	if len(scanErrs) > 0 && !preflightSummaryOnly {
 		fmt.Printf("Note: host checks encountered %d issues; affected nodes may be WARN/FAIL depending on the check\n\n", len(scanErrs))
 	}
 
-	if !preflightSummaryOnly {
-		fmt.Println("Validating node eligibility:")
-	}
+	fmt.Println("Validating node eligibility:")
 
 	checked := 0
 	passCnt := 0
@@ -137,13 +152,19 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 			failedNodes = append(failedNodes, n.Name)
 		}
 
-		if !preflightSummaryOnly {
-			printNodeHeader(n.Name, nodeStatus)
-			for _, c := range checks {
+		// Skip printing completely PASS nodes if --failed-only is set
+		if preflightFailedOnly && nodeStatus == statusPass {
+			continue
+		}
+
+		printNodeHeader(n.Name, nodeStatus)
+		for _, c := range checks {
+			// if asked for summary, only print non-PASS checks
+			if !preflightSummaryOnly || c.status != statusPass {
 				printNodeSubcheck(c)
 			}
-			fmt.Println()
 		}
+		fmt.Println()
 
 		if preflightFailFast && nodeStatus == statusFail {
 			break
