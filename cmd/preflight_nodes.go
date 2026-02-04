@@ -19,9 +19,11 @@ var (
 	minFreeMem = resource.MustParse("4Gi")
 	minFreeHP  = resource.MustParse("3Gi")
 
-	preflightFailFast    bool
-	preflightSummaryOnly bool
-	preflightFailedOnly  bool
+	preflightFailFast      bool
+	preflightSummaryOnly   bool
+	preflightFailedOnly    bool
+	preflightWekaDirFailGB int64
+	preflightWekaDirWarnGB int64
 )
 
 var preflightNodesCmd = &cobra.Command{
@@ -33,10 +35,12 @@ var preflightNodesCmd = &cobra.Command{
 
 func init() {
 	preflightCmd.AddCommand(preflightNodesCmd)
-	preflightNodesCmd.Flags().StringVar(&preflightNodeSelector, "node-selector", "", "Label selector to filter nodes")
+	preflightNodesCmd.Flags().StringVar(&preflightNodeSelector, "node-selector", "", "Label selector to filter nodes, e.g. if only part of nodes are targeted for WEKA")
 	preflightNodesCmd.Flags().BoolVar(&preflightFailFast, "fail-fast", false, "Stop on first failed node")
 	preflightNodesCmd.Flags().BoolVar(&preflightSummaryOnly, "summary-only", false, "Only print summary (no per-node details)")
 	preflightNodesCmd.Flags().BoolVar(&preflightFailedOnly, "failed-only", false, "Only show failed nodes")
+	preflightNodesCmd.Flags().Int64Var(&preflightWekaDirFailGB, "weka-dir-min-fail", 100, "Minimum GB for weka directory (FAIL if below, default 100)")
+	preflightNodesCmd.Flags().Int64Var(&preflightWekaDirWarnGB, "weka-dir-min-warn", 300, "Minimum GB for weka directory (WARN if below, default 300)")
 	preflightNodesCmd.SilenceUsage = true
 }
 
@@ -351,9 +355,9 @@ func buildNodeChecks(
 
 	// 5) Weka directory exists and has >= 300GB available
 	// For RHCOS: /root/k8s-weka ; otherwise: /opt/k8s-weka (handled by pod script)
-	// FAIL: < 100GB, WARN: < 300GB, PASS: >= 300GB
-	const minFailWeka = 100 * 1000 * 1000 * 1000 // 100GB in bytes
-	const minWarnWeka = 300 * 1000 * 1000 * 1000 // 300GB in bytes
+	// FAIL: < preflightWekaDirFailGB, WARN: < preflightWekaDirWarnGB, PASS: >= preflightWekaDirWarnGB
+	minFailWeka := preflightWekaDirFailGB * 1000 * 1000 * 1000 // Convert GB to bytes
+	minWarnWeka := preflightWekaDirWarnGB * 1000 * 1000 * 1000 // Convert GB to bytes
 
 	wakaDirStatus := statusPass
 	wakaDirDetail := ""
@@ -364,11 +368,11 @@ func buildNodeChecks(
 	} else if hf.WekaDirAvailBytes < minFailWeka {
 		wakaDirStatus = statusFail
 		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
-		wakaDirDetail = fmt.Sprintf("%.1fGB available (min: 100GB)", availGB)
+		wakaDirDetail = fmt.Sprintf("%.1fGB available (min: %dGB)", availGB, preflightWekaDirFailGB)
 	} else if hf.WekaDirAvailBytes < minWarnWeka {
 		wakaDirStatus = statusWarn
 		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
-		wakaDirDetail = fmt.Sprintf("%.1fGB available (min: 300GB)", availGB)
+		wakaDirDetail = fmt.Sprintf("%.1fGB available (min: %dGB)", availGB, preflightWekaDirWarnGB)
 	} else {
 		wakaDirStatus = statusPass
 		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
