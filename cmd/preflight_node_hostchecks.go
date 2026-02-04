@@ -392,9 +392,15 @@ printf '}\n'
 
 func boolPtr(b bool) *bool { return &b }
 
-func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node) (map[string]HostChecksResult, []hostScanError, *sync.WaitGroup) {
-	results := make(map[string]HostChecksResult, len(nodes))
-	var errs []hostScanError
+// nodeHostResult represents a single node's host check result as it arrives
+type nodeHostResult struct {
+	nodeName string
+	result   HostChecksResult
+	err      error
+}
+
+func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node) (<-chan nodeHostResult, *sync.WaitGroup) {
+	resultChan := make(chan nodeHostResult, len(nodes))
 
 	ns := "default"
 	labelKey := "app"
@@ -428,33 +434,34 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 		_ = eg.Wait()
 	}()
 
-	// Close channel when function returns, but DON'T wait for cleanup here
-	// The caller can wait if needed, but we return results immediately
-	defer close(cleanupChan)
-
 	fmt.Printf("Creating pods to verify node information...")
-	{
-		eg, egCtx := errgroupWithLimit(ctx, 10) // very low concurrency to avoid throttling (was 20)
+
+	// Run everything in background - results stream as they complete
+	go func() {
+		// Phase 1: Create pods
+		eg, egCtx := errgroupWithLimit(ctx, 3)
 		mu := &sync.Mutex{}
 
 		for i := range nodes {
 			nodeName := nodes[i].Name
 			node := nodes[i]
 			if !isNodeReady(&node) {
-				results[node.Name] = HostChecksResult{
-					WekaDirOK:        false,
-					WekaDirDetail:    "skipped: node not Ready",
-					XFSInstalled:     false,
-					XFSDetail:        "skipped: node not Ready",
-					WekaClientClean:  false,
-					WekaClientDetail: "skipped: node not Ready",
-					BondLACPOk:       true, // not evaluated
-					BondLACPDetail:   "skipped: node not Ready",
+				resultChan <- nodeHostResult{
+					nodeName: node.Name,
+					result: HostChecksResult{
+						WekaDirOK:        false,
+						WekaDirDetail:    "skipped: node not Ready",
+						XFSInstalled:     false,
+						XFSDetail:        "skipped: node not Ready",
+						WekaClientClean:  false,
+						WekaClientDetail: "skipped: node not Ready",
+						BondLACPOk:       true,
+						BondLACPDetail:   "skipped: node not Ready",
+					},
 				}
-				continue // Skip pod creation for NotReady nodes
+				continue
 			}
 
-			// Only create pod for Ready nodes
 			podName := fmt.Sprintf("weka-preflight-hostchk-%s-%s", sanitizeName(nodeName), rand.String(5))
 
 			eg.Go(func() error {
@@ -462,21 +469,21 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 
 				_, err := clientset.CoreV1().Pods(ns).Create(egCtx, p, metav1.CreateOptions{})
 				if err != nil {
-					// Record creation failure as an error result for this node
-					mu.Lock()
-					results[nodeName] = HostChecksResult{
-						WekaDirOK:        false,
-						WekaDirDetail:    fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						XFSInstalled:     false,
-						XFSDetail:        fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						WekaClientClean:  false,
-						WekaClientDetail: fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						Mellanox:         false,
-						MellanoxDetail:   fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+					resultChan <- nodeHostResult{
+						nodeName: nodeName,
+						result: HostChecksResult{
+							WekaDirOK:        false,
+							WekaDirDetail:    fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+							XFSInstalled:     false,
+							XFSDetail:        fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+							WekaClientClean:  false,
+							WekaClientDetail: fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+							Mellanox:         false,
+							MellanoxDetail:   fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+						},
+						err: err,
 					}
-					errs = append(errs, hostScanError{node: nodeName, err: err})
-					mu.Unlock()
-					return nil // don’t fail whole scan
+					return nil
 				}
 
 				mu.Lock()
@@ -487,81 +494,67 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 		}
 
 		_ = eg.Wait()
-	}
 
-	// --- Phase 2: wait for completion + fetch logs in parallel
-	{
-		eg, egCtx := errgroupWithLimit(ctx, 5) // very low concurrency to avoid throttling (was 30)
-		mu := &sync.Mutex{}
+		// Phase 2: Process pods - send results immediately as they complete
+		eg2, egCtx2 := errgroupWithLimit(ctx, 5)
 
 		for _, pr := range pods {
 			pr := pr
-			eg.Go(func() error {
-				res, err := waitHostChecksResult(egCtx, clientset, ns, pr.podName, pr.node)
+			eg2.Go(func() error {
+				res, err := waitHostChecksResult(egCtx2, clientset, ns, pr.podName, pr.node)
 
 				// Immediately queue pod for deletion (happens in background)
 				cleanupChan <- pr
 
-				mu.Lock()
-				defer mu.Unlock()
+				// Send result immediately
 				if err != nil {
-					// Skip: pod didn't start quickly (node not ready / unschedulable)
 					if se, ok := err.(SkipHostCheckError); ok {
-						results[pr.node] = HostChecksResult{
-							WekaDirOK:        false,
-							WekaDirDetail:    "skipped: " + se.Reason,
-							XFSInstalled:     false,
-							XFSDetail:        "skipped: " + se.Reason,
-							WekaClientClean:  false,
-							WekaClientDetail: "skipped: " + se.Reason,
-							// Mellanox inventory unavailable too
-							// (you can add a dedicated boolean like HostChecksSkipped if you want)
+						resultChan <- nodeHostResult{
+							nodeName: pr.node,
+							result: HostChecksResult{
+								WekaDirOK:        false,
+								WekaDirDetail:    "skipped: " + se.Reason,
+								XFSInstalled:     false,
+								XFSDetail:        "skipped: " + se.Reason,
+								WekaClientClean:  false,
+								WekaClientDetail: "skipped: " + se.Reason,
+							},
+							err: err,
 						}
-						// record as an error only if you want to count it
-						errs = append(errs, hostScanError{node: pr.node, err: err})
-						return nil
+					} else {
+						resultChan <- nodeHostResult{
+							nodeName: pr.node,
+							result: HostChecksResult{
+								WekaDirOK:        false,
+								WekaDirDetail:    fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+								XFSInstalled:     false,
+								XFSDetail:        fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+								WekaClientClean:  false,
+								WekaClientDetail: fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+								Mellanox:         false,
+								MellanoxDetail:   fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+							},
+							err: err,
+						}
 					}
-
-					results[pr.node] = HostChecksResult{
-						WekaDirOK:        false,
-						WekaDirDetail:    fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						XFSInstalled:     false,
-						XFSDetail:        fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						WekaClientClean:  false,
-						WekaClientDetail: fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						Mellanox:         false,
-						MellanoxDetail:   fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+				} else {
+					resultChan <- nodeHostResult{
+						nodeName: pr.node,
+						result:   res,
 					}
-					errs = append(errs, hostScanError{node: pr.node, err: err})
-					return nil
 				}
-				results[pr.node] = res
 				return nil
 			})
 		}
 
-		_ = eg.Wait()
-	}
+		_ = eg2.Wait()
 
-	// Optional: also verify we saw all nodes; missing ones treated as error
-	for i := range nodes {
-		n := nodes[i].Name
-		if _, ok := results[n]; !ok {
-			results[n] = HostChecksResult{
-				WekaDirOK:        false,
-				WekaDirDetail:    "Cannot inspect host: missing result",
-				XFSInstalled:     false,
-				XFSDetail:        "Cannot inspect host: missing result",
-				WekaClientClean:  false,
-				WekaClientDetail: "Cannot inspect host: missing result",
-				Mellanox:         false,
-				MellanoxDetail:   "Cannot inspect host: missing result",
-			}
-			errs = append(errs, hostScanError{node: n, err: fmt.Errorf("missing result")})
-		}
-	}
+		// Close channels only AFTER both phases complete
+		close(resultChan)
+		close(cleanupChan)
+	}()
 
-	return results, errs, &cleanupWg
+	return resultChan, &cleanupWg
 }
 
 func errgroupWithLimit(ctx context.Context, limit int) (*errgroup.Group, context.Context) {

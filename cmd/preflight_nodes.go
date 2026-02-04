@@ -89,18 +89,40 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	printCheckResult("Checking total number of eligible nodes...", true, fmt.Sprintf("%d", len(nodes)))
 
 	// Run host checks via per-node pods (PCI, /etc/os-release, filesystem, processes, systemd units)
-	hostFacts, scanErrs, cleanupWg := scanHostChecksByPod(ctx, clientset, nodes)
-
-	fmt.Println("Checking host checks...")
+	resultChan, cleanupWg := scanHostChecksByPod(ctx, clientset, nodes)
 
 	// Ensure cleanup completes before exiting (even on SIGTERM/Ctrl+C)
 	defer cleanupWg.Wait()
 
-	if len(scanErrs) > 0 && !preflightSummaryOnly {
-		fmt.Printf("Note: host checks encountered %d issues; affected nodes may be WARN/FAIL depending on the check\n\n", len(scanErrs))
+	fmt.Println("Checking host checks...")
+
+	// Collect results as they stream in - just store them, don't process yet
+	hostFacts := make(map[string]HostChecksResult, len(nodes))
+	var scanErrs []hostScanError
+
+	// Build a map for quick node lookup
+	nodeMap := make(map[string]*corev1.Node, len(nodes))
+	for i := range nodes {
+		nodeMap[nodes[i].Name] = &nodes[i]
 	}
 
-	fmt.Println("Validating node eligibility:")
+	fmt.Println("Collecting results...")
+	receivedCount := 0
+	for nodeResult := range resultChan {
+		receivedCount++
+		hostFacts[nodeResult.nodeName] = nodeResult.result
+		if nodeResult.err != nil {
+			scanErrs = append(scanErrs, hostScanError{node: nodeResult.nodeName, err: nodeResult.err})
+		}
+		if receivedCount%10 == 0 || receivedCount == len(nodes) {
+			fmt.Printf("Received %d/%d results...\n", receivedCount, len(nodes))
+		}
+	}
+	fmt.Printf("All %d results collected!\n", receivedCount)
+
+	if len(scanErrs) > 0 {
+		fmt.Printf("\nNote: host checks encountered %d issues\n", len(scanErrs))
+	}
 
 	checked := 0
 	passCnt := 0
@@ -113,17 +135,24 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	var skippedNodes []string
 	kernels := make(map[string]struct{})
 	oses := make(map[string]struct{})
-	var nodeStatus checkStatus
 
+	// Now process all nodes (this may make API calls and be slow)
 	for i := range nodes {
-		n := nodes[i]
+		n := &nodes[i]
+		hf, ok := hostFacts[n.Name]
+		if !ok {
+			continue // node result wasn't received
+		}
+
 		checked++
 		var checks []nodeCheck
-		if !isNodeReady(&n) {
+		var nodeStatus checkStatus
+
+		if !isNodeReady(n) {
 			nodeStatus = statusSkipped
 		} else {
-			hf := hostFacts[n.Name] // zero value if missing (e.g. scan failed hard)
-			checks, err = buildNodeChecks(ctx, clientset, &n, hf)
+			var err error
+			checks, err = buildNodeChecks(ctx, clientset, n, hf)
 			if err != nil {
 				checks = append(checks, nodeCheck{
 					title:  "node_checks",
@@ -145,8 +174,6 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		case statusSkipped:
 			skippedCnt++
 			skippedNodes = append(skippedNodes, n.Name)
-			printNodeHeader(n.Name, nodeStatus)
-			continue
 		default:
 			failCnt++
 			failedNodes = append(failedNodes, n.Name)
@@ -158,8 +185,8 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		}
 
 		printNodeHeader(n.Name, nodeStatus)
+		// Only print non-PASS checks
 		for _, c := range checks {
-			// if asked for summary, only print non-PASS checks
 			if !preflightSummaryOnly || c.status != statusPass {
 				printNodeSubcheck(c)
 			}
@@ -169,6 +196,10 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		if preflightFailFast && nodeStatus == statusFail {
 			break
 		}
+	}
+
+	if len(scanErrs) > 0 && !preflightSummaryOnly {
+		fmt.Printf("\nNote: host checks encountered %d issues\n", len(scanErrs))
 	}
 
 	// Summary
