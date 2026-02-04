@@ -3,7 +3,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -54,6 +57,21 @@ type nodeCheck struct {
 
 func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
+
+	// Setup signal handling for graceful shutdown (cleanup pods on Ctrl-C)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Handle signals in background
+	go func() {
+		sig := <-sigChan
+		fmt.Printf("\n\nReceived signal %v, cleaning up pods...\n", sig)
+		cancel() // Cancel context to stop operations
+		// Don't exit here - let defer cleanup run
+	}()
 
 	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		clientcmd.NewDefaultClientConfigLoadingRules(),
@@ -115,7 +133,11 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	resultChan, cleanupWg := scanHostChecksByPod(ctx, clientset, nodes)
 
 	// Ensure cleanup completes before exiting (even on SIGTERM/Ctrl+C)
-	defer cleanupWg.Wait()
+	defer func() {
+		fmt.Println("Waiting for pod cleanup to complete...")
+		cleanupWg.Wait()
+		fmt.Println("Cleanup complete.")
+	}()
 
 	fmt.Println("Checking host checks...")
 
