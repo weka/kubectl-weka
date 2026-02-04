@@ -88,7 +88,30 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	fmt.Println("Performing preflight verification for Kubernetes nodes to host WEKA")
 	printCheckResult("Checking total number of eligible nodes...", true, fmt.Sprintf("%d", len(nodes)))
 
-	// Run host checks via per-node pods (PCI, /etc/os-release, filesystem, processes, systemd units)
+	// FIRST: Fetch pod statistics BEFORE creating host-check pods
+	// (so host-check pods don't pollute the pod resource statistics)
+	fmt.Println("Fetching pod resource usage...")
+	var podsByNode map[string][]corev1.Pod
+	{
+		var allPods corev1.PodList
+		if err := crClient.List(ctx, &allPods); err != nil {
+			fmt.Printf("Warning: failed to list pods: %v\n", err)
+			podsByNode = make(map[string][]corev1.Pod)
+		} else {
+			// Build a map of nodeName -> pods on that node
+			podsByNode = make(map[string][]corev1.Pod)
+			for i := range allPods.Items {
+				pod := &allPods.Items[i]
+				if pod.Spec.NodeName == "" {
+					continue
+				}
+				podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], *pod)
+			}
+			fmt.Printf("Fetched %d pods across %d nodes\n", len(allPods.Items), len(podsByNode))
+		}
+	}
+
+	// SECOND: Run host checks via per-node pods (PCI, /etc/os-release, filesystem, processes, systemd units)
 	resultChan, cleanupWg := scanHostChecksByPod(ctx, clientset, nodes)
 
 	// Ensure cleanup completes before exiting (even on SIGTERM/Ctrl+C)
@@ -124,6 +147,7 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\nNote: host checks encountered %d issues\n", len(scanErrs))
 	}
 
+	// Process all nodes while pod fetch happens in background
 	checked := 0
 	passCnt := 0
 	warnCnt := 0
@@ -136,7 +160,7 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	kernels := make(map[string]struct{})
 	oses := make(map[string]struct{})
 
-	// Now process all nodes (this may make API calls and be slow)
+	// Process all nodes (podsByNode already available from upfront fetch)
 	for i := range nodes {
 		n := &nodes[i]
 		hf, ok := hostFacts[n.Name]
@@ -152,7 +176,7 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 			nodeStatus = statusSkipped
 		} else {
 			var err error
-			checks, err = buildNodeChecks(ctx, clientset, n, hf)
+			checks, err = buildNodeChecks(ctx, n, hf, podsByNode[n.Name])
 			if err != nil {
 				checks = append(checks, nodeCheck{
 					title:  "node_checks",
@@ -247,9 +271,9 @@ func mapKeysToList(m map[string]struct{}) []string {
 
 func buildNodeChecks(
 	ctx context.Context,
-	clientset *kubernetes.Clientset,
 	n *corev1.Node,
 	hf HostChecksResult,
+	podsOnNode []corev1.Pod,
 ) ([]nodeCheck, error) {
 	var out []nodeCheck
 
@@ -284,10 +308,8 @@ func buildNodeChecks(
 	})
 
 	// 3/4) free resources (allocatable - sum(pod requests))
-	memFree, hpFree, warn, err := computeFreeFromRequests(ctx, clientset, n.Name, hpAlloc)
-	if err != nil {
-		return out, err
-	}
+	// Use pre-fetched pods instead of making API calls
+	memFree, hpFree, warn := computeFreeFromPods(n, hpAlloc, podsOnNode)
 
 	memOK := memFree.Cmp(minFreeMem) >= 0
 	out = append(out, nodeCheck{
