@@ -329,10 +329,34 @@ func buildNodeChecks(
 
 	// 5) Weka directory exists and has >= 300GB available
 	// For RHCOS: /root/k8s-weka ; otherwise: /opt/k8s-weka (handled by pod script)
+	// FAIL: < 100GB, WARN: < 300GB, PASS: >= 300GB
+	const minFailWeka = 100 * 1000 * 1000 * 1000 // 100GB in bytes
+	const minWarnWeka = 300 * 1000 * 1000 * 1000 // 300GB in bytes
+
+	wakaDirStatus := statusPass
+	wakaDirDetail := ""
+
+	if hf.WekaDirDetail == "directory does not exist" {
+		wakaDirStatus = statusFail
+		wakaDirDetail = "directory does not exist"
+	} else if hf.WekaDirAvailBytes < minFailWeka {
+		wakaDirStatus = statusFail
+		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
+		wakaDirDetail = fmt.Sprintf("%.1fGB available (min: 100GB)", availGB)
+	} else if hf.WekaDirAvailBytes < minWarnWeka {
+		wakaDirStatus = statusWarn
+		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
+		wakaDirDetail = fmt.Sprintf("%.1fGB available (min: 300GB)", availGB)
+	} else {
+		wakaDirStatus = statusPass
+		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
+		wakaDirDetail = fmt.Sprintf("%.1fGB available", availGB)
+	}
+
 	out = append(out, nodeCheck{
 		title:  "weka_dir",
-		status: passOrFail(hf.WekaDirOK),
-		detail: fmt.Sprintf("%s: %s", nonEmpty(hf.WekaDirPath, "(unknown)"), nonEmpty(hf.WekaDirDetail, "no details")),
+		status: wakaDirStatus,
+		detail: fmt.Sprintf("%s: %s", nonEmpty(hf.WekaDirPath, "(unknown)"), wakaDirDetail),
 	})
 
 	// 6) XFS installed (mkfs.xfs exists on host)

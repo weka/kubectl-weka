@@ -38,9 +38,10 @@ type HostChecksResult struct {
 	OSRelease string `json:"os_release"`
 
 	// Weka directory exists + has >=300GB available
-	WekaDirOK     bool   `json:"weka_dir_ok"`
-	WekaDirPath   string `json:"weka_dir_path"`
-	WekaDirDetail string `json:"weka_dir_detail"`
+	WekaDirOK         bool   `json:"weka_dir_ok"`
+	WekaDirPath       string `json:"weka_dir_path"`
+	WekaDirDetail     string `json:"weka_dir_detail"`
+	WekaDirAvailBytes int64  `json:"weka_dir_avail_bytes"`
 
 	// XFS tools
 	XFSInstalled bool   `json:"xfs_installed"`
@@ -93,18 +94,17 @@ if [ "$IS_RHCOS" -eq 1 ]; then
 fi
 
 WEKADIR_OK=0
+WEKADIR_AVAIL_BYTES=0
 WEKADIR_DETAIL=""
 WEKADIR_PATH="${WEKADIR#/host}"
 
 if [ -d "$WEKADIR" ]; then
-  AVAIL="$(df -PB1 "$WEKADIR" 2>/dev/null | tail -n1 | awk '{print $4}' || echo 0)"
-  MIN=$((300*1000*1000*1000))
-  if [ "$AVAIL" -ge "$MIN" ]; then
+  WEKADIR_AVAIL_BYTES="$(df -PB1 "$WEKADIR" 2>/dev/null | tail -n1 | awk '{print $4}' || echo 0)"
+  MIN_PASS=$((300*1000*1000*1000))
+  if [ "$WEKADIR_AVAIL_BYTES" -ge "$MIN_PASS" ]; then
     WEKADIR_OK=1
-    WEKADIR_DETAIL="available_bytes=$AVAIL"
-  else
-    WEKADIR_DETAIL="available_bytes=$AVAIL (min=$MIN)"
   fi
+  WEKADIR_DETAIL="ok"
 else
   WEKADIR_DETAIL="directory does not exist"
 fi
@@ -328,6 +328,7 @@ printf '"os_release":"%s",' "$(json_escape "$OSR")"
 printf '"weka_dir_ok":%s,' "$([ "$WEKADIR_OK" -eq 1 ] && echo true || echo false)"
 printf '"weka_dir_path":"%s",' "$(json_escape "$WEKADIR_PATH")"
 printf '"weka_dir_detail":"%s",' "$(json_escape "$WEKADIR_DETAIL")"
+printf '"weka_dir_avail_bytes":%d,' "$WEKADIR_AVAIL_BYTES"
 printf '"xfs_installed":%s,' "$([ "$XFS_OK" -eq 1 ] && echo true || echo false)"
 printf '"xfs_detail":"%s",' "$(json_escape "$XFS_DETAIL")"
 printf '"weka_client_clean":%s,' "$([ "$WEKA_CLEAN" -eq 1 ] && echo true || echo false)"
