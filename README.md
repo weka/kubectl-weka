@@ -84,15 +84,47 @@ Nodes that are `NotReady` are automatically skipped.
 A node selector may be provided to limit the checks to specific nodes.
 
 ```bash
-kubectl weka preflight nodes [--node-selector <label>=<value>]
+kubectl weka preflight nodes [NODE...] [flags]
 ```
+
+##### Flags:
+- `--node-selector <label>=<value>` – Label selector to filter nodes (e.g., if only part of nodes are targeted for WEKA)
+- `--summary-only` – Only print summary (no per-node details)
+- `--failed-only` – Only show failed nodes
+- `--fail-fast` – Stop on first failed node
+- `--weka-dir-min-fail <GB>` – Minimum GB for weka directory to FAIL (default: 100)
+- `--weka-dir-min-warn <GB>` – Minimum GB for weka directory to WARN (default: 300)
+
+##### Examples:
+```bash
+# Check all nodes
+kubectl weka preflight nodes
+
+# Check only nodes with specific label
+kubectl weka preflight nodes --node-selector role=storage
+
+# Check specific nodes by name
+kubectl weka preflight nodes node1 node2 node3
+
+# Only show summary (no per-node details)
+kubectl weka preflight nodes --summary-only
+
+# Only show failed nodes
+kubectl weka preflight nodes --failed-only
+
+# Custom weka directory thresholds (stricter requirements)
+kubectl weka preflight nodes --weka-dir-min-fail=200 --weka-dir-min-warn=500
+```
+
 ##### Checks include:
-- OS and kernel
+- OS and kernel (Ubuntu required)
 - Hugepages configuration and availability
-- Free memory thresholds
-- Filesystem layout (/opt/k8s-weka or /root/k8s-weka)
-- XFS availability
-- Mellanox NIC presence, speed, and bonding (LACP)
+- Free memory and hugepages thresholds
+- Weka directory space (configurable thresholds: FAIL < 100GB, WARN < 300GB by default)
+- Filesystem layout (/opt/k8s-weka or /root/k8s-weka for RHCOS)
+- XFS availability (mkfs.xfs)
+- No existing WEKA client installation
+- Mellanox NIC presence, speed, and bonding (LACP validation)
 - Hardware introspection
 
 ##### Example output:
