@@ -11,6 +11,7 @@ import (
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
+	"golang.org/x/term"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,7 +25,8 @@ import (
 )
 
 var (
-	planClusterFailFast bool
+	planClusterFailFast             bool
+	planClusterDisableResourceTable bool
 )
 
 var planClusterCmd = &cobra.Command{
@@ -37,6 +39,7 @@ var planClusterCmd = &cobra.Command{
 func init() {
 	planCmd.AddCommand(planClusterCmd)
 	planClusterCmd.Flags().BoolVar(&planClusterFailFast, "fail-fast", false, "Stop validation on first error (default: collect all errors)")
+	planClusterCmd.Flags().BoolVar(&planClusterDisableResourceTable, "disable-resource-table", false, "Disable resource allocation visualization table")
 }
 
 type ContainerRequirements struct {
@@ -933,139 +936,179 @@ func printNodeResources(ctx context.Context, clientset *kubernetes.Clientset, no
 	nodeResourcesTable.SetStyle(table.StyleLight)
 	nodeResourcesTable.Render()
 
-	// Print resource allocation visualization table for each node
-	fmt.Println("\n=== Resource Allocation Visualization ===\n")
+	// Print resource allocation visualization table for each node (unless disabled)
+	if !planClusterDisableResourceTable {
+		fmt.Println("\n=== Resource Allocation Visualization ===\n")
 
-	// Build a map of Weka resource requirements per resource type
-	backendReq := findNodeRequirementByPurpose(nodeReqs, "Backend (Compute+Drive)")
-	frontendReq := findNodeRequirementByPurpose(nodeReqs, "Frontend (S3/NFS)")
-
-	// Create visualization table
-	vizTable := table.NewWriter()
-	vizTable.SetOutputMirror(os.Stdout)
-	vizTable.SetStyle(table.StyleLight)
-
-	vizTable.AppendHeader(table.Row{
-		"Node",
-		"CPU",
-		"Memory",
-		"Hugepages",
-	})
-
-	for nodeName, node := range nodeMap {
-		if _, exists := hostChecksMap[nodeName]; !exists {
-			continue // Skip nodes without host checks
+		// Get terminal width
+		termWidth, _, err := term.GetSize(int(os.Stdout.Fd()))
+		if err != nil {
+			termWidth = 120 // Default width if unable to detect
 		}
 
-		hc := hostChecksMap[nodeName]
+		// Build a map of Weka resource requirements per resource type
+		backendReq := findNodeRequirementByPurpose(nodeReqs, "Backend (Compute+Drive)")
+		frontendReq := findNodeRequirementByPurpose(nodeReqs, "Frontend (S3/NFS)")
 
-		// Determine which CPU cores calculation to use based on HT status
-		backendCoresPerNode := backendReq.CoresPerNode
-		frontendCoresPerNode := frontendReq.CoresPerNode
-		if !hc.HTEnabled {
-			backendCoresPerNode = backendReq.CoresPerNodeNoHT
-			frontendCoresPerNode = frontendReq.CoresPerNodeNoHT
+		// Create visualization table
+		vizTable := table.NewWriter()
+		vizTable.SetOutputMirror(os.Stdout)
+		vizTable.SetStyle(table.StyleLight)
+
+		// Set column widths based on terminal width
+		// Reserve space for: borders (6 chars) + node name column (20 chars)
+		// Remaining space divided among 3 resource columns
+		nodeColWidth := 20
+		availableWidth := termWidth - 6 - nodeColWidth
+		resourceColWidth := availableWidth / 3
+		if resourceColWidth < 40 {
+			resourceColWidth = 40
 		}
 
-		// Get allocatable resources
-		cpuAlloc := quantityOrZero(node.Status.Allocatable, corev1.ResourceCPU)
-		memAlloc := quantityOrZero(node.Status.Allocatable, corev1.ResourceMemory)
-		hpAlloc := quantityOrZero(node.Status.Allocatable, "hugepages-2Mi")
-
-		// Calculate requests
-		podsOnNode := podsByNode[nodeName]
-		cpuReq := resource.MustParse("0")
-		memReq := resource.MustParse("0")
-		hpReq := resource.MustParse("0")
-
-		for _, p := range podsOnNode {
-			if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
-				continue
-			}
-			for _, c := range p.Spec.Containers {
-				cpuReq.Add(quantityOrZero(c.Resources.Requests, corev1.ResourceCPU))
-				memReq.Add(quantityOrZero(c.Resources.Requests, corev1.ResourceMemory))
-				hpReq.Add(quantityOrZero(c.Resources.Requests, "hugepages-2Mi"))
-			}
-			for _, c := range p.Spec.InitContainers {
-				cpu := quantityOrZero(c.Resources.Requests, corev1.ResourceCPU)
-				mem := quantityOrZero(c.Resources.Requests, corev1.ResourceMemory)
-				hp := quantityOrZero(c.Resources.Requests, "hugepages-2Mi")
-				if cpu.Cmp(cpuReq) > 0 {
-					cpuReq = cpu
-				}
-				if mem.Cmp(memReq) > 0 {
-					memReq = mem
-				}
-				if hp.Cmp(hpReq) > 0 {
-					hpReq = hp
-				}
-			}
-		}
-
-		// CPU visualization
-		cpuUsedPct := getPercentage(cpuReq, cpuAlloc)
-		cpuWekaBEPct := getPercentage(*resource.NewMilliQuantity(int64(backendCoresPerNode*1000), resource.DecimalSI), cpuAlloc)
-		cpuWekaFEPct := getPercentage(*resource.NewMilliQuantity(int64(frontendCoresPerNode*1000), resource.DecimalSI), cpuAlloc)
-		cpuFreePct := 100 - cpuUsedPct - cpuWekaBEPct - cpuWekaFEPct
-		if cpuFreePct < 0 {
-			cpuFreePct = 0
-		}
-		cpuBar := drawBarWithWeka(cpuUsedPct, cpuWekaBEPct, cpuWekaFEPct, 0, cpuFreePct)
-		cpuFree := subtractQuantity(cpuAlloc, cpuReq)
-		cpuDetail := fmt.Sprintf("%s allocatable\n%s used, %s free",
-			(&cpuAlloc).String(), (&cpuReq).String(),
-			(&cpuFree).String())
-
-		// Memory visualization
-		memUsedPct := getPercentage(memReq, memAlloc)
-		memWekaBEBytes := backendReq.MemoryPerNode * 1024 * 1024
-		memWekaFEBytes := frontendReq.MemoryPerNode * 1024 * 1024
-		memWekaBEPct := getPercentage(*resource.NewQuantity(memWekaBEBytes, resource.BinarySI), memAlloc)
-		memWekaFEPct := getPercentage(*resource.NewQuantity(memWekaFEBytes, resource.BinarySI), memAlloc)
-		memFreePct := 100 - memUsedPct - memWekaBEPct - memWekaFEPct
-		if memFreePct < 0 {
-			memFreePct = 0
-		}
-		memBar := drawBarWithWeka(memUsedPct, memWekaBEPct, memWekaFEPct, 0, memFreePct)
-		memFree := subtractQuantity(memAlloc, memReq)
-		memDetail := fmt.Sprintf("%s allocatable\n%s used, %s free",
-			formatAsGi(&memAlloc), formatAsGi(&memReq),
-			formatAsGi(&memFree))
-
-		// Hugepages visualization
-		hpUsedPct := getPercentage(hpReq, hpAlloc)
-		hpWekaBEBytes := backendReq.HugepagesPerNode * 1024 * 1024
-		hpWekaFEBytes := frontendReq.HugepagesPerNode * 1024 * 1024
-		hpWekaBEPct := getPercentage(*resource.NewQuantity(hpWekaBEBytes, resource.BinarySI), hpAlloc)
-		hpWekaFEPct := getPercentage(*resource.NewQuantity(hpWekaFEBytes, resource.BinarySI), hpAlloc)
-		hpFreePct := 100 - hpUsedPct - hpWekaBEPct - hpWekaFEPct
-		if hpFreePct < 0 {
-			hpFreePct = 0
-		}
-		hpBar := drawBarWithWeka(hpUsedPct, hpWekaBEPct, hpWekaFEPct, 0, hpFreePct)
-		hpFree := subtractQuantity(hpAlloc, hpReq)
-		hpDetail := fmt.Sprintf("%s allocatable\n%s used, %s free",
-			formatAsGi(&hpAlloc), formatAsGi(&hpReq),
-			formatAsGi(&hpFree))
-
-		// Add row to table
-		nodeLabel := nodeName
-		if hc.HTEnabled {
-			nodeLabel += " (HT:ON)"
-		} else {
-			nodeLabel += " (HT:OFF)"
-		}
-
-		vizTable.AppendRow(table.Row{
-			nodeLabel,
-			cpuBar + "\n" + cpuDetail,
-			memBar + "\n" + memDetail,
-			hpBar + "\n" + hpDetail,
+		vizTable.AppendHeader(table.Row{
+			"Node",
+			"CPU",
+			"Memory",
+			"Hugepages",
 		})
-	}
 
-	vizTable.Render()
+		// Set column configs for width constraints
+		vizTable.SetColumnConfigs([]table.ColumnConfig{
+			{
+				Number:   1,
+				WidthMax: nodeColWidth,
+			},
+			{
+				Number:   2,
+				WidthMax: resourceColWidth,
+			},
+			{
+				Number:   3,
+				WidthMax: resourceColWidth,
+			},
+			{
+				Number:   4,
+				WidthMax: resourceColWidth,
+			},
+		})
+
+		for nodeName, node := range nodeMap {
+			if _, exists := hostChecksMap[nodeName]; !exists {
+				continue // Skip nodes without host checks
+			}
+
+			hc := hostChecksMap[nodeName]
+
+			// Determine which CPU cores calculation to use based on HT status
+			backendCoresPerNode := backendReq.CoresPerNode
+			frontendCoresPerNode := frontendReq.CoresPerNode
+			if !hc.HTEnabled {
+				backendCoresPerNode = backendReq.CoresPerNodeNoHT
+				frontendCoresPerNode = frontendReq.CoresPerNodeNoHT
+			}
+
+			// ...existing code...
+
+			// Get allocatable resources
+			cpuAlloc := quantityOrZero(node.Status.Allocatable, corev1.ResourceCPU)
+			memAlloc := quantityOrZero(node.Status.Allocatable, corev1.ResourceMemory)
+			hpAlloc := quantityOrZero(node.Status.Allocatable, "hugepages-2Mi")
+
+			// Calculate requests
+			podsOnNode := podsByNode[nodeName]
+			cpuReq := resource.MustParse("0")
+			memReq := resource.MustParse("0")
+			hpReq := resource.MustParse("0")
+
+			for _, p := range podsOnNode {
+				if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+					continue
+				}
+				for _, c := range p.Spec.Containers {
+					cpuReq.Add(quantityOrZero(c.Resources.Requests, corev1.ResourceCPU))
+					memReq.Add(quantityOrZero(c.Resources.Requests, corev1.ResourceMemory))
+					hpReq.Add(quantityOrZero(c.Resources.Requests, "hugepages-2Mi"))
+				}
+				for _, c := range p.Spec.InitContainers {
+					cpu := quantityOrZero(c.Resources.Requests, corev1.ResourceCPU)
+					mem := quantityOrZero(c.Resources.Requests, corev1.ResourceMemory)
+					hp := quantityOrZero(c.Resources.Requests, "hugepages-2Mi")
+					if cpu.Cmp(cpuReq) > 0 {
+						cpuReq = cpu
+					}
+					if mem.Cmp(memReq) > 0 {
+						memReq = mem
+					}
+					if hp.Cmp(hpReq) > 0 {
+						hpReq = hp
+					}
+				}
+			}
+
+			// CPU visualization
+			cpuUsedPct := getPercentage(cpuReq, cpuAlloc)
+			cpuWekaBEPct := getPercentage(*resource.NewMilliQuantity(int64(backendCoresPerNode*1000), resource.DecimalSI), cpuAlloc)
+			cpuWekaFEPct := getPercentage(*resource.NewMilliQuantity(int64(frontendCoresPerNode*1000), resource.DecimalSI), cpuAlloc)
+			cpuFreePct := 100 - cpuUsedPct - cpuWekaBEPct - cpuWekaFEPct
+			if cpuFreePct < 0 {
+				cpuFreePct = 0
+			}
+			cpuBar := drawBarWithWeka(cpuUsedPct, cpuWekaBEPct, cpuWekaFEPct, 0, cpuFreePct)
+			cpuFree := subtractQuantity(cpuAlloc, cpuReq)
+			cpuDetail := fmt.Sprintf("%s allocatable\n%s used, %s free",
+				(&cpuAlloc).String(), (&cpuReq).String(),
+				(&cpuFree).String())
+
+			// Memory visualization
+			memUsedPct := getPercentage(memReq, memAlloc)
+			memWekaBEBytes := backendReq.MemoryPerNode * 1024 * 1024
+			memWekaFEBytes := frontendReq.MemoryPerNode * 1024 * 1024
+			memWekaBEPct := getPercentage(*resource.NewQuantity(memWekaBEBytes, resource.BinarySI), memAlloc)
+			memWekaFEPct := getPercentage(*resource.NewQuantity(memWekaFEBytes, resource.BinarySI), memAlloc)
+			memFreePct := 100 - memUsedPct - memWekaBEPct - memWekaFEPct
+			if memFreePct < 0 {
+				memFreePct = 0
+			}
+			memBar := drawBarWithWeka(memUsedPct, memWekaBEPct, memWekaFEPct, 0, memFreePct)
+			memFree := subtractQuantity(memAlloc, memReq)
+			memDetail := fmt.Sprintf("%s allocatable\n%s used, %s free",
+				formatAsGi(&memAlloc), formatAsGi(&memReq),
+				formatAsGi(&memFree))
+
+			// Hugepages visualization
+			hpUsedPct := getPercentage(hpReq, hpAlloc)
+			hpWekaBEBytes := backendReq.HugepagesPerNode * 1024 * 1024
+			hpWekaFEBytes := frontendReq.HugepagesPerNode * 1024 * 1024
+			hpWekaBEPct := getPercentage(*resource.NewQuantity(hpWekaBEBytes, resource.BinarySI), hpAlloc)
+			hpWekaFEPct := getPercentage(*resource.NewQuantity(hpWekaFEBytes, resource.BinarySI), hpAlloc)
+			hpFreePct := 100 - hpUsedPct - hpWekaBEPct - hpWekaFEPct
+			if hpFreePct < 0 {
+				hpFreePct = 0
+			}
+			hpBar := drawBarWithWeka(hpUsedPct, hpWekaBEPct, hpWekaFEPct, 0, hpFreePct)
+			hpFree := subtractQuantity(hpAlloc, hpReq)
+			hpDetail := fmt.Sprintf("%s allocatable\n%s used, %s free",
+				formatAsGi(&hpAlloc), formatAsGi(&hpReq),
+				formatAsGi(&hpFree))
+
+			// Add row to table
+			nodeLabel := nodeName
+			if hc.HTEnabled {
+				nodeLabel += " (HT:ON)"
+			} else {
+				nodeLabel += " (HT:OFF)"
+			}
+
+			vizTable.AppendRow(table.Row{
+				nodeLabel,
+				cpuBar + "\n" + cpuDetail,
+				memBar + "\n" + memDetail,
+				hpBar + "\n" + hpDetail,
+			})
+		}
+
+		vizTable.Render()
+	}
 
 	return hostChecksMap, nil
 }
@@ -1249,8 +1292,8 @@ func validateClusterResources(ctx context.Context, clientset *kubernetes.Clients
 		}
 	}
 
-	// Validate network configuration
-	if err := validateNetworkConfiguration(ctx, clientset, eligibleNodes, network); err != nil {
+	// Validate network configuration (reuse hostChecksMap from printNodeResources)
+	if err := validateNetworkConfiguration(ctx, clientset, eligibleNodes, network, hostChecksMap); err != nil {
 		return err
 	}
 
@@ -1320,7 +1363,7 @@ func validateDrivesOnNodes(nodes []corev1.Node, driveContainers, numDrives int) 
 	return nil
 }
 
-func validateNetworkConfiguration(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node, network *wekaapi.Network) error {
+func validateNetworkConfiguration(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node, network *wekaapi.Network, hostChecksMap map[string]HostChecksResult) error {
 	if network == nil {
 		return nil
 	}
@@ -1338,8 +1381,8 @@ func validateNetworkConfiguration(ctx context.Context, clientset *kubernetes.Cli
 		return nil
 	}
 
-	// Use the shared network validation function that uses host check pods
-	return validateNetworkInterfaceOnNodes(ctx, clientset, nodes, ethDevice, planClusterFailFast)
+	// Use the shared network validation function with existing host check data
+	return validateNetworkInterfaceOnNodes(ctx, clientset, nodes, ethDevice, planClusterFailFast, hostChecksMap)
 }
 
 func validateResourceAvailability(nodes []corev1.Node, nodeReqs []NodeRequirements) error {

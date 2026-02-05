@@ -19,78 +19,133 @@ type NetworkValidationResult struct {
 
 // validateNetworkInterfaceOnNodes validates that a specified ethDevice exists on all eligible nodes
 // and if it's a bond, validates that it's using LACP (802.3ad mode).
-// This uses the existing host check pod infrastructure instead of relying on annotations.
+// If hostChecksMap is provided, reuses existing host check data; otherwise creates new pods.
 // If failFast is true, returns immediately on first error; otherwise collects all errors.
-func validateNetworkInterfaceOnNodes(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node, ethDevice string, failFast bool) error {
+func validateNetworkInterfaceOnNodes(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node, ethDevice string, failFast bool, hostChecksMap ...map[string]HostChecksResult) error {
 	if ethDevice == "" {
 		return nil // No validation needed
 	}
 
 	fmt.Printf("\n=== Validating Network Interface '%s' ===\n", ethDevice)
 
-	// Run host checks via pods to get network interface information
-	resultChan, cleanupWg := scanHostChecksByPod(ctx, clientset, nodes)
-
-	// Ensure cleanup completes before returning
-	defer func() {
-		cleanupWg.Wait()
-	}()
-
 	var nodeResults []NetworkValidationResult
 	var allErrors []string
 
-	// Collect and process results
-	for result := range resultChan {
-		nodeResult := NetworkValidationResult{
-			NodeName: result.nodeName,
-			Status:   "PASS",
-			Issues:   []string{},
-		}
-
-		if result.err != nil {
-			nodeResult.Status = "FAIL"
-			nodeResult.Issues = append(nodeResult.Issues, fmt.Sprintf("Cannot inspect host: %v", result.err))
-			nodeResults = append(nodeResults, nodeResult)
-			continue
-		}
-
-		hostCheck := result.result
-		found := false
-
-		// Check if ethDevice is a regular Mellanox interface
-		for _, iface := range hostCheck.MlxIfaces {
-			if iface.Name == ethDevice {
-				found = true
-				nodeResult.InterfaceFound = true
-				break
+	// If hostChecksMap is provided, use it; otherwise create new host checks
+	if len(hostChecksMap) > 0 && len(hostChecksMap[0]) > 0 {
+		// Reuse existing host checks data
+		existingChecks := hostChecksMap[0]
+		for nodeName, hostCheck := range existingChecks {
+			nodeResult := NetworkValidationResult{
+				NodeName: nodeName,
+				Status:   "PASS",
+				Issues:   []string{},
 			}
-		}
 
-		// Check if ethDevice is a bond
-		if !found {
-			for _, bond := range hostCheck.MlxBonds {
-				if bond.Name == ethDevice {
+			found := false
+
+			// Check if ethDevice is a regular Mellanox interface
+			for _, iface := range hostCheck.MlxIfaces {
+				if iface.Name == ethDevice {
 					found = true
 					nodeResult.InterfaceFound = true
-
-					// Validate LACP if this is a bond
-					if !hostCheck.BondLACPOk {
-						nodeResult.Status = "FAIL"
-						nodeResult.Issues = append(nodeResult.Issues, fmt.Sprintf("Bond not using LACP: %s", hostCheck.BondLACPDetail))
-					} else {
-						nodeResult.HasLACP = true
-					}
 					break
 				}
 			}
-		}
 
-		if !found {
-			nodeResult.Status = "FAIL"
-			nodeResult.Issues = append(nodeResult.Issues, fmt.Sprintf("Interface '%s' not found", ethDevice))
-		}
+			// Check if ethDevice is a bond
+			if !found {
+				for _, bond := range hostCheck.MlxBonds {
+					if bond.Name == ethDevice {
+						found = true
+						nodeResult.InterfaceFound = true
 
-		nodeResults = append(nodeResults, nodeResult)
+						// Validate LACP if this is a bond
+						if !hostCheck.BondLACPOk {
+							nodeResult.Status = "FAIL"
+							nodeResult.Issues = append(nodeResult.Issues, fmt.Sprintf("Bond not using LACP: %s", hostCheck.BondLACPDetail))
+						} else {
+							nodeResult.Status = "PASS"
+							nodeResult.HasLACP = true
+						}
+						break
+					}
+				}
+			}
+
+			if !found {
+				nodeResult.Status = "FAIL"
+				nodeResult.Issues = append(nodeResult.Issues, fmt.Sprintf("Interface '%s' not found", ethDevice))
+			}
+
+			nodeResults = append(nodeResults, nodeResult)
+		}
+	} else {
+		// Fall back to creating host checks if no map provided
+		fmt.Printf("Creating pods to verify network configuration...\n")
+
+		// Run host checks via pods to get network interface information
+		resultChan, cleanupWg := scanHostChecksByPod(ctx, clientset, nodes)
+
+		// Ensure cleanup completes before returning
+		defer func() {
+			cleanupWg.Wait()
+		}()
+
+		// Collect and process results
+		for result := range resultChan {
+			nodeResult := NetworkValidationResult{
+				NodeName: result.nodeName,
+				Status:   "PASS",
+				Issues:   []string{},
+			}
+
+			if result.err != nil {
+				nodeResult.Status = "FAIL"
+				nodeResult.Issues = append(nodeResult.Issues, fmt.Sprintf("Cannot inspect host: %v", result.err))
+				nodeResults = append(nodeResults, nodeResult)
+				continue
+			}
+
+			hostCheck := result.result
+			found := false
+
+			// Check if ethDevice is a regular Mellanox interface
+			for _, iface := range hostCheck.MlxIfaces {
+				if iface.Name == ethDevice {
+					found = true
+					nodeResult.InterfaceFound = true
+					break
+				}
+			}
+
+			// Check if ethDevice is a bond
+			if !found {
+				for _, bond := range hostCheck.MlxBonds {
+					if bond.Name == ethDevice {
+						found = true
+						nodeResult.InterfaceFound = true
+
+						// Validate LACP if this is a bond
+						if !hostCheck.BondLACPOk {
+							nodeResult.Status = "FAIL"
+							nodeResult.Issues = append(nodeResult.Issues, fmt.Sprintf("Bond not using LACP: %s", hostCheck.BondLACPDetail))
+						} else {
+							nodeResult.Status = "PASS"
+							nodeResult.HasLACP = true
+						}
+						break
+					}
+				}
+			}
+
+			if !found {
+				nodeResult.Status = "FAIL"
+				nodeResult.Issues = append(nodeResult.Issues, fmt.Sprintf("Interface '%s' not found", ethDevice))
+			}
+
+			nodeResults = append(nodeResults, nodeResult)
+		}
 	}
 
 	// Print detailed results for each node
