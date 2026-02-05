@@ -61,6 +61,15 @@ type HostChecksResult struct {
 
 	BondLACPOk     bool   `json:"bond_lacp_ok"`
 	BondLACPDetail string `json:"bond_lacp_detail"`
+
+	// CPU and Memory info
+	HTEnabled       bool   `json:"ht_enabled"`
+	PhysicalCores   int    `json:"physical_cores"`
+	LogicalCores    int    `json:"logical_cores"`
+	MemoryBytes     int64  `json:"memory_bytes"`
+	FreeMemoryBytes int64  `json:"free_memory_bytes"`
+	HugepagesFree   int64  `json:"hugepages_free_bytes"`
+	CPUModel        string `json:"cpu_model"`
 }
 
 type hostScanError struct {
@@ -72,7 +81,6 @@ func makeHostChecksPod(ns, nodeName, podName, labelKey, labelVal string) *corev1
 
 	script := `
 set -eu
-sleep 10
 
 json_escape() { echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
@@ -322,6 +330,81 @@ for b in /host-sys/class/net/bond*; do
   # if bond_lacp already failed, we still continue collecting bonds
 done
 
+# ----- CPU and Memory detection -----
+HT_ENABLED=0
+PHYSICAL_CORES=0
+LOGICAL_CORES=0
+MEMORY_BYTES=0
+FREE_MEMORY_BYTES=0
+HUGEPAGES_FREE_BYTES=0
+CPU_MODEL=""
+
+# Get logical cores (number of processors)
+LOGICAL_CORES="$(grep -c '^processor' /host/proc/cpuinfo 2>/dev/null || echo 1)"
+
+if [ -f /host/proc/cpuinfo ]; then
+  # Get CPU model
+  CPU_MODEL="$(grep '^model name' /host/proc/cpuinfo 2>/dev/null | head -n1 | cut -d: -f2 | sed 's/^ //')"
+  
+  # Get physical cores from "cpu cores" field (most reliable method)
+  CPU_CORES="$(grep '^cpu cores' /host/proc/cpuinfo 2>/dev/null | head -n1 | awk '{print $NF}')"
+  if [ -n "$CPU_CORES" ] && [ "$CPU_CORES" -gt 0 ]; then
+    # Calculate total physical cores: (cpu cores per socket) × (number of sockets)
+    SIBLINGS="$(grep '^siblings' /host/proc/cpuinfo 2>/dev/null | head -n1 | awk '{print $NF}')"
+    if [ -z "$SIBLINGS" ] || [ "$SIBLINGS" -eq 0 ]; then
+      SIBLINGS="$CPU_CORES"
+    fi
+    SOCKETS="$((LOGICAL_CORES / SIBLINGS))"
+    if [ "$SOCKETS" -eq 0 ]; then
+      SOCKETS=1
+    fi
+    PHYSICAL_CORES=$((CPU_CORES * SOCKETS))
+  else
+    # Fallback: assume physical_id field exists and count unique ones
+    PHYSICAL_CORES="$(grep 'physical id' /host/proc/cpuinfo 2>/dev/null | sort -u | wc -l)"
+    if [ "$PHYSICAL_CORES" -eq 0 ] || [ "$PHYSICAL_CORES" -eq 1 ]; then
+      # Last resort: divide logical by siblings
+      SIBLINGS="$(grep '^siblings' /host/proc/cpuinfo 2>/dev/null | head -n1 | awk '{print $NF}')"
+      if [ -n "$SIBLINGS" ] && [ "$SIBLINGS" -gt 0 ]; then
+        PHYSICAL_CORES=$((LOGICAL_CORES / SIBLINGS))
+      else
+        PHYSICAL_CORES="$LOGICAL_CORES"
+      fi
+    fi
+  fi
+fi
+
+# Ensure we have at least something
+if [ "$PHYSICAL_CORES" -eq 0 ]; then
+  PHYSICAL_CORES="$LOGICAL_CORES"
+fi
+
+# Check if HT is enabled (logical cores > physical cores)
+if [ "$LOGICAL_CORES" -gt "$PHYSICAL_CORES" ]; then
+  HT_ENABLED=1
+fi
+
+# Get memory info (in bytes)
+if [ -f /host/proc/meminfo ]; then
+  MEMORY_KB="$(grep '^MemTotal:' /host/proc/meminfo 2>/dev/null | awk '{print $2}')"
+  MEMORY_BYTES=$((MEMORY_KB * 1024))
+  
+  FREE_KB="$(grep '^MemAvailable:' /host/proc/meminfo 2>/dev/null | awk '{print $2}')"
+  FREE_MEMORY_BYTES=$((FREE_KB * 1024))
+fi
+
+# Get hugepages free (2MB hugepages by default)
+if [ -d /host/sys/kernel/mm/hugepages ]; then
+  for hp_dir in /host/sys/kernel/mm/hugepages/hugepages-*; do
+    if [ -d "$hp_dir" ]; then
+      free_hp="$(cat "$hp_dir/free_hugepages" 2>/dev/null || echo 0)"
+      page_size_kb="$(basename "$hp_dir" | sed 's/hugepages-//;s/kB//')"
+      page_size_bytes=$((page_size_kb * 1024))
+      HUGEPAGES_FREE_BYTES=$((HUGEPAGES_FREE_BYTES + free_hp * page_size_bytes))
+    fi
+  done
+fi
+
 # Output JSON (single line)
 printf '{'
 printf '"is_rhcos":%s,' "$([ "$IS_RHCOS" -eq 1 ] && echo true || echo false)"
@@ -337,7 +420,14 @@ printf '"weka_client_detail":"%s",' "$(json_escape "$WEKA_DETAIL")"
 printf '"mlx_ifaces":[%s],' "$MLX_IFACES_JSON"
 printf '"mlx_bonds":[%s],' "$MLX_BONDS_JSON"
 printf '"bond_lacp_ok":%s,' "$([ "$BOND_LACP_OK" -eq 1 ] && echo true || echo false)"
-printf '"bond_lacp_detail":"%s"' "$(json_escape "$BOND_LACP_DETAIL")"
+printf '"bond_lacp_detail":"%s",' "$(json_escape "$BOND_LACP_DETAIL")"
+printf '"ht_enabled":%s,' "$([ "$HT_ENABLED" -eq 1 ] && echo true || echo false)"
+printf '"physical_cores":%d,' "$PHYSICAL_CORES"
+printf '"logical_cores":%d,' "$LOGICAL_CORES"
+printf '"memory_bytes":%d,' "$MEMORY_BYTES"
+printf '"free_memory_bytes":%d,' "$FREE_MEMORY_BYTES"
+printf '"hugepages_free_bytes":%d,' "$HUGEPAGES_FREE_BYTES"
+printf '"cpu_model":"%s"' "$(json_escape "$CPU_MODEL")"
 printf '}\n'
 `
 	return &corev1.Pod{
@@ -441,7 +531,7 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 		_ = eg.Wait()
 	}()
 
-	fmt.Printf("Creating pods to verify node information...")
+	fmt.Println("Creating pods to verify node information...")
 
 	// Run everything in background - results stream as they complete
 	go func() {
