@@ -38,9 +38,10 @@ type HostChecksResult struct {
 	OSRelease string `json:"os_release"`
 
 	// Weka directory exists + has >=300GB available
-	WekaDirOK     bool   `json:"weka_dir_ok"`
-	WekaDirPath   string `json:"weka_dir_path"`
-	WekaDirDetail string `json:"weka_dir_detail"`
+	WekaDirOK         bool   `json:"weka_dir_ok"`
+	WekaDirPath       string `json:"weka_dir_path"`
+	WekaDirDetail     string `json:"weka_dir_detail"`
+	WekaDirAvailBytes int64  `json:"weka_dir_avail_bytes"`
 
 	// XFS tools
 	XFSInstalled bool   `json:"xfs_installed"`
@@ -93,18 +94,17 @@ if [ "$IS_RHCOS" -eq 1 ]; then
 fi
 
 WEKADIR_OK=0
+WEKADIR_AVAIL_BYTES=0
 WEKADIR_DETAIL=""
 WEKADIR_PATH="${WEKADIR#/host}"
 
 if [ -d "$WEKADIR" ]; then
-  AVAIL="$(df -PB1 "$WEKADIR" 2>/dev/null | tail -n1 | awk '{print $4}' || echo 0)"
-  MIN=$((300*1000*1000*1000))
-  if [ "$AVAIL" -ge "$MIN" ]; then
+  WEKADIR_AVAIL_BYTES="$(df -PB1 "$WEKADIR" 2>/dev/null | tail -n1 | awk '{print $4}' || echo 0)"
+  MIN_PASS=$((300*1000*1000*1000))
+  if [ "$WEKADIR_AVAIL_BYTES" -ge "$MIN_PASS" ]; then
     WEKADIR_OK=1
-    WEKADIR_DETAIL="available_bytes=$AVAIL"
-  else
-    WEKADIR_DETAIL="available_bytes=$AVAIL (min=$MIN)"
   fi
+  WEKADIR_DETAIL="ok"
 else
   WEKADIR_DETAIL="directory does not exist"
 fi
@@ -328,6 +328,7 @@ printf '"os_release":"%s",' "$(json_escape "$OSR")"
 printf '"weka_dir_ok":%s,' "$([ "$WEKADIR_OK" -eq 1 ] && echo true || echo false)"
 printf '"weka_dir_path":"%s",' "$(json_escape "$WEKADIR_PATH")"
 printf '"weka_dir_detail":"%s",' "$(json_escape "$WEKADIR_DETAIL")"
+printf '"weka_dir_avail_bytes":%d,' "$WEKADIR_AVAIL_BYTES"
 printf '"xfs_installed":%s,' "$([ "$XFS_OK" -eq 1 ] && echo true || echo false)"
 printf '"xfs_detail":"%s",' "$(json_escape "$XFS_DETAIL")"
 printf '"weka_client_clean":%s,' "$([ "$WEKA_CLEAN" -eq 1 ] && echo true || echo false)"
@@ -392,15 +393,21 @@ printf '}\n'
 
 func boolPtr(b bool) *bool { return &b }
 
-func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node) (map[string]HostChecksResult, []hostScanError) {
-	results := make(map[string]HostChecksResult, len(nodes))
-	var errs []hostScanError
+// nodeHostResult represents a single node's host check result as it arrives
+type nodeHostResult struct {
+	nodeName string
+	result   HostChecksResult
+	err      error
+}
+
+func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node) (<-chan nodeHostResult, *sync.WaitGroup) {
+	resultChan := make(chan nodeHostResult, len(nodes))
 
 	ns := "default"
 	labelKey := "app"
 	labelVal := "weka-preflight-hostchecks"
 
-	// --- Phase 1: create all pods quickly (sequential create is OK; it’s fast),
+	// --- Phase 1: create all pods quickly (sequential create is OK; it's fast),
 	// but we still do it concurrently with a limit to be safe.
 	type podRef struct {
 		node    string
@@ -409,50 +416,75 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 
 	pods := make([]podRef, 0, len(nodes))
 
+	// Background cleanup tracker - pods are deleted as soon as logs are collected
+	var cleanupWg sync.WaitGroup
+	cleanupChan := make(chan podRef, len(nodes))
+
+	// Start background cleanup goroutine that processes pods as they complete
+	go func() {
+		eg, _ := errgroupWithLimit(context.Background(), 5) // conservative to avoid throttling
+		for pr := range cleanupChan {
+			pr := pr
+			cleanupWg.Add(1)
+			eg.Go(func() error {
+				defer cleanupWg.Done()
+				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), pr.podName, metav1.DeleteOptions{})
+				return nil
+			})
+		}
+		_ = eg.Wait()
+	}()
+
 	fmt.Printf("Creating pods to verify node information...")
-	// Create pods (bounded parallel)
-	{
-		eg, egCtx := errgroupWithLimit(ctx, 20) // tune: 10-50 depending on cluster/apiserver
+
+	// Run everything in background - results stream as they complete
+	go func() {
+		// Phase 1: Create pods
+		eg, egCtx := errgroupWithLimit(ctx, 3)
 		mu := &sync.Mutex{}
 
 		for i := range nodes {
 			nodeName := nodes[i].Name
-			podName := fmt.Sprintf("weka-preflight-hostchk-%s-%s", sanitizeName(nodeName), rand.String(5))
 			node := nodes[i]
 			if !isNodeReady(&node) {
-				results[node.Name] = HostChecksResult{
-					WekaDirOK:        false,
-					WekaDirDetail:    "skipped: node not Ready",
-					XFSInstalled:     false,
-					XFSDetail:        "skipped: node not Ready",
-					WekaClientClean:  false,
-					WekaClientDetail: "skipped: node not Ready",
-					BondLACPOk:       true, // not evaluated
-					BondLACPDetail:   "skipped: node not Ready",
+				resultChan <- nodeHostResult{
+					nodeName: node.Name,
+					result: HostChecksResult{
+						WekaDirOK:        false,
+						WekaDirDetail:    "skipped: node not Ready",
+						XFSInstalled:     false,
+						XFSDetail:        "skipped: node not Ready",
+						WekaClientClean:  false,
+						WekaClientDetail: "skipped: node not Ready",
+						BondLACPOk:       true,
+						BondLACPDetail:   "skipped: node not Ready",
+					},
 				}
 				continue
 			}
+
+			podName := fmt.Sprintf("weka-preflight-hostchk-%s-%s", sanitizeName(nodeName), rand.String(5))
 
 			eg.Go(func() error {
 				p := makeHostChecksPod(ns, nodeName, podName, labelKey, labelVal)
 
 				_, err := clientset.CoreV1().Pods(ns).Create(egCtx, p, metav1.CreateOptions{})
 				if err != nil {
-					// Record creation failure as an error result for this node
-					mu.Lock()
-					results[nodeName] = HostChecksResult{
-						WekaDirOK:        false,
-						WekaDirDetail:    fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						XFSInstalled:     false,
-						XFSDetail:        fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						WekaClientClean:  false,
-						WekaClientDetail: fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						Mellanox:         false,
-						MellanoxDetail:   fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+					resultChan <- nodeHostResult{
+						nodeName: nodeName,
+						result: HostChecksResult{
+							WekaDirOK:        false,
+							WekaDirDetail:    fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+							XFSInstalled:     false,
+							XFSDetail:        fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+							WekaClientClean:  false,
+							WekaClientDetail: fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+							Mellanox:         false,
+							MellanoxDetail:   fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+						},
+						err: err,
 					}
-					errs = append(errs, hostScanError{node: nodeName, err: err})
-					mu.Unlock()
-					return nil // don’t fail whole scan
+					return nil
 				}
 
 				mu.Lock()
@@ -463,92 +495,67 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 		}
 
 		_ = eg.Wait()
-	}
 
-	// Ensure cleanup no matter what
-	defer func() {
-		fmt.Println("Cleaning up host checks pods...")
-		eg, _ := errgroupWithLimit(context.Background(), 30)
+		// Phase 2: Process pods - send results immediately as they complete
+		eg2, egCtx2 := errgroupWithLimit(ctx, 5)
+
 		for _, pr := range pods {
 			pr := pr
-			eg.Go(func() error {
-				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), pr.podName, metav1.DeleteOptions{})
+			eg2.Go(func() error {
+				res, err := waitHostChecksResult(egCtx2, clientset, ns, pr.podName, pr.node)
+
+				// Immediately queue pod for deletion (happens in background)
+				cleanupChan <- pr
+
+				// Send result immediately
+				if err != nil {
+					if se, ok := err.(SkipHostCheckError); ok {
+						resultChan <- nodeHostResult{
+							nodeName: pr.node,
+							result: HostChecksResult{
+								WekaDirOK:        false,
+								WekaDirDetail:    "skipped: " + se.Reason,
+								XFSInstalled:     false,
+								XFSDetail:        "skipped: " + se.Reason,
+								WekaClientClean:  false,
+								WekaClientDetail: "skipped: " + se.Reason,
+							},
+							err: err,
+						}
+					} else {
+						resultChan <- nodeHostResult{
+							nodeName: pr.node,
+							result: HostChecksResult{
+								WekaDirOK:        false,
+								WekaDirDetail:    fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+								XFSInstalled:     false,
+								XFSDetail:        fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+								WekaClientClean:  false,
+								WekaClientDetail: fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+								Mellanox:         false,
+								MellanoxDetail:   fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
+							},
+							err: err,
+						}
+					}
+				} else {
+					resultChan <- nodeHostResult{
+						nodeName: pr.node,
+						result:   res,
+					}
+				}
 				return nil
 			})
 		}
-		_ = eg.Wait()
+
+		_ = eg2.Wait()
+
+		// Close channels only AFTER both phases complete
+		close(resultChan)
+		close(cleanupChan)
 	}()
 
-	// --- Phase 2: wait for completion + fetch logs in parallel
-	{
-		eg, egCtx := errgroupWithLimit(ctx, 30) // waiting/log reads can be parallel
-		mu := &sync.Mutex{}
-
-		for _, pr := range pods {
-			pr := pr
-			eg.Go(func() error {
-				res, err := waitHostChecksResult(egCtx, clientset, ns, pr.podName, pr.node)
-				mu.Lock()
-				defer mu.Unlock()
-				if err != nil {
-					// Skip: pod didn't start quickly (node not ready / unschedulable)
-					if se, ok := err.(SkipHostCheckError); ok {
-						results[pr.node] = HostChecksResult{
-							WekaDirOK:        false,
-							WekaDirDetail:    "skipped: " + se.Reason,
-							XFSInstalled:     false,
-							XFSDetail:        "skipped: " + se.Reason,
-							WekaClientClean:  false,
-							WekaClientDetail: "skipped: " + se.Reason,
-							// Mellanox inventory unavailable too
-							// (you can add a dedicated boolean like HostChecksSkipped if you want)
-						}
-						// record as an error only if you want to count it
-						errs = append(errs, hostScanError{node: pr.node, err: err})
-						return nil
-					}
-
-					results[pr.node] = HostChecksResult{
-						WekaDirOK:        false,
-						WekaDirDetail:    fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						XFSInstalled:     false,
-						XFSDetail:        fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						WekaClientClean:  false,
-						WekaClientDetail: fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						Mellanox:         false,
-						MellanoxDetail:   fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-					}
-					errs = append(errs, hostScanError{node: pr.node, err: err})
-					return nil
-				}
-				results[pr.node] = res
-				return nil
-			})
-		}
-
-		_ = eg.Wait()
-	}
-	fmt.Println("Checking host checks...")
-
-	// Optional: also verify we saw all nodes; missing ones treated as error
-	for i := range nodes {
-		n := nodes[i].Name
-		if _, ok := results[n]; !ok {
-			results[n] = HostChecksResult{
-				WekaDirOK:        false,
-				WekaDirDetail:    "Cannot inspect host: missing result",
-				XFSInstalled:     false,
-				XFSDetail:        "Cannot inspect host: missing result",
-				WekaClientClean:  false,
-				WekaClientDetail: "Cannot inspect host: missing result",
-				Mellanox:         false,
-				MellanoxDetail:   "Cannot inspect host: missing result",
-			}
-			errs = append(errs, hostScanError{node: n, err: fmt.Errorf("missing result")})
-		}
-	}
-
-	return results, errs
+	return resultChan, &cleanupWg
 }
 
 func errgroupWithLimit(ctx context.Context, limit int) (*errgroup.Group, context.Context) {
@@ -560,6 +567,9 @@ func waitHostChecksResult(ctx context.Context, clientset *kubernetes.Clientset, 
 	startDeadline := time.Now().Add(30 * time.Second) // must leave Pending by then
 	doneDeadline := time.Now().Add(120 * time.Second) // overall completion timeout
 
+	// Start with longer sleep to reduce API calls
+	sleepInterval := time.Second
+
 	for {
 		if time.Now().After(doneDeadline) {
 			_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
@@ -569,7 +579,7 @@ func waitHostChecksResult(ctx context.Context, clientset *kubernetes.Clientset, 
 		p, err := clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				time.Sleep(250 * time.Millisecond)
+				time.Sleep(sleepInterval)
 				continue
 			}
 			return HostChecksResult{}, err
@@ -577,22 +587,22 @@ func waitHostChecksResult(ctx context.Context, clientset *kubernetes.Clientset, 
 
 		switch p.Status.Phase {
 		case corev1.PodPending:
-			// If it's still Pending after 10s, delete + skip.
+			// If it's still Pending after 30s, delete + skip.
 			if time.Now().After(startDeadline) {
 				// best-effort delete
 				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
 
 				reason := pendingReason(p)
 				if reason == "" {
-					reason = "pod stayed Pending >10s (node may be NotReady / unschedulable)"
+					reason = "pod stayed Pending >30s (node may be NotReady / unschedulable)"
 				}
 				return HostChecksResult{}, SkipHostCheckError{Node: nodeName, Reason: reason}
 			}
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(sleepInterval)
 
 		case corev1.PodRunning:
 			// Great: started. Now wait for it to complete.
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(sleepInterval)
 
 		case corev1.PodSucceeded, corev1.PodFailed:
 			logs, err := readPodLogs(ctx, clientset, ns, podName, "hostchecks")
@@ -611,7 +621,7 @@ func waitHostChecksResult(ctx context.Context, clientset *kubernetes.Clientset, 
 
 		default:
 			// Unknown state, keep polling.
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(sleepInterval)
 		}
 	}
 }

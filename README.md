@@ -84,15 +84,47 @@ Nodes that are `NotReady` are automatically skipped.
 A node selector may be provided to limit the checks to specific nodes.
 
 ```bash
-kubectl weka preflight nodes [--node-selector <label>=<value>]
+kubectl weka preflight nodes [NODE...] [flags]
 ```
+
+##### Flags:
+- `--node-selector <label>=<value>` – Label selector to filter nodes (e.g., if only part of nodes are targeted for WEKA)
+- `--summary-only` – Only print summary (no per-node details)
+- `--failed-only` – Only show failed nodes
+- `--fail-fast` – Stop on first failed node
+- `--weka-dir-min-fail <GB>` – Minimum GB for weka directory to FAIL (default: 100)
+- `--weka-dir-min-warn <GB>` – Minimum GB for weka directory to WARN (default: 300)
+
+##### Examples:
+```bash
+# Check all nodes
+kubectl weka preflight nodes
+
+# Check only nodes with specific label
+kubectl weka preflight nodes --node-selector role=storage
+
+# Check specific nodes by name
+kubectl weka preflight nodes node1 node2 node3
+
+# Only show summary (no per-node details)
+kubectl weka preflight nodes --summary-only
+
+# Only show failed nodes
+kubectl weka preflight nodes --failed-only
+
+# Custom weka directory thresholds (stricter requirements)
+kubectl weka preflight nodes --weka-dir-min-fail=200 --weka-dir-min-warn=500
+```
+
 ##### Checks include:
-- OS and kernel
+- OS and kernel (Ubuntu required)
 - Hugepages configuration and availability
-- Free memory thresholds
-- Filesystem layout (/opt/k8s-weka or /root/k8s-weka)
-- XFS availability
-- Mellanox NIC presence, speed, and bonding (LACP)
+- Free memory and hugepages thresholds
+- Weka directory space (configurable thresholds: FAIL < 100GB, WARN < 300GB by default)
+- Filesystem layout (/opt/k8s-weka or /root/k8s-weka for RHCOS)
+- XFS availability (mkfs.xfs)
+- No existing WEKA client installation
+- Mellanox NIC presence, speed, and bonding (LACP validation)
 - Hardware introspection
 
 ##### Example output:
@@ -200,6 +232,114 @@ kubectl weka logs operator --tail=200
 kubectl weka logs operator --since=10m
 ```
 ANSI colors are preserved.
+
+### Plan WEKA Cluster Deployment
+
+The `plan` command analyzes a WekaCluster YAML specification file and provides detailed resource planning, helping you understand the infrastructure requirements before deployment.
+
+#### Plan cluster resources
+```bash
+kubectl weka plan cluster <file.yaml> [--no-headers]
+```
+
+##### Description:
+This command calculates resource requirements for each container type (Compute, Drive, S3, NFS, Envoy) based on your cluster specification and determines the minimum number of nodes needed.
+
+##### Options:
+- `--no-headers` – Don't print table headers (useful for scripting)
+
+##### Features:
+- **Resource Calculations** – Calculates CPU cores, memory, and hugepages for each container type
+- **Drive Validation** – Verifies sufficient NVME drives available (with cluster access)
+- **Node Requirements** – Shows minimum nodes needed with 10% spare capacity and fault tolerance recommendation
+- **Offline Support** – Works without cluster access (skip drive validation)
+- **Anti-affinity Aware** – Respects container placement rules (same role on different nodes)
+
+##### Example usage:
+```bash
+# Analyze a cluster specification
+kubectl weka plan cluster cluster.yaml
+
+# Output without headers (for scripting)
+kubectl weka plan cluster cluster.yaml --no-headers
+```
+
+##### Example cluster specification (cluster.yaml):
+```yaml
+apiVersion: weka.weka.io/v1alpha1
+kind: WekaCluster
+metadata:
+  name: weka01
+  namespace: default
+spec:
+  cpuPolicy: auto
+  dynamicTemplate:
+    computeContainers: 8
+    computeCores: 12
+    driveContainers: 8
+    driveCores: 4
+    numDrives: 4
+    s3Containers: 2
+    s3Cores: 4
+  image: quay.io/weka.io/weka-in-container:4.4.10.200
+  template: dynamic
+```
+
+##### Example output:
+```
+=== Container Resource Requirements ===
+┌────────────────┬───────┬───────────────────┬───────────────────────┬────────────────────┐
+│ Container Type │ Count │ Cores/Container   │ Hugepages/Container   │ Memory/Container   │
+├────────────────┼───────┼───────────────────┼───────────────────────┼────────────────────┤
+│ Compute        │     8 │                25 │             36200 MiB │          69100 MiB │
+│ Drive          │     8 │                 9 │              6400 MiB │          22800 MiB │
+│ S3             │     2 │                 9 │              5800 MiB │          31450 MiB │
+│ Envoy (S3)     │     2 │                 1 │                  0 MiB │           1024 MiB │
+└────────────────┴───────┴───────────────────┴───────────────────────┴────────────────────┘
+
+=== Node Requirements (with 10% spare) ===
+┌────────────────────────┬───────────┬─────────────┬──────────────────┬────────────────┬──────────────────────────────────────────────────┐
+│ Purpose                │ Min Nodes │ Cores/Node  │ Hugepages/Node   │ Memory/Node    │ Description                                      │
+├────────────────────────┼───────────┼─────────────┼──────────────────┼────────────────┼──────────────────────────────────────────────────┤
+│ Backend (Compute+Drive)│         8 │          37 │        46860 MiB │      95810 MiB │ To accommodate 8 compute and 8 drive containers  │
+│ Frontend (S3/NFS)      │         2 │          12 │         6380 MiB │      36949 MiB │ To accommodate 2 S3+Envoy containers             │
+└────────────────────────┴───────────┴─────────────┴──────────────────┴────────────────┴──────────────────────────────────────────────────┘
+
+💡 Recommendation: At least 1 more node of the required capacity is recommended to provide fault tolerance.
+```
+
+##### Resource Calculation Details:
+
+**Compute Containers:**
+- Hugepages: 3000Mi per core + 200Mi overhead (or explicit override)
+- Cores: HT-aware (auto/dedicated_ht: 2×cores+extra+1, manual/shared: cores+extra+1)
+- Memory: 2700 + (800+4400)×cores + 4000 + additional
+
+**Drive Containers:**
+- Hugepages: 1400Mi per core + 200Mi per drive (or 1000Mi per core if no drives)
+- Cores: Same as Compute
+- Memory: 4000 + (800+2200)×cores + 700×numDrives + 4000 + additional
+
+**S3 Containers:**
+- Hugepages: 1400Mi per core + 200Mi overhead
+- Cores: Same as Compute
+- Memory: 16000 + 2450 + (2850+200)×cores + 450 + additional
+
+**NFS Containers:**
+- Hugepages: 1400Mi per core + 200Mi overhead
+- Cores: Same as Compute
+- Memory: 16000 + 2450 + (2850+200)×cores + 450 + additional
+
+**Envoy Containers:** (paired with S3)
+- Hugepages: 0
+- Cores: 1
+- Memory: 1024 + additional
+
+##### Container Placement Rules:
+- Backend nodes can co-locate Compute + Drive containers
+- Frontend nodes keep S3, NFS, and Envoy containers separate (one of each role per node)
+- Each container type can appear only once per node
+- Different types can share nodes
 
 ## Versioning and Releases
 

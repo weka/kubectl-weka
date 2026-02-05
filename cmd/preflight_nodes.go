@@ -3,7 +3,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -16,8 +19,11 @@ var (
 	minFreeMem = resource.MustParse("4Gi")
 	minFreeHP  = resource.MustParse("3Gi")
 
-	preflightFailFast    bool
-	preflightSummaryOnly bool
+	preflightFailFast      bool
+	preflightSummaryOnly   bool
+	preflightFailedOnly    bool
+	preflightWekaDirFailGB int64
+	preflightWekaDirWarnGB int64
 )
 
 var preflightNodesCmd = &cobra.Command{
@@ -29,11 +35,13 @@ var preflightNodesCmd = &cobra.Command{
 
 func init() {
 	preflightCmd.AddCommand(preflightNodesCmd)
-	preflightNodesCmd.Flags().StringVar(&preflightNodeSelector, "node-selector", "", "Label selector to filter nodes")
+	preflightNodesCmd.Flags().StringVar(&preflightNodeSelector, "node-selector", "", "Label selector to filter nodes, e.g. if only part of nodes are targeted for WEKA")
 	preflightNodesCmd.Flags().BoolVar(&preflightFailFast, "fail-fast", false, "Stop on first failed node")
 	preflightNodesCmd.Flags().BoolVar(&preflightSummaryOnly, "summary-only", false, "Only print summary (no per-node details)")
+	preflightNodesCmd.Flags().BoolVar(&preflightFailedOnly, "failed-only", false, "Only show failed nodes")
+	preflightNodesCmd.Flags().Int64Var(&preflightWekaDirFailGB, "weka-dir-min-fail", 100, "Minimum GB for weka directory (FAIL if below, default 100)")
+	preflightNodesCmd.Flags().Int64Var(&preflightWekaDirWarnGB, "weka-dir-min-warn", 300, "Minimum GB for weka directory (WARN if below, default 300)")
 	preflightNodesCmd.SilenceUsage = true
-	// preflightNodesCmd.SilenceErrors = true // only if you print errors yourself
 }
 
 type checkStatus string
@@ -54,6 +62,21 @@ type nodeCheck struct {
 func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
+	// Setup signal handling for graceful shutdown (cleanup pods on Ctrl-C)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Handle signals in background
+	go func() {
+		sig := <-sigChan
+		fmt.Printf("\n\nReceived signal %v, cleaning up pods...\n", sig)
+		cancel() // Cancel context to stop operations
+		// Don't exit here - let defer cleanup run
+	}()
+
 	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		clientcmd.NewDefaultClientConfigLoadingRules(),
 		&clientcmd.ConfigOverrides{},
@@ -64,12 +87,22 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Use standard kubernetes.Clientset for host checks via pods
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return err
 	}
 
-	nodes, err := resolveNodes(ctx, clientset, args, preflightNodeSelector)
+	// Use cached client for node reads
+	cachedClient, err := newWekaCRClient(ctx, restCfg)
+	if err != nil {
+		return err
+	}
+	defer cachedClient.Stop()
+
+	crClient := cachedClient.Client
+
+	nodes, err := resolveNodes(ctx, crClient, args, preflightNodeSelector)
 	if err != nil {
 		return err
 	}
@@ -77,16 +110,70 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	fmt.Println("Performing preflight verification for Kubernetes nodes to host WEKA")
 	printCheckResult("Checking total number of eligible nodes...", true, fmt.Sprintf("%d", len(nodes)))
 
-	// Run host checks via per-node pods (PCI, /etc/os-release, filesystem, processes, systemd units)
-	hostFacts, scanErrs := scanHostChecksByPod(ctx, clientset, nodes)
-	if len(scanErrs) > 0 && !preflightSummaryOnly {
-		fmt.Printf("Note: host checks encountered %d issues; affected nodes may be WARN/FAIL depending on the check\n\n", len(scanErrs))
+	// FIRST: Fetch pod statistics BEFORE creating host-check pods
+	// (so host-check pods don't pollute the pod resource statistics)
+	fmt.Println("Fetching pod resource usage...")
+	var podsByNode map[string][]corev1.Pod
+	{
+		var allPods corev1.PodList
+		if err := crClient.List(ctx, &allPods); err != nil {
+			fmt.Printf("Warning: failed to list pods: %v\n", err)
+			podsByNode = make(map[string][]corev1.Pod)
+		} else {
+			// Build a map of nodeName -> pods on that node
+			podsByNode = make(map[string][]corev1.Pod)
+			for i := range allPods.Items {
+				pod := &allPods.Items[i]
+				if pod.Spec.NodeName == "" {
+					continue
+				}
+				podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], *pod)
+			}
+			fmt.Printf("Fetched %d pods across %d nodes\n", len(allPods.Items), len(podsByNode))
+		}
 	}
 
-	if !preflightSummaryOnly {
-		fmt.Println("Validating node eligibility:")
+	// SECOND: Run host checks via per-node pods (PCI, /etc/os-release, filesystem, processes, systemd units)
+	resultChan, cleanupWg := scanHostChecksByPod(ctx, clientset, nodes)
+
+	// Ensure cleanup completes before exiting (even on SIGTERM/Ctrl+C)
+	defer func() {
+		fmt.Println("Waiting for pod cleanup to complete...")
+		cleanupWg.Wait()
+		fmt.Println("Cleanup complete.")
+	}()
+
+	fmt.Println("Checking host checks...")
+
+	// Collect results as they stream in - just store them, don't process yet
+	hostFacts := make(map[string]HostChecksResult, len(nodes))
+	var scanErrs []hostScanError
+
+	// Build a map for quick node lookup
+	nodeMap := make(map[string]*corev1.Node, len(nodes))
+	for i := range nodes {
+		nodeMap[nodes[i].Name] = &nodes[i]
 	}
 
+	fmt.Println("Collecting results...")
+	receivedCount := 0
+	for nodeResult := range resultChan {
+		receivedCount++
+		hostFacts[nodeResult.nodeName] = nodeResult.result
+		if nodeResult.err != nil {
+			scanErrs = append(scanErrs, hostScanError{node: nodeResult.nodeName, err: nodeResult.err})
+		}
+		if receivedCount%10 == 0 || receivedCount == len(nodes) {
+			fmt.Printf("Received %d/%d results...\n", receivedCount, len(nodes))
+		}
+	}
+	fmt.Printf("All %d results collected!\n", receivedCount)
+
+	if len(scanErrs) > 0 {
+		fmt.Printf("\nNote: host checks encountered %d issues\n", len(scanErrs))
+	}
+
+	// Process all nodes while pod fetch happens in background
 	checked := 0
 	passCnt := 0
 	warnCnt := 0
@@ -98,17 +185,24 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	var skippedNodes []string
 	kernels := make(map[string]struct{})
 	oses := make(map[string]struct{})
-	var nodeStatus checkStatus
 
+	// Process all nodes (podsByNode already available from upfront fetch)
 	for i := range nodes {
-		n := nodes[i]
+		n := &nodes[i]
+		hf, ok := hostFacts[n.Name]
+		if !ok {
+			continue // node result wasn't received
+		}
+
 		checked++
 		var checks []nodeCheck
-		if !isNodeReady(&n) {
+		var nodeStatus checkStatus
+
+		if !isNodeReady(n) {
 			nodeStatus = statusSkipped
 		} else {
-			hf := hostFacts[n.Name] // zero value if missing (e.g. scan failed hard)
-			checks, err = buildNodeChecks(ctx, clientset, &n, hf)
+			var err error
+			checks, err = buildNodeChecks(ctx, n, hf, podsByNode[n.Name])
 			if err != nil {
 				checks = append(checks, nodeCheck{
 					title:  "node_checks",
@@ -130,24 +224,32 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		case statusSkipped:
 			skippedCnt++
 			skippedNodes = append(skippedNodes, n.Name)
-			printNodeHeader(n.Name, nodeStatus)
-			continue
 		default:
 			failCnt++
 			failedNodes = append(failedNodes, n.Name)
 		}
 
-		if !preflightSummaryOnly {
-			printNodeHeader(n.Name, nodeStatus)
-			for _, c := range checks {
+		// Skip printing completely PASS nodes if --failed-only is set
+		if preflightFailedOnly && nodeStatus == statusPass {
+			continue
+		}
+
+		printNodeHeader(n.Name, nodeStatus)
+		// Only print non-PASS checks
+		for _, c := range checks {
+			if !preflightSummaryOnly || c.status != statusPass {
 				printNodeSubcheck(c)
 			}
-			fmt.Println()
 		}
+		fmt.Println()
 
 		if preflightFailFast && nodeStatus == statusFail {
 			break
 		}
+	}
+
+	if len(scanErrs) > 0 && !preflightSummaryOnly {
+		fmt.Printf("\nNote: host checks encountered %d issues\n", len(scanErrs))
 	}
 
 	// Summary
@@ -195,9 +297,9 @@ func mapKeysToList(m map[string]struct{}) []string {
 
 func buildNodeChecks(
 	ctx context.Context,
-	clientset *kubernetes.Clientset,
 	n *corev1.Node,
 	hf HostChecksResult,
+	podsOnNode []corev1.Pod,
 ) ([]nodeCheck, error) {
 	var out []nodeCheck
 
@@ -232,10 +334,8 @@ func buildNodeChecks(
 	})
 
 	// 3/4) free resources (allocatable - sum(pod requests))
-	memFree, hpFree, warn, err := computeFreeFromRequests(ctx, clientset, n.Name, hpAlloc)
-	if err != nil {
-		return out, err
-	}
+	// Use pre-fetched pods instead of making API calls
+	memFree, hpFree, warn := computeFreeFromPods(n, hpAlloc, podsOnNode)
 
 	memOK := memFree.Cmp(minFreeMem) >= 0
 	out = append(out, nodeCheck{
@@ -255,10 +355,34 @@ func buildNodeChecks(
 
 	// 5) Weka directory exists and has >= 300GB available
 	// For RHCOS: /root/k8s-weka ; otherwise: /opt/k8s-weka (handled by pod script)
+	// FAIL: < preflightWekaDirFailGB, WARN: < preflightWekaDirWarnGB, PASS: >= preflightWekaDirWarnGB
+	minFailWeka := preflightWekaDirFailGB * 1000 * 1000 * 1000 // Convert GB to bytes
+	minWarnWeka := preflightWekaDirWarnGB * 1000 * 1000 * 1000 // Convert GB to bytes
+
+	wakaDirStatus := statusPass
+	wakaDirDetail := ""
+
+	if hf.WekaDirDetail == "directory does not exist" {
+		wakaDirStatus = statusFail
+		wakaDirDetail = "directory does not exist"
+	} else if hf.WekaDirAvailBytes < minFailWeka {
+		wakaDirStatus = statusFail
+		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
+		wakaDirDetail = fmt.Sprintf("%.1fGB available (min: %dGB)", availGB, preflightWekaDirFailGB)
+	} else if hf.WekaDirAvailBytes < minWarnWeka {
+		wakaDirStatus = statusWarn
+		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
+		wakaDirDetail = fmt.Sprintf("%.1fGB available (min: %dGB)", availGB, preflightWekaDirWarnGB)
+	} else {
+		wakaDirStatus = statusPass
+		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
+		wakaDirDetail = fmt.Sprintf("%.1fGB available", availGB)
+	}
+
 	out = append(out, nodeCheck{
 		title:  "weka_dir",
-		status: passOrFail(hf.WekaDirOK),
-		detail: fmt.Sprintf("%s: %s", nonEmpty(hf.WekaDirPath, "(unknown)"), nonEmpty(hf.WekaDirDetail, "no details")),
+		status: wakaDirStatus,
+		detail: fmt.Sprintf("%s: %s", nonEmpty(hf.WekaDirPath, "(unknown)"), wakaDirDetail),
 	})
 
 	// 6) XFS installed (mkfs.xfs exists on host)

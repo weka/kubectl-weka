@@ -35,13 +35,23 @@ func runPreflightK8sCluster(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Use standard kubernetes.Clientset for discovery and permission checks
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return err
 	}
 
-	// Resolve nodes only once (used for node-scoped cluster checks: cpu policy, CNI health)
-	nodes, err := resolveNodes(ctx, clientset, args, preflightNodeSelector)
+	// Use cached client for node reads (will be called multiple times)
+	cachedClient, err := newWekaCRClient(ctx, restCfg)
+	if err != nil {
+		return err
+	}
+	defer cachedClient.Stop()
+
+	crClient := cachedClient.Client
+
+	// Resolve nodes once using cached client (used for node-scoped cluster checks: cpu policy, CNI health)
+	nodes, err := resolveNodes(ctx, crClient, args, preflightNodeSelector)
 	if err != nil {
 		return err
 	}
