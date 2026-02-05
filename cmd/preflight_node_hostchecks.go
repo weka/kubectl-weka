@@ -72,6 +72,7 @@ func makeHostChecksPod(ns, nodeName, podName, labelKey, labelVal string) *corev1
 
 	script := `
 set -eu
+sleep 10
 
 json_escape() { echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
@@ -352,6 +353,11 @@ printf '}\n'
 			HostNetwork:   true,
 			DNSPolicy:     corev1.DNSClusterFirstWithHostNet,
 			RestartPolicy: corev1.RestartPolicyNever,
+			Tolerations: []corev1.Toleration{
+				{
+					Operator: corev1.TolerationOpExists, // Tolerate all taints
+				},
+			},
 			Containers: []corev1.Container{
 				{
 					Name:    "hostchecks",
