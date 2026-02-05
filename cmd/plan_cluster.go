@@ -148,7 +148,7 @@ func validateAndPlan(cluster *wekaapi.WekaCluster, nodes []corev1.Node) error {
 	if config.ComputeContainers != nil && *config.ComputeContainers > 0 {
 		req := calculateComputeRequirements(
 			config.ComputeCores,
-			config.ComputeExtraCores,
+			0,
 			config.ComputeHugepages,
 			additionalMemory.Compute,
 			usesHT,
@@ -168,7 +168,7 @@ func validateAndPlan(cluster *wekaapi.WekaCluster, nodes []corev1.Node) error {
 
 		req := calculateDriveRequirements(
 			config.DriveCores,
-			config.DriveExtraCores,
+			0,
 			config.NumDrives,
 			config.DriveHugepages,
 			additionalMemory.Drive,
