@@ -28,4 +28,5 @@ func init() {
 	rootCmd.AddCommand(getCmd)
 	rootCmd.AddCommand(preflightCmd)
 	rootCmd.AddCommand(logsCmd)
+	rootCmd.AddCommand(planCmd)
 }
