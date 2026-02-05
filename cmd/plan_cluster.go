@@ -933,13 +933,24 @@ func printNodeResources(ctx context.Context, clientset *kubernetes.Clientset, no
 	nodeResourcesTable.SetStyle(table.StyleLight)
 	nodeResourcesTable.Render()
 
-	// Print resource allocation visualization for each node
-	fmt.Println("\n=== Resource Allocation Visualization ===")
-	fmt.Println("Format: [Light Red=USED | Light Purple=COMPUTE+DRIVE | Light Cyan=S3+ENVOY | Light Yellow=NFS | Light Green=FREE]\n")
+	// Print resource allocation visualization table for each node
+	fmt.Println("\n=== Resource Allocation Visualization ===\n")
 
 	// Build a map of Weka resource requirements per resource type
 	backendReq := findNodeRequirementByPurpose(nodeReqs, "Backend (Compute+Drive)")
 	frontendReq := findNodeRequirementByPurpose(nodeReqs, "Frontend (S3/NFS)")
+
+	// Create visualization table
+	vizTable := table.NewWriter()
+	vizTable.SetOutputMirror(os.Stdout)
+	vizTable.SetStyle(table.StyleLight)
+
+	vizTable.AppendHeader(table.Row{
+		"Node",
+		"CPU",
+		"Memory",
+		"Hugepages",
+	})
 
 	for nodeName, node := range nodeMap {
 		if _, exists := hostChecksMap[nodeName]; !exists {
@@ -992,11 +1003,7 @@ func printNodeResources(ctx context.Context, clientset *kubernetes.Clientset, no
 			}
 		}
 
-		// Print node name
-		fmt.Printf("%s (HT: %s)\n", nodeName, map[bool]string{true: "ON", false: "OFF"}[hc.HTEnabled])
-
 		// CPU visualization
-		// CPU cores in Kubernetes are measured in millicores (1 core = 1000m)
 		cpuUsedPct := getPercentage(cpuReq, cpuAlloc)
 		cpuWekaBEPct := getPercentage(*resource.NewMilliQuantity(int64(backendCoresPerNode*1000), resource.DecimalSI), cpuAlloc)
 		cpuWekaFEPct := getPercentage(*resource.NewMilliQuantity(int64(frontendCoresPerNode*1000), resource.DecimalSI), cpuAlloc)
@@ -1004,14 +1011,13 @@ func printNodeResources(ctx context.Context, clientset *kubernetes.Clientset, no
 		if cpuFreePct < 0 {
 			cpuFreePct = 0
 		}
-		fmt.Printf("  CPU:       %s\n", drawBarWithWeka(cpuUsedPct, cpuWekaBEPct, cpuWekaFEPct, 0, cpuFreePct))
+		cpuBar := drawBarWithWeka(cpuUsedPct, cpuWekaBEPct, cpuWekaFEPct, 0, cpuFreePct)
 		cpuFree := subtractQuantity(cpuAlloc, cpuReq)
-		fmt.Printf("             (%s allocatable, %s used, %s free for Weka)\n",
+		cpuDetail := fmt.Sprintf("%s allocatable\n%s used, %s free",
 			(&cpuAlloc).String(), (&cpuReq).String(),
 			(&cpuFree).String())
 
 		// Memory visualization
-		// Memory is stored in MiB, need to convert to bytes (1 MiB = 1024*1024 bytes)
 		memUsedPct := getPercentage(memReq, memAlloc)
 		memWekaBEBytes := backendReq.MemoryPerNode * 1024 * 1024
 		memWekaFEBytes := frontendReq.MemoryPerNode * 1024 * 1024
@@ -1021,14 +1027,13 @@ func printNodeResources(ctx context.Context, clientset *kubernetes.Clientset, no
 		if memFreePct < 0 {
 			memFreePct = 0
 		}
-		fmt.Printf("  Memory:    %s\n", drawBarWithWeka(memUsedPct, memWekaBEPct, memWekaFEPct, 0, memFreePct))
+		memBar := drawBarWithWeka(memUsedPct, memWekaBEPct, memWekaFEPct, 0, memFreePct)
 		memFree := subtractQuantity(memAlloc, memReq)
-		fmt.Printf("             (%s allocatable, %s used, %s free for Weka)\n",
-			(&memAlloc).String(), (&memReq).String(),
-			(&memFree).String())
+		memDetail := fmt.Sprintf("%s allocatable\n%s used, %s free",
+			formatAsGi(&memAlloc), formatAsGi(&memReq),
+			formatAsGi(&memFree))
 
 		// Hugepages visualization
-		// Hugepages are stored in MiB, need to convert to bytes (1 MiB = 1024*1024 bytes)
 		hpUsedPct := getPercentage(hpReq, hpAlloc)
 		hpWekaBEBytes := backendReq.HugepagesPerNode * 1024 * 1024
 		hpWekaFEBytes := frontendReq.HugepagesPerNode * 1024 * 1024
@@ -1038,14 +1043,29 @@ func printNodeResources(ctx context.Context, clientset *kubernetes.Clientset, no
 		if hpFreePct < 0 {
 			hpFreePct = 0
 		}
-		fmt.Printf("  Hugepages: %s\n", drawBarWithWeka(hpUsedPct, hpWekaBEPct, hpWekaFEPct, 0, hpFreePct))
+		hpBar := drawBarWithWeka(hpUsedPct, hpWekaBEPct, hpWekaFEPct, 0, hpFreePct)
 		hpFree := subtractQuantity(hpAlloc, hpReq)
-		fmt.Printf("             (%s allocatable, %s used, %s free for Weka)\n",
-			(&hpAlloc).String(), (&hpReq).String(),
-			(&hpFree).String())
+		hpDetail := fmt.Sprintf("%s allocatable\n%s used, %s free",
+			formatAsGi(&hpAlloc), formatAsGi(&hpReq),
+			formatAsGi(&hpFree))
 
-		fmt.Println()
+		// Add row to table
+		nodeLabel := nodeName
+		if hc.HTEnabled {
+			nodeLabel += " (HT:ON)"
+		} else {
+			nodeLabel += " (HT:OFF)"
+		}
+
+		vizTable.AppendRow(table.Row{
+			nodeLabel,
+			cpuBar + "\n" + cpuDetail,
+			memBar + "\n" + memDetail,
+			hpBar + "\n" + hpDetail,
+		})
 	}
+
+	vizTable.Render()
 
 	return hostChecksMap, nil
 }
@@ -1070,6 +1090,15 @@ func subtractQuantity(total, used resource.Quantity) resource.Quantity {
 		return resource.MustParse("0")
 	}
 	return result
+}
+
+// formatAsGi formats a Quantity as Gi with 1 decimal place
+func formatAsGi(q *resource.Quantity) string {
+	// Get value in bytes
+	bytes := q.Value()
+	// Convert to Gi (1 Gi = 1024^3 bytes)
+	gi := float64(bytes) / (1024 * 1024 * 1024)
+	return fmt.Sprintf("%.1fGi", gi)
 }
 
 // drawBarWithWeka creates a visual bar showing [USED% | WEKA_BE% | WEKA_FE% | WEKA_NFS% | FREE%]
@@ -1158,14 +1187,15 @@ func drawBarWithWeka(usedPct, bekaPct, fePct, nfsPct, freePct int) string {
 
 	bar += "]"
 
-	// Color the percentages too
-	return fmt.Sprintf("%s %s%d%%%s|%s%d%%%s|%s%d%%%s|%s%d%%%s|%s%d%%%s",
-		bar,
+	// Return bar on one line and percentages on next line
+	percentLine := fmt.Sprintf("%s%d%%%s|%s%d%%%s|%s%d%%%s|%s%d%%%s|%s%d%%%s",
 		colorUsed, usedPct, colorReset,
 		colorWekaCompute, bekaPct, colorReset,
 		colorWekaFrontend, fePct, colorReset,
 		colorWekaNFS, nfsPct, colorReset,
 		colorFree, freePct, colorReset)
+
+	return bar + "\n" + percentLine
 }
 
 // findNodeRequirementByPurpose finds a NodeRequirement by its purpose string
