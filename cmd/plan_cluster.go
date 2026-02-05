@@ -28,21 +28,22 @@ var planClusterCmd = &cobra.Command{
 
 func init() {
 	planCmd.AddCommand(planClusterCmd)
-	planClusterCmd.Flags().BoolVar(&flagNoHeaders, "no-headers", false, "Don't print headers")
 }
 
 type ContainerRequirements struct {
 	Type      string
 	Count     int
 	Hugepages int64
-	Cores     int
+	Cores     int // Cores with HT
+	CoresNoHT int // Cores without HT
 	Memory    int64
 }
 
 type NodeRequirements struct {
 	Purpose          string
 	MinNodes         int
-	CoresPerNode     int
+	CoresPerNode     int // Cores per node with HT
+	CoresPerNodeNoHT int // Cores per node without HT
 	HugepagesPerNode int64
 	MemoryPerNode    int64
 	Description      string
@@ -156,6 +157,18 @@ func validateAndPlan(cluster *wekaapi.WekaCluster, nodes []corev1.Node) error {
 		)
 		req.Type = "Compute"
 		req.Count = *config.ComputeContainers
+
+		// Always calculate non-HT variant for comparison
+		reqNoHT := calculateComputeRequirements(
+			config.ComputeCores,
+			0,
+			config.ComputeHugepages,
+			additionalMemory.Compute,
+			false, // HT disabled
+			cluster.Spec.RoleCoreIds.Compute,
+		)
+		req.CoresNoHT = reqNoHT.Cores
+
 		containers = append(containers, req)
 	}
 
@@ -177,6 +190,19 @@ func validateAndPlan(cluster *wekaapi.WekaCluster, nodes []corev1.Node) error {
 		)
 		req.Type = "Drive"
 		req.Count = *config.DriveContainers
+
+		// Always calculate non-HT variant for comparison
+		reqNoHT := calculateDriveRequirements(
+			config.DriveCores,
+			0,
+			config.NumDrives,
+			config.DriveHugepages,
+			additionalMemory.Drive,
+			false, // HT disabled
+			cluster.Spec.RoleCoreIds.Drive,
+		)
+		req.CoresNoHT = reqNoHT.Cores
+
 		containers = append(containers, req)
 	}
 
@@ -191,6 +217,18 @@ func validateAndPlan(cluster *wekaapi.WekaCluster, nodes []corev1.Node) error {
 		)
 		req.Type = "S3"
 		req.Count = config.S3Containers
+
+		// Always calculate non-HT variant for comparison
+		reqNoHT := calculateS3Requirements(
+			config.S3Cores,
+			config.S3ExtraCores,
+			config.S3FrontendHugepages,
+			additionalMemory.S3,
+			false, // HT disabled
+			cluster.Spec.RoleCoreIds.S3,
+		)
+		req.CoresNoHT = reqNoHT.Cores
+
 		containers = append(containers, req)
 
 		envoyReq := calculateEnvoyRequirements(
@@ -212,11 +250,24 @@ func validateAndPlan(cluster *wekaapi.WekaCluster, nodes []corev1.Node) error {
 		)
 		req.Type = "NFS"
 		req.Count = config.NfsContainers
+
+		// Always calculate non-HT variant for comparison
+		reqNoHT := calculateNfsRequirements(
+			config.NfsCores,
+			config.NfsExtraCores,
+			config.NfsFrontendHugepages,
+			additionalMemory.Nfs,
+			false, // HT disabled
+			cluster.Spec.RoleCoreIds.Nfs,
+		)
+		req.CoresNoHT = reqNoHT.Cores
+
 		containers = append(containers, req)
 	}
 
 	printContainerRequirements(containers)
 	nodeReqs := calculateNodeRequirements(config, containers)
+
 	printNodeRequirements(nodeReqs)
 
 	return nil
@@ -346,28 +397,29 @@ func calculateEnvoyRequirements(additionalMem int) ContainerRequirements {
 	req := ContainerRequirements{}
 	req.Hugepages = 0
 	req.Cores = 1
+	req.CoresNoHT = 1
 	req.Memory = int64(1024 + additionalMem)
 	return req
 }
 
 func printContainerRequirements(containers []ContainerRequirements) {
-	if flagNoHeaders {
-		for _, c := range containers {
-			fmt.Printf("%s\t%d\t%d\t%d MiB\t%d MiB\n",
-				c.Type, c.Count, c.Cores, c.Hugepages, c.Memory)
-		}
-		return
-	}
-
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{"Container Type", "Count", "Cores/Container", "Hugepages/Container", "Memory/Container"})
+	t.AppendHeader(table.Row{
+		"Container Type",
+		"Count",
+		"Cores (HT On)",
+		"Cores (HT Off)",
+		"Hugepages",
+		"Memory",
+	})
 
 	for _, c := range containers {
 		t.AppendRow(table.Row{
 			c.Type,
 			c.Count,
 			c.Cores,
+			c.CoresNoHT,
 			fmt.Sprintf("%d MiB", c.Hugepages),
 			fmt.Sprintf("%d MiB", c.Memory),
 		})
@@ -400,21 +452,25 @@ func calculateNodeRequirements(_ *wekaapi.WekaConfig, containers []ContainerRequ
 		backendNodes := maxInt(computeCount, driveCount)
 
 		totalCores := 0
+		totalCoresNoHT := 0
 		totalHugepages := int64(0)
 		totalMemory := int64(0)
 
 		if computeCount > 0 {
 			totalCores += computeReq.Cores
+			totalCoresNoHT += computeReq.CoresNoHT
 			totalHugepages += computeReq.Hugepages
 			totalMemory += computeReq.Memory
 		}
 		if driveCount > 0 {
 			totalCores += driveReq.Cores
+			totalCoresNoHT += driveReq.CoresNoHT
 			totalHugepages += driveReq.Hugepages
 			totalMemory += driveReq.Memory
 		}
 
 		totalCores = int(float64(totalCores) * 1.1)
+		totalCoresNoHT = int(float64(totalCoresNoHT) * 1.1)
 		totalHugepages = int64(float64(totalHugepages) * 1.1)
 		totalMemory = int64(float64(totalMemory) * 1.1)
 
@@ -422,6 +478,7 @@ func calculateNodeRequirements(_ *wekaapi.WekaConfig, containers []ContainerRequ
 			Purpose:          "Backend (Compute+Drive)",
 			MinNodes:         backendNodes,
 			CoresPerNode:     totalCores,
+			CoresPerNodeNoHT: totalCoresNoHT,
 			HugepagesPerNode: totalHugepages,
 			MemoryPerNode:    totalMemory,
 			Description:      fmt.Sprintf("To accommodate %d compute and %d drive containers", computeCount, driveCount),
@@ -449,21 +506,25 @@ func calculateNodeRequirements(_ *wekaapi.WekaConfig, containers []ContainerRequ
 		frontendNodes := maxInt(s3Count, nfsCount)
 
 		totalCores := 0
+		totalCoresNoHT := 0
 		totalHugepages := int64(0)
 		totalMemory := int64(0)
 
 		if s3Count > 0 {
 			totalCores += s3Req.Cores + envoyReq.Cores
+			totalCoresNoHT += s3Req.CoresNoHT + envoyReq.CoresNoHT
 			totalHugepages += s3Req.Hugepages + envoyReq.Hugepages
 			totalMemory += s3Req.Memory + envoyReq.Memory
 		}
 		if nfsCount > 0 {
 			totalCores += nfsReq.Cores
+			totalCoresNoHT += nfsReq.CoresNoHT
 			totalHugepages += nfsReq.Hugepages
 			totalMemory += nfsReq.Memory
 		}
 
 		totalCores = int(float64(totalCores) * 1.1)
+		totalCoresNoHT = int(float64(totalCoresNoHT) * 1.1)
 		totalHugepages = int64(float64(totalHugepages) * 1.1)
 		totalMemory = int64(float64(totalMemory) * 1.1)
 
@@ -480,6 +541,7 @@ func calculateNodeRequirements(_ *wekaapi.WekaConfig, containers []ContainerRequ
 			Purpose:          "Frontend (S3/NFS)",
 			MinNodes:         frontendNodes,
 			CoresPerNode:     totalCores,
+			CoresPerNodeNoHT: totalCoresNoHT,
 			HugepagesPerNode: totalHugepages,
 			MemoryPerNode:    totalMemory,
 			Description:      description,
@@ -490,20 +552,17 @@ func calculateNodeRequirements(_ *wekaapi.WekaConfig, containers []ContainerRequ
 }
 
 func printNodeRequirements(nodeReqs []NodeRequirements) {
-	if flagNoHeaders {
-		for _, nr := range nodeReqs {
-			fmt.Printf("%s\t%d\t%d\t%d MiB\t%d MiB\t%s\n",
-				nr.Purpose, nr.MinNodes, nr.CoresPerNode, nr.HugepagesPerNode, nr.MemoryPerNode, nr.Description)
-		}
-		if len(nodeReqs) > 0 {
-			fmt.Printf("Recommendation\t-\t-\t-\t-\tAt least 1 more node of required capacity for fault tolerance\n")
-		}
-		return
-	}
-
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{"Purpose", "Min Nodes", "Cores/Node", "Hugepages/Node", "Memory/Node", "Description"})
+	t.AppendHeader(table.Row{
+		"Purpose",
+		"Min Nodes",
+		"Cores/Node (HT On)",
+		"Cores/Node (HT Off)",
+		"Hugepages/Node",
+		"Memory/Node",
+		"Description",
+	})
 
 	sort.Slice(nodeReqs, func(i, j int) bool {
 		return nodeReqs[i].MinNodes > nodeReqs[j].MinNodes
@@ -514,6 +573,7 @@ func printNodeRequirements(nodeReqs []NodeRequirements) {
 			nr.Purpose,
 			nr.MinNodes,
 			nr.CoresPerNode,
+			nr.CoresPerNodeNoHT,
 			fmt.Sprintf("%d MiB", nr.HugepagesPerNode),
 			fmt.Sprintf("%d MiB", nr.MemoryPerNode),
 			nr.Description,
