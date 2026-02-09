@@ -518,7 +518,7 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 
 	// Start background cleanup goroutine that processes pods as they complete
 	go func() {
-		eg, _ := errgroupWithLimit(context.Background(), 5) // conservative to avoid throttling
+		eg, _ := errgroupWithLimit(context.Background(), 10)
 		for pr := range cleanupChan {
 			pr := pr
 			cleanupWg.Add(1)
