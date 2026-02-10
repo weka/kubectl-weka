@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"k8s.io/client-go/tools/clientcmd"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
@@ -34,25 +33,7 @@ func init() {
 func runGetPolicies(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		loadingRules,
-		&clientcmd.ConfigOverrides{},
-	)
-
-	restCfg, err := kubeCfg.ClientConfig()
-	if err != nil {
-		return err
-	}
-
-	// Create typed CR client with caching
-	cachedClient, err := newWekaCRClient(ctx, restCfg)
-	if err != nil {
-		return err
-	}
-	defer cachedClient.Stop()
-
-	crClient := cachedClient.Client
+	crClient := KubeClients.CRClient
 
 	includeNamespaceColumn := false
 
@@ -60,20 +41,18 @@ func runGetPolicies(cmd *cobra.Command, args []string) error {
 	var list wekaapi.WekaPolicyList
 	listOpts := []crclient.ListOption{}
 
+	var err error
 	if flagAllNamespaces {
 		includeNamespaceColumn = true
-		if err := crClient.List(ctx, &list); err != nil {
+		if err = crClient.List(ctx, &list); err != nil {
 			return err
 		}
 	} else {
 		ns := flagNamespace
 		if ns == "" {
-			ns, _, err = kubeCfg.Namespace()
+			ns, err = GetKubeNamespace()
 			if err != nil {
 				return err
-			}
-			if ns == "" {
-				ns = "default"
 			}
 		}
 		listOpts = append(listOpts, crclient.InNamespace(ns))

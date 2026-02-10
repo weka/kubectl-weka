@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
@@ -33,23 +32,7 @@ func init() {
 func runGetNodes(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	configOverrides := &clientcmd.ConfigOverrides{}
-	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
-
-	restConfig, err := kubeConfig.ClientConfig()
-	if err != nil {
-		return err
-	}
-
-	// Use cached client instead of raw kubernetes.Clientset
-	cachedClient, err := newWekaCRClient(ctx, restConfig)
-	if err != nil {
-		return err
-	}
-	defer cachedClient.Stop()
-
-	crClient := cachedClient.Client
+	crClient := KubeClients.CRClient
 
 	// List nodes using the cached client
 	var nodeList corev1.NodeList
@@ -153,7 +136,7 @@ func printNodeRow(w table.Writer, n *corev1.Node, hugepageAllocations map[string
 	ramFreeStr := formatQuantityToGB(ramFree)
 
 	if !noColor {
-		parse := resource.MustParse("512Gi")
+		parse := resource.MustParse("1Gi")
 		if hpFree.Value() < parse.Value() {
 			nameStr = yellow(nameStr)
 			hpFreeStr = yellow(hpFreeStr)

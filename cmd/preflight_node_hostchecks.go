@@ -13,7 +13,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
-	"k8s.io/client-go/kubernetes"
 )
 
 type MellanoxIface struct {
@@ -496,7 +495,7 @@ type nodeHostResult struct {
 	err      error
 }
 
-func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node) (<-chan nodeHostResult, *sync.WaitGroup) {
+func scanHostChecksByPod(ctx context.Context, clients *K8sClients, nodes []corev1.Node) (<-chan nodeHostResult, *sync.WaitGroup) {
 	resultChan := make(chan nodeHostResult, len(nodes))
 
 	ns := "default"
@@ -524,7 +523,7 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 			cleanupWg.Add(1)
 			eg.Go(func() error {
 				defer cleanupWg.Done()
-				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), pr.podName, metav1.DeleteOptions{})
+				_ = clients.Clientset.CoreV1().Pods(ns).Delete(context.Background(), pr.podName, metav1.DeleteOptions{})
 				return nil
 			})
 		}
@@ -564,7 +563,7 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 			eg.Go(func() error {
 				p := makeHostChecksPod(ns, nodeName, podName, labelKey, labelVal)
 
-				_, err := clientset.CoreV1().Pods(ns).Create(egCtx, p, metav1.CreateOptions{})
+				_, err := KubeClients.Clientset.CoreV1().Pods(ns).Create(egCtx, p, metav1.CreateOptions{})
 				if err != nil {
 					resultChan <- nodeHostResult{
 						nodeName: nodeName,
@@ -598,7 +597,7 @@ func scanHostChecksByPod(ctx context.Context, clientset *kubernetes.Clientset, n
 		for _, pr := range pods {
 			pr := pr
 			eg2.Go(func() error {
-				res, err := waitHostChecksResult(egCtx2, clientset, ns, pr.podName, pr.node)
+				res, err := waitHostChecksResult(egCtx2, ns, pr.podName, pr.node)
 
 				// Immediately queue pod for deletion (happens in background)
 				cleanupChan <- pr
@@ -659,13 +658,13 @@ func errgroupWithLimit(ctx context.Context, limit int) (*errgroup.Group, context
 	eg.SetLimit(limit)
 	return eg, egCtx
 }
-func waitHostChecksResult(ctx context.Context, clientset *kubernetes.Clientset, ns, podName, nodeName string) (HostChecksResult, error) {
+func waitHostChecksResult(ctx context.Context, ns, podName, nodeName string) (HostChecksResult, error) {
 	startDeadline := time.Now().Add(30 * time.Second) // must leave Pending by then
 	doneDeadline := time.Now().Add(120 * time.Second) // overall completion timeout
 
 	// Start with longer sleep to reduce API calls
 	sleepInterval := time.Second
-
+	clientset := KubeClients.Clientset
 	for {
 		if time.Now().After(doneDeadline) {
 			_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})

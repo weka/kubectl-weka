@@ -14,10 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	"os"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sort"
 	"strings"
 )
@@ -123,15 +120,14 @@ func runPlanCluster(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	nodes, clientset, err := getClusterNodesForPlan(ctx)
+	nodes, err := GetClusterNodes(ctx)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Warning: Could not access cluster nodes: %v\n", err)
 		_, _ = fmt.Fprintf(os.Stderr, "Continuing with planning without cluster validation...\n\n")
 		nodes = nil
-		clientset = nil
 	}
 
-	if err := validateAndPlan(ctx, clientset, cluster, nodes); err != nil {
+	if err := validateAndPlan(ctx, KubeClients, cluster, nodes); err != nil {
 		return err
 	}
 
@@ -166,46 +162,6 @@ func parseWekaClusterFile(filePath string) (*wekaapi.WekaCluster, error) {
 	return cluster, nil
 }
 
-func getKubeConfigForPlan() (*rest.Config, error) {
-	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(),
-		&clientcmd.ConfigOverrides{},
-	)
-
-	restCfg, err := kubeCfg.ClientConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	return restCfg, nil
-}
-
-func getClusterNodesForPlan(ctx context.Context) ([]corev1.Node, *kubernetes.Clientset, error) {
-	cfg, err := getKubeConfigForPlan()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Get the standard client
-	k8sClient, err := client.New(cfg, client.Options{})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Also get the kubernetes clientset for host check pods
-	clientset, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	nodeList := &corev1.NodeList{}
-	if err := k8sClient.List(ctx, nodeList); err != nil {
-		return nil, nil, err
-	}
-
-	return nodeList.Items, clientset, nil
-}
-
 // sanityCheckClusterDefinition performs basic validation of the cluster definition
 // before any planning calculations or cluster connections are made
 func sanityCheckClusterDefinition(cluster *wekaapi.WekaCluster) error {
@@ -237,7 +193,7 @@ func sanityCheckClusterDefinition(cluster *wekaapi.WekaCluster) error {
 		return err
 	}
 
-	fmt.Println("✅ Cluster definition validation passed\n")
+	fmt.Println("✅ Cluster definition validation passed")
 	return nil
 }
 
@@ -296,7 +252,7 @@ func sanityCheckDriverDistService(url string) error {
 
 	// Get kubernetes client to check if service exists
 	ctx := context.Background()
-	cfg, err := getKubeConfigForPlan()
+	cfg, err := GetKubeConfig()
 	if err != nil {
 		// Can't connect to cluster yet - skip service validation
 		fmt.Printf("⚠️  WARNING: Cannot connect to cluster to verify service existence. Will validate later.\n")
@@ -356,7 +312,7 @@ func parseClusterLocalService(url string) (string, string, error) {
 	return serviceName, namespace, nil
 }
 
-func validateAndPlan(ctx context.Context, clientset *kubernetes.Clientset, cluster *wekaapi.WekaCluster, nodes []corev1.Node) error {
+func validateAndPlan(ctx context.Context, clients *K8sClients, cluster *wekaapi.WekaCluster, nodes []corev1.Node) error {
 	if cluster.Spec.Dynamic == nil {
 		return fmt.Errorf("only dynamic template is supported")
 	}
@@ -495,7 +451,7 @@ func validateAndPlan(ctx context.Context, clientset *kubernetes.Clientset, clust
 
 	// Validate cluster has sufficient resources
 	if nodes != nil {
-		if err := validateClusterResources(ctx, clientset, cluster, nodes, nodeReqs, containers); err != nil {
+		if err := validateClusterResources(ctx, clients, cluster, nodes, nodeReqs, containers); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "\n❌ Cluster Validation Failed:\n%v\n", err)
 		}
 	}
@@ -823,16 +779,7 @@ func printNodeRequirements(nodeReqs []NodeRequirements) {
 	}
 }
 
-// formatAsGi formats a Quantity as Gi with 1 decimal place
-func formatAsGi(q *resource.Quantity) string {
-	// Get value in bytes
-	bytes := q.Value()
-	// Convert to Gi (1 Gi = 1024^3 bytes)
-	gi := float64(bytes) / (1024 * 1024 * 1024)
-	return fmt.Sprintf("%.1fGi", gi)
-}
-
-func validateClusterResources(ctx context.Context, clientset *kubernetes.Clientset, cluster *wekaapi.WekaCluster, nodes []corev1.Node, nodeReqs []NodeRequirements, containers []ContainerRequirements) error {
+func validateClusterResources(ctx context.Context, clients *K8sClients, cluster *wekaapi.WekaCluster, nodes []corev1.Node, nodeReqs []NodeRequirements, containers []ContainerRequirements) error {
 	if len(nodes) == 0 {
 		return fmt.Errorf("no nodes found in cluster")
 	}
@@ -888,6 +835,7 @@ func validateClusterResources(ctx context.Context, clientset *kubernetes.Clients
 	// STEP 1: Get current pod data to calculate resource usage
 	fmt.Println("\n=== Fetching Cluster Resource Information ===")
 	var podsByNode map[string][]corev1.Pod
+	clientset := clients.Clientset
 	if clientset != nil {
 		podList, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
 		if err != nil {
@@ -941,7 +889,7 @@ func validateClusterResources(ctx context.Context, clientset *kubernetes.Clients
 	}
 
 	// Validate network configuration on all eligible nodes
-	if err := validateNetworkConfiguration(ctx, clientset, allEligibleNodesList, network); err != nil {
+	if err := validateNetworkConfiguration(ctx, clients, allEligibleNodesList, network); err != nil {
 		return err
 	}
 
@@ -959,29 +907,6 @@ func validateClusterResources(ctx context.Context, clientset *kubernetes.Clients
 	fmt.Printf("   ✓ Sufficient resources available per role\n")
 
 	return nil
-}
-
-func filterNodesBySelector(nodes []corev1.Node, selector map[string]string) []corev1.Node {
-	if selector == nil || len(selector) == 0 {
-		return nodes
-	}
-
-	var eligible []corev1.Node
-	for _, node := range nodes {
-		if matchesSelector(node, selector) {
-			eligible = append(eligible, node)
-		}
-	}
-	return eligible
-}
-
-func matchesSelector(node corev1.Node, selector map[string]string) bool {
-	for key, value := range selector {
-		if labelValue, ok := node.Labels[key]; !ok || labelValue != value {
-			return false
-		}
-	}
-	return true
 }
 
 func validateDrivesOnNodes(nodes []corev1.Node, driveContainers, numDrives int) error {
@@ -1013,7 +938,7 @@ func validateDrivesOnNodes(nodes []corev1.Node, driveContainers, numDrives int) 
 	return nil
 }
 
-func validateNetworkConfiguration(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node, network *wekaapi.Network) error {
+func validateNetworkConfiguration(ctx context.Context, clients *K8sClients, nodes []corev1.Node, network *wekaapi.Network) error {
 	if network == nil {
 		return nil
 	}
@@ -1033,7 +958,7 @@ func validateNetworkConfiguration(ctx context.Context, clientset *kubernetes.Cli
 
 	// Use the shared network validation function with empty host check data (will be populated later if needed)
 	emptyHostChecks := make(map[string]HostChecksResult)
-	return validateNetworkInterfaceOnNodes(ctx, clientset, nodes, ethDevice, planClusterFailFast, emptyHostChecks)
+	return validateNetworkInterfaceOnNodes(ctx, clients, nodes, ethDevice, planClusterFailFast, emptyHostChecks)
 }
 
 func validateResourceAvailabilityPerRole(grouping RoleNodeGrouping, nodeReqs []NodeRequirements) error {
@@ -1090,7 +1015,7 @@ func validateResourceAvailabilityPerRole(grouping RoleNodeGrouping, nodeReqs []N
 		for _, issue := range issues {
 			errMsg += "  - " + issue + "\n"
 		}
-		return fmt.Errorf(errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 
 	return nil
@@ -1104,7 +1029,7 @@ func buildRoleNodeGrouping(allNodes []corev1.Node, globalSelector map[string]str
 	}
 
 	// First, filter nodes matching global selector
-	globalNodes := filterNodesBySelector(allNodes, globalSelector)
+	globalNodes := FilterNodesBySelector(allNodes, globalSelector)
 	grouping.Global = globalNodes
 
 	// If no roleNodeSelector provided, use global nodes for all roles
@@ -1138,8 +1063,8 @@ func buildRoleNodeGrouping(allNodes []corev1.Node, globalSelector map[string]str
 			}
 		} else {
 			// Combine global and role-specific selectors
-			combinedSelector := mergeSelectors(globalSelector, *roleSelector)
-			roleNodes := filterNodesBySelector(allNodes, combinedSelector)
+			combinedSelector := MergeSelectorMaps(globalSelector, *roleSelector)
+			roleNodes := FilterNodesBySelector(allNodes, combinedSelector)
 			grouping.ByRole[roleName] = RoleNodeGroup{
 				Role:     roleName,
 				Selector: combinedSelector,
@@ -1153,28 +1078,10 @@ func buildRoleNodeGrouping(allNodes []corev1.Node, globalSelector map[string]str
 
 // mergeSelectors uses role-specific selector if provided, otherwise falls back to global
 // Role-specific selector completely replaces global selector (not merged)
-func mergeSelectors(global map[string]string, roleSpecific map[string]string) map[string]string {
-	// If role-specific selector exists, use it exclusively
-	if len(roleSpecific) > 0 {
-		// Return a copy of role-specific selector
-		merged := make(map[string]string)
-		for k, v := range roleSpecific {
-			merged[k] = v
-		}
-		return merged
-	}
-
-	// Otherwise fall back to global
-	merged := make(map[string]string)
-	for k, v := range global {
-		merged[k] = v
-	}
-	return merged
-}
 
 // printRoleNodeGrouping prints information about role-based node groupings
 func printRoleNodeGrouping(grouping RoleNodeGrouping) {
-	fmt.Println("\n=== Role-Based Node Allocation ===\n")
+	fmt.Println("\n=== Role-Based Node Allocation ===")
 
 	if len(grouping.Global) > 0 {
 		fmt.Printf("Global NodeSelector matches: %d nodes\n\n", len(grouping.Global))
@@ -1183,7 +1090,7 @@ func printRoleNodeGrouping(grouping RoleNodeGrouping) {
 	for _, role := range []string{"compute", "drive", "s3", "nfs"} {
 		if rng, exists := grouping.ByRole[role]; exists {
 			fmt.Printf("%s role:\n", strings.ToUpper(role[:1])+role[1:])
-			fmt.Printf("  Selector: %v\n", rng.Selector)
+			fmt.Printf("  Selector: %s\n", SelectorToString(rng.Selector))
 			fmt.Printf("  Target nodes: %d\n", len(rng.Nodes))
 			if len(rng.Nodes) > 0 {
 				nodeNames := make([]string, len(rng.Nodes))
@@ -1558,7 +1465,7 @@ func findBestNodeForContainer(
 			errMsg.WriteString(fmt.Sprintf("    - %d nodes: other constraints\n", len(nodeStates)-totalAccounted))
 		}
 
-		return nil, fmt.Errorf(errMsg.String())
+		return nil, fmt.Errorf("%s", errMsg.String())
 	}
 
 	return bestNode.Node, nil
@@ -1582,15 +1489,6 @@ type NodeResourceVisualization struct {
 	}
 }
 
-// repeatChar repeats a character n times
-func repeatChar(ch rune, count int) string {
-	result := ""
-	for i := 0; i < count; i++ {
-		result += string(ch)
-	}
-	return result
-}
-
 // printNodesPerSelector displays all nodes that match each nodeSelector
 func printNodesPerSelector(roleGrouping RoleNodeGrouping, allNodes []corev1.Node, podsByNode map[string][]corev1.Pod) {
 	// Build node map for quick lookup
@@ -1601,7 +1499,7 @@ func printNodesPerSelector(roleGrouping RoleNodeGrouping, allNodes []corev1.Node
 
 	// Show global nodeSelector nodes
 	if len(roleGrouping.Global) > 0 {
-		fmt.Printf("\nGlobal NodeSelector: %v\n", roleGrouping.ByRole["compute"].Selector)
+		fmt.Printf("\nGlobal NodeSelector: %s\n", SelectorToString(roleGrouping.ByRole["compute"].Selector))
 		fmt.Printf("  Matching nodes: %d\n", len(roleGrouping.Global))
 
 		t := table.NewWriter()
@@ -1614,7 +1512,7 @@ func printNodesPerSelector(roleGrouping RoleNodeGrouping, allNodes []corev1.Node
 			hpAlloc := quantityOrZero(node.Status.Allocatable, "hugepages-2Mi")
 
 			// Calculate used resources from pods
-			cpuUsed, memUsed, hpUsed := calculateNodeUsage(node.Name, podsByNode)
+			cpuUsed, memUsed, hpUsed := CalculateNodeUsage(node.Name, podsByNode)
 
 			cpuFree := cpuAlloc.DeepCopy()
 			cpuFree.Sub(*resource.NewMilliQuantity(cpuUsed, resource.DecimalSI))
@@ -1628,12 +1526,12 @@ func printNodesPerSelector(roleGrouping RoleNodeGrouping, allNodes []corev1.Node
 				fmt.Sprintf("%.1f", float64(cpuAlloc.MilliValue())/1000),
 				fmt.Sprintf("%.1f", float64(cpuUsed)/1000),
 				fmt.Sprintf("%.1f", float64(cpuFree.MilliValue())/1000),
-				formatAsGi(&memAlloc),
-				formatAsGi(resource.NewQuantity(memUsed, resource.BinarySI)),
-				formatAsGi(&memFree),
-				formatAsGi(&hpAlloc),
-				formatAsGi(resource.NewQuantity(hpUsed, resource.BinarySI)),
-				formatAsGi(&hpFree),
+				FormatAsGi(&memAlloc),
+				FormatAsGi(resource.NewQuantity(memUsed, resource.BinarySI)),
+				FormatAsGi(&memFree),
+				FormatAsGi(&hpAlloc),
+				FormatAsGi(resource.NewQuantity(hpUsed, resource.BinarySI)),
+				FormatAsGi(&hpFree),
 			})
 		}
 
@@ -1662,7 +1560,7 @@ func printNodesPerSelector(roleGrouping RoleNodeGrouping, allNodes []corev1.Node
 			}
 		}
 
-		fmt.Printf("\n%s NodeSelector: %v\n", strings.Title(role), rng.Selector)
+		fmt.Printf("\n%s NodeSelector: %s\n", strings.Title(role), SelectorToString(rng.Selector))
 		fmt.Printf("  Matching nodes: %d\n", len(rng.Nodes))
 
 		t := table.NewWriter()
@@ -1675,7 +1573,7 @@ func printNodesPerSelector(roleGrouping RoleNodeGrouping, allNodes []corev1.Node
 			hpAlloc := quantityOrZero(node.Status.Allocatable, "hugepages-2Mi")
 
 			// Calculate used resources from pods
-			cpuUsed, memUsed, hpUsed := calculateNodeUsage(node.Name, podsByNode)
+			cpuUsed, memUsed, hpUsed := CalculateNodeUsage(node.Name, podsByNode)
 
 			cpuFree := cpuAlloc.DeepCopy()
 			cpuFree.Sub(*resource.NewMilliQuantity(cpuUsed, resource.DecimalSI))
@@ -1689,41 +1587,18 @@ func printNodesPerSelector(roleGrouping RoleNodeGrouping, allNodes []corev1.Node
 				fmt.Sprintf("%.1f", float64(cpuAlloc.MilliValue())/1000),
 				fmt.Sprintf("%.1f", float64(cpuUsed)/1000),
 				fmt.Sprintf("%.1f", float64(cpuFree.MilliValue())/1000),
-				formatAsGi(&memAlloc),
-				formatAsGi(resource.NewQuantity(memUsed, resource.BinarySI)),
-				formatAsGi(&memFree),
-				formatAsGi(&hpAlloc),
-				formatAsGi(resource.NewQuantity(hpUsed, resource.BinarySI)),
-				formatAsGi(&hpFree),
+				FormatAsGi(&memAlloc),
+				FormatAsGi(resource.NewQuantity(memUsed, resource.BinarySI)),
+				FormatAsGi(&memFree),
+				FormatAsGi(&hpAlloc),
+				FormatAsGi(resource.NewQuantity(hpUsed, resource.BinarySI)),
+				FormatAsGi(&hpFree),
 			})
 		}
 
 		t.SetStyle(table.StyleLight)
 		t.Render()
 	}
-}
-
-// calculateNodeUsage calculates current resource usage on a node from pods
-func calculateNodeUsage(nodeName string, podsByNode map[string][]corev1.Pod) (cpuMillicores int64, memoryBytes int64, hugepagesBytes int64) {
-	podsOnNode := podsByNode[nodeName]
-	for _, pod := range podsOnNode {
-		// Skip non-running pods
-		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-			continue
-		}
-
-		// Sum container requests
-		for _, container := range pod.Spec.Containers {
-			cpuReq := quantityOrZero(container.Resources.Requests, corev1.ResourceCPU)
-			memReq := quantityOrZero(container.Resources.Requests, corev1.ResourceMemory)
-			hpReq := quantityOrZero(container.Resources.Requests, "hugepages-2Mi")
-
-			cpuMillicores += cpuReq.MilliValue()
-			memoryBytes += memReq.Value()
-			hugepagesBytes += hpReq.Value()
-		}
-	}
-	return
 }
 
 // checkOverlappingSelectors detects and warns about overlapping nodeSelectors
@@ -1818,7 +1693,7 @@ func checkOverlappingSelectors(roleGrouping RoleNodeGrouping) {
 
 // printPlacementDetailsWithResourceBars displays containers and resource allocation in a single combined table
 func printPlacementDetailsWithResourceBars(allocationGroups map[string]*NodeAllocationGroup, nodeList []corev1.Node, podsByNode map[string][]corev1.Pod) {
-	fmt.Println("\n=== Placement Details & Resource Allocation ===\n")
+	fmt.Println("\n=== Placement Details & Resource Allocation ===")
 
 	// Build map of node -> containers
 	nodeToContainers := make(map[string][]ContainerPlacement)
@@ -1834,12 +1709,14 @@ func printPlacementDetailsWithResourceBars(allocationGroups map[string]*NodeAllo
 		nodeMap[nodeList[i].Name] = &nodeList[i]
 	}
 
-	// Sort node names
-	var sortedNodeNames []string
+	// Sort node names - build list of nodes from the container map
+	var nodesToSort []corev1.Node
 	for nodeName := range nodeToContainers {
-		sortedNodeNames = append(sortedNodeNames, nodeName)
+		if node, exists := nodeMap[nodeName]; exists {
+			nodesToSort = append(nodesToSort, *node)
+		}
 	}
-	sort.Strings(sortedNodeNames)
+	sortedNodeNames := SortNodeNames(nodesToSort)
 
 	// Create table
 	t := table.NewWriter()
@@ -2030,25 +1907,25 @@ func generateBarWithoutLegend(total int64, used int64, roleAlloc map[string]int6
 	bar := "["
 
 	if usedChars > 0 {
-		bar += colorUsed + repeatChar('█', usedChars) + colorReset
+		bar += colorUsed + RepeatChar('█', usedChars) + colorReset
 	}
 	if computeChars > 0 {
-		bar += colorCompute + repeatChar('█', computeChars) + colorReset
+		bar += colorCompute + RepeatChar('█', computeChars) + colorReset
 	}
 	if driveChars > 0 {
-		bar += colorDrive + repeatChar('█', driveChars) + colorReset
+		bar += colorDrive + RepeatChar('█', driveChars) + colorReset
 	}
 	if s3Chars > 0 {
-		bar += colorS3 + repeatChar('█', s3Chars) + colorReset
+		bar += colorS3 + RepeatChar('█', s3Chars) + colorReset
 	}
 	if envoyChars > 0 {
-		bar += colorEnvoy + repeatChar('█', envoyChars) + colorReset
+		bar += colorEnvoy + RepeatChar('█', envoyChars) + colorReset
 	}
 	if nfsChars > 0 {
-		bar += colorNFS + repeatChar('█', nfsChars) + colorReset
+		bar += colorNFS + RepeatChar('█', nfsChars) + colorReset
 	}
 	if freeChars > 0 {
-		bar += colorFree + repeatChar('░', freeChars) + colorReset
+		bar += colorFree + RepeatChar('░', freeChars) + colorReset
 	}
 
 	bar += "]"

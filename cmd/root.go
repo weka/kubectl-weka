@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -11,6 +13,7 @@ var (
 	flagAllNamespaces bool
 	flagNoHeaders     bool
 	flagWide          bool
+	KubeClients       *K8sClients
 )
 
 var rootCmd = &cobra.Command{
@@ -19,14 +22,26 @@ var rootCmd = &cobra.Command{
 }
 
 func Execute() {
+	ctx := context.Background()
+	var err error
+	KubeClients, err = NewK8sClients(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to initialize Kubernetes client: %v\n", err)
+		os.Exit(1)
+	}
+	defer KubeClients.Stop()
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+
 }
 
 func init() {
+
 	rootCmd.AddCommand(getCmd)
 	rootCmd.AddCommand(preflightCmd)
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(planCmd)
+
 }

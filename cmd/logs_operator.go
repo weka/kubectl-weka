@@ -11,8 +11,6 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
@@ -21,11 +19,6 @@ var (
 	operatorLogsTail      int64
 	operatorLogsSince     time.Duration
 )
-
-var logsCmd = &cobra.Command{
-	Use:   "logs",
-	Short: "View WEKA related logs",
-}
 
 var logsOperatorCmd = &cobra.Command{
 	Use:   "operator",
@@ -55,19 +48,7 @@ func init() {
 func runLogsOperator(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(),
-		&clientcmd.ConfigOverrides{},
-	)
-	restCfg, err := kubeCfg.ClientConfig()
-	if err != nil {
-		return err
-	}
-
-	clientset, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		return err
-	}
+	clientset := KubeClients.Clientset
 
 	// Labels you provided
 	selector := "" +

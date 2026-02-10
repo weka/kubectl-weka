@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/kubernetes"
 )
 
 // NetworkValidationResult holds the result of network validation for a single node
@@ -21,7 +20,7 @@ type NetworkValidationResult struct {
 // and if it's a bond, validates that it's using LACP (802.3ad mode).
 // If hostChecksMap is provided, reuses existing host check data; otherwise creates new pods.
 // If failFast is true, returns immediately on first error; otherwise collects all errors.
-func validateNetworkInterfaceOnNodes(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node, ethDevice string, failFast bool, hostChecksMap ...map[string]HostChecksResult) error {
+func validateNetworkInterfaceOnNodes(ctx context.Context, clients *K8sClients, nodes []corev1.Node, ethDevice string, failFast bool, hostChecksMap ...map[string]HostChecksResult) error {
 	if ethDevice == "" {
 		return nil // No validation needed
 	}
@@ -85,7 +84,7 @@ func validateNetworkInterfaceOnNodes(ctx context.Context, clientset *kubernetes.
 		fmt.Printf("Creating pods to verify network configuration...\n")
 
 		// Run host checks via pods to get network interface information
-		resultChan, cleanupWg := scanHostChecksByPod(ctx, clientset, nodes)
+		resultChan, cleanupWg := scanHostChecksByPod(ctx, clients, nodes)
 
 		// Ensure cleanup completes before returning
 		defer func() {

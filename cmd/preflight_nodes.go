@@ -11,8 +11,6 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
@@ -74,34 +72,10 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		sig := <-sigChan
 		fmt.Printf("\n\nReceived signal %v, cleaning up pods...\n", sig)
 		cancel() // Cancel context to stop operations
-		// Don't exit here - let defer cleanup run
+		// ...existing code...
 	}()
 
-	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(),
-		&clientcmd.ConfigOverrides{},
-	)
-
-	restCfg, err := kubeCfg.ClientConfig()
-	if err != nil {
-		return err
-	}
-
-	// Use standard kubernetes.Clientset for host checks via pods
-	clientset, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		return err
-	}
-
-	// Use cached client for node reads
-	cachedClient, err := newWekaCRClient(ctx, restCfg)
-	if err != nil {
-		return err
-	}
-	defer cachedClient.Stop()
-
-	crClient := cachedClient.Client
-
+	crClient := KubeClients.CRClient
 	nodes, err := resolveNodes(ctx, crClient, args, preflightNodeSelector)
 	if err != nil {
 		return err
@@ -134,7 +108,7 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	}
 
 	// SECOND: Run host checks via per-node pods (PCI, /etc/os-release, filesystem, processes, systemd units)
-	resultChan, cleanupWg := scanHostChecksByPod(ctx, clientset, nodes)
+	resultChan, cleanupWg := scanHostChecksByPod(ctx, KubeClients, nodes)
 
 	// Ensure cleanup completes before exiting (even on SIGTERM/Ctrl+C)
 	defer func() {

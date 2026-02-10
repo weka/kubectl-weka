@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 var preflightK8sClusterCmd = &cobra.Command{
@@ -25,30 +23,8 @@ func runPreflightK8sCluster(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	anyFail := false
 
-	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(),
-		&clientcmd.ConfigOverrides{},
-	)
-
-	restCfg, err := kubeCfg.ClientConfig()
-	if err != nil {
-		return err
-	}
-
-	// Use standard kubernetes.Clientset for discovery and permission checks
-	clientset, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		return err
-	}
-
-	// Use cached client for node reads (will be called multiple times)
-	cachedClient, err := newWekaCRClient(ctx, restCfg)
-	if err != nil {
-		return err
-	}
-	defer cachedClient.Stop()
-
-	crClient := cachedClient.Client
+	clientset := KubeClients.Clientset
+	crClient := KubeClients.CRClient
 
 	// Resolve nodes once using cached client (used for node-scoped cluster checks: cpu policy, CNI health)
 	nodes, err := resolveNodes(ctx, crClient, args, preflightNodeSelector)
