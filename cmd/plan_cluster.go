@@ -4,14 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"sort"
-	"strings"
-
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
-	"golang.org/x/term"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,13 +16,66 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"os"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sort"
+	"strings"
 )
 
 var (
-	planClusterFailFast             bool
-	planClusterDisableResourceTable bool
+	planClusterFailFast bool
 )
+
+// RoleNodeGroup represents nodes targeting a specific role with their associated selector
+type RoleNodeGroup struct {
+	Role     string
+	Selector map[string]string
+	Nodes    []corev1.Node
+}
+
+// RoleNodeGrouping represents all role-based node groupings
+type RoleNodeGrouping struct {
+	Global []corev1.Node            // Nodes matching global nodeSelector
+	ByRole map[string]RoleNodeGroup // Nodes per role (compute, drive, s3, nfs)
+}
+
+// ScheduledPodAllocation represents the simulated scheduling of pods to nodes
+type ScheduledPodAllocation struct {
+	Role            string        // Role name (compute, drive, s3, nfs)
+	TotalContainers int           // Total containers of this role to schedule
+	AllocatedNodes  []corev1.Node // Nodes where containers will be allocated
+	PodsPerNode     int           // Average pods per node
+	Description     string        // Human-readable description of allocation
+}
+
+// ContainerPlacement represents a single container placement on a node
+type ContainerPlacement struct {
+	Role      string // compute, drive, s3, nfs, envoy
+	Index     int    // Which container number (0-7, etc)
+	NodeName  string // Which node it's placed on
+	Cores     int    // Cores required
+	Memory    int64  // Memory required in MiB
+	Hugepages int64  // Hugepages required in MiB
+}
+
+// NodeAllocationGroup represents nodes in a group with their placements and free resources
+type NodeAllocationGroup struct {
+	Role             string                          // Which role this group is for
+	Selector         map[string]string               // Node selector for this group
+	Nodes            map[string]*NodeAllocationState // All nodes in this group keyed by name
+	PlacedContainers []ContainerPlacement            // Containers successfully placed
+	FailureReason    string                          // If allocation failed, why
+}
+
+// NodeAllocationState tracks the resource state of a node during allocation
+type NodeAllocationState struct {
+	Node               *corev1.Node
+	AllocatedCores     int
+	AllocatedMemory    int64
+	AllocatedHugepages int64
+	PlacedRoles        map[string]int    // Count of containers by role on this node
+	HostCheck          *HostChecksResult // Host check data if available
+}
 
 var planClusterCmd = &cobra.Command{
 	Use:   "cluster <file.yaml>",
@@ -39,7 +87,6 @@ var planClusterCmd = &cobra.Command{
 func init() {
 	planCmd.AddCommand(planClusterCmd)
 	planClusterCmd.Flags().BoolVar(&planClusterFailFast, "fail-fast", false, "Stop validation on first error (default: collect all errors)")
-	planClusterCmd.Flags().BoolVar(&planClusterDisableResourceTable, "disable-resource-table", false, "Disable resource allocation visualization table")
 }
 
 type ContainerRequirements struct {
@@ -448,7 +495,7 @@ func validateAndPlan(ctx context.Context, clientset *kubernetes.Clientset, clust
 
 	// Validate cluster has sufficient resources
 	if nodes != nil {
-		if err := validateClusterResources(ctx, clientset, cluster, nodes, nodeReqs); err != nil {
+		if err := validateClusterResources(ctx, clientset, cluster, nodes, nodeReqs, containers); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "\n❌ Cluster Validation Failed:\n%v\n", err)
 		}
 	}
@@ -632,7 +679,9 @@ func calculateNodeRequirements(_ *wekaapi.WekaConfig, containers []ContainerRequ
 	}
 
 	if computeCount > 0 || driveCount > 0 {
-		backendNodes := maxInt(computeCount, driveCount)
+		// With anti-affinity, compute and drive containers need separate nodes
+		// So we need to sum them, not take the max
+		backendNodes := computeCount + driveCount
 
 		totalCores := 0
 		totalCoresNoHT := 0
@@ -686,7 +735,9 @@ func calculateNodeRequirements(_ *wekaapi.WekaConfig, containers []ContainerRequ
 	}
 
 	if s3Count > 0 || nfsCount > 0 {
-		frontendNodes := maxInt(s3Count, nfsCount)
+		// With anti-affinity, S3 and NFS containers need separate nodes
+		// So we need to sum them, not take the max
+		frontendNodes := s3Count + nfsCount
 
 		totalCores := 0
 		totalCoresNoHT := 0
@@ -772,369 +823,6 @@ func printNodeRequirements(nodeReqs []NodeRequirements) {
 	}
 }
 
-// printNodeResources displays available resources on each node
-// Collects data from host checks but shows Kubernetes resource allocation
-// Also shows potential Weka resource allocation based on nodeReqs
-func printNodeResources(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node, nodeReqs []NodeRequirements) (map[string]HostChecksResult, error) {
-	if len(nodes) == 0 {
-		return nil, nil
-	}
-
-	fmt.Println("\n=== Node Resources ===")
-
-	// Run host checks to get resource info
-	resultChan, cleanupWg := scanHostChecksByPod(ctx, clientset, nodes)
-	defer cleanupWg.Wait()
-
-	hostChecksMap := make(map[string]HostChecksResult)
-	nodeResourcesTable := table.NewWriter()
-	nodeResourcesTable.SetOutputMirror(os.Stdout)
-	nodeResourcesTable.AppendHeader(table.Row{
-		"Node",
-		"HT Enabled",
-		"Allocatable CPU",
-		"Allocatable Memory",
-		"Allocatable Hugepages",
-		"Free CPU",
-		"Free Memory",
-		"Free Hugepages",
-		"CPU Model",
-	})
-
-	// Create a map of nodes by name for quick lookup
-	nodeMap := make(map[string]*corev1.Node)
-	for i := range nodes {
-		nodeMap[nodes[i].Name] = &nodes[i]
-	}
-
-	// Get all pods in cluster to calculate free resources
-	podList, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list pods: %v", err)
-	}
-
-	// Create a map of pods per node
-	podsByNode := make(map[string][]corev1.Pod)
-	for _, pod := range podList.Items {
-		podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], pod)
-	}
-
-	// Collect results
-	for result := range resultChan {
-		hostChecksMap[result.nodeName] = result.result
-
-		if result.err != nil {
-			nodeResourcesTable.AppendRow(table.Row{
-				result.nodeName,
-				"ERROR",
-				"-",
-				"-",
-				"-",
-				"-",
-				"-",
-				"-",
-				fmt.Sprintf("Error: %v", result.err),
-			})
-			continue
-		}
-
-		hc := result.result
-
-		htStatus := "OFF"
-		if hc.HTEnabled {
-			htStatus = "ON"
-		}
-
-		// Get all resources from Kubernetes node status
-		if node, ok := nodeMap[result.nodeName]; ok {
-			// Allocatable resources
-			cpuAlloc := quantityOrZero(node.Status.Allocatable, corev1.ResourceCPU)
-			memAlloc := quantityOrZero(node.Status.Allocatable, corev1.ResourceMemory)
-			hpAlloc := quantityOrZero(node.Status.Allocatable, "hugepages-2Mi")
-
-			// Calculate free resources (allocatable - pod requests)
-			podsOnNode := podsByNode[result.nodeName]
-			cpuReq := resource.MustParse("0")
-			memReq := resource.MustParse("0")
-			hpReq := resource.MustParse("0")
-
-			for _, p := range podsOnNode {
-				// Skip non-running pods
-				if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
-					continue
-				}
-
-				// Sum container requests
-				for _, c := range p.Spec.Containers {
-					cpuReq.Add(quantityOrZero(c.Resources.Requests, corev1.ResourceCPU))
-					memReq.Add(quantityOrZero(c.Resources.Requests, corev1.ResourceMemory))
-					hpReq.Add(quantityOrZero(c.Resources.Requests, "hugepages-2Mi"))
-				}
-
-				// Take max of init containers
-				for _, c := range p.Spec.InitContainers {
-					cpu := quantityOrZero(c.Resources.Requests, corev1.ResourceCPU)
-					mem := quantityOrZero(c.Resources.Requests, corev1.ResourceMemory)
-					hp := quantityOrZero(c.Resources.Requests, "hugepages-2Mi")
-					if cpu.Cmp(cpuReq) > 0 {
-						cpuReq = cpu
-					}
-					if mem.Cmp(memReq) > 0 {
-						memReq = mem
-					}
-					if hp.Cmp(hpReq) > 0 {
-						hpReq = hp
-					}
-				}
-			}
-
-			// Calculate free
-			cpuFree := cpuAlloc.DeepCopy()
-			cpuFree.Sub(cpuReq)
-			if cpuFree.Sign() < 0 {
-				cpuFree = resource.MustParse("0")
-			}
-
-			memFree := memAlloc.DeepCopy()
-			memFree.Sub(memReq)
-			if memFree.Sign() < 0 {
-				memFree = resource.MustParse("0")
-			}
-
-			hpFree := hpAlloc.DeepCopy()
-			hpFree.Sub(hpReq)
-			if hpFree.Sign() < 0 {
-				hpFree = resource.MustParse("0")
-			}
-
-			nodeResourcesTable.AppendRow(table.Row{
-				result.nodeName,
-				htStatus,
-				cpuAlloc.String(),
-				memAlloc.String(),
-				hpAlloc.String(),
-				cpuFree.String(),
-				memFree.String(),
-				hpFree.String(),
-				hc.CPUModel,
-			})
-		} else {
-			nodeResourcesTable.AppendRow(table.Row{
-				result.nodeName,
-				htStatus,
-				"-",
-				"-",
-				"-",
-				"-",
-				"-",
-				"-",
-				hc.CPUModel,
-			})
-		}
-	}
-
-	nodeResourcesTable.SetStyle(table.StyleLight)
-	nodeResourcesTable.Render()
-
-	// Print resource allocation visualization table for each node (unless disabled)
-	if !planClusterDisableResourceTable {
-		fmt.Println("\n=== Resource Allocation Visualization ===\n")
-
-		// Get terminal width
-		termWidth, _, err := term.GetSize(int(os.Stdout.Fd()))
-		if err != nil {
-			termWidth = 120 // Default width if unable to detect
-		}
-
-		// Build a map of Weka resource requirements per resource type
-		backendReq := findNodeRequirementByPurpose(nodeReqs, "Backend (Compute+Drive)")
-		frontendReq := findNodeRequirementByPurpose(nodeReqs, "Frontend (S3/NFS)")
-
-		// Create visualization table
-		vizTable := table.NewWriter()
-		vizTable.SetOutputMirror(os.Stdout)
-		vizTable.SetStyle(table.StyleLight)
-
-		// Set column widths based on terminal width
-		// Reserve space for: borders (6 chars) + node name column (20 chars)
-		// Remaining space divided among 3 resource columns
-		nodeColWidth := 20
-		availableWidth := termWidth - 6 - nodeColWidth
-		resourceColWidth := availableWidth / 3
-		if resourceColWidth < 40 {
-			resourceColWidth = 40
-		}
-
-		vizTable.AppendHeader(table.Row{
-			"Node",
-			"CPU",
-			"Memory",
-			"Hugepages",
-		})
-
-		// Set column configs for width constraints
-		vizTable.SetColumnConfigs([]table.ColumnConfig{
-			{
-				Number:   1,
-				WidthMax: nodeColWidth,
-			},
-			{
-				Number:   2,
-				WidthMax: resourceColWidth,
-			},
-			{
-				Number:   3,
-				WidthMax: resourceColWidth,
-			},
-			{
-				Number:   4,
-				WidthMax: resourceColWidth,
-			},
-		})
-
-		for nodeName, node := range nodeMap {
-			if _, exists := hostChecksMap[nodeName]; !exists {
-				continue // Skip nodes without host checks
-			}
-
-			hc := hostChecksMap[nodeName]
-
-			// Determine which CPU cores calculation to use based on HT status
-			backendCoresPerNode := backendReq.CoresPerNode
-			frontendCoresPerNode := frontendReq.CoresPerNode
-			if !hc.HTEnabled {
-				backendCoresPerNode = backendReq.CoresPerNodeNoHT
-				frontendCoresPerNode = frontendReq.CoresPerNodeNoHT
-			}
-
-			// ...existing code...
-
-			// Get allocatable resources
-			cpuAlloc := quantityOrZero(node.Status.Allocatable, corev1.ResourceCPU)
-			memAlloc := quantityOrZero(node.Status.Allocatable, corev1.ResourceMemory)
-			hpAlloc := quantityOrZero(node.Status.Allocatable, "hugepages-2Mi")
-
-			// Calculate requests
-			podsOnNode := podsByNode[nodeName]
-			cpuReq := resource.MustParse("0")
-			memReq := resource.MustParse("0")
-			hpReq := resource.MustParse("0")
-
-			for _, p := range podsOnNode {
-				if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
-					continue
-				}
-				for _, c := range p.Spec.Containers {
-					cpuReq.Add(quantityOrZero(c.Resources.Requests, corev1.ResourceCPU))
-					memReq.Add(quantityOrZero(c.Resources.Requests, corev1.ResourceMemory))
-					hpReq.Add(quantityOrZero(c.Resources.Requests, "hugepages-2Mi"))
-				}
-				for _, c := range p.Spec.InitContainers {
-					cpu := quantityOrZero(c.Resources.Requests, corev1.ResourceCPU)
-					mem := quantityOrZero(c.Resources.Requests, corev1.ResourceMemory)
-					hp := quantityOrZero(c.Resources.Requests, "hugepages-2Mi")
-					if cpu.Cmp(cpuReq) > 0 {
-						cpuReq = cpu
-					}
-					if mem.Cmp(memReq) > 0 {
-						memReq = mem
-					}
-					if hp.Cmp(hpReq) > 0 {
-						hpReq = hp
-					}
-				}
-			}
-
-			// CPU visualization
-			cpuUsedPct := getPercentage(cpuReq, cpuAlloc)
-			cpuWekaBEPct := getPercentage(*resource.NewMilliQuantity(int64(backendCoresPerNode*1000), resource.DecimalSI), cpuAlloc)
-			cpuWekaFEPct := getPercentage(*resource.NewMilliQuantity(int64(frontendCoresPerNode*1000), resource.DecimalSI), cpuAlloc)
-			cpuFreePct := 100 - cpuUsedPct - cpuWekaBEPct - cpuWekaFEPct
-			if cpuFreePct < 0 {
-				cpuFreePct = 0
-			}
-			cpuBar := drawBarWithWeka(cpuUsedPct, cpuWekaBEPct, cpuWekaFEPct, 0, cpuFreePct)
-			cpuFree := subtractQuantity(cpuAlloc, cpuReq)
-			cpuDetail := fmt.Sprintf("%s allocatable\n%s used, %s free",
-				(&cpuAlloc).String(), (&cpuReq).String(),
-				(&cpuFree).String())
-
-			// Memory visualization
-			memUsedPct := getPercentage(memReq, memAlloc)
-			memWekaBEBytes := backendReq.MemoryPerNode * 1024 * 1024
-			memWekaFEBytes := frontendReq.MemoryPerNode * 1024 * 1024
-			memWekaBEPct := getPercentage(*resource.NewQuantity(memWekaBEBytes, resource.BinarySI), memAlloc)
-			memWekaFEPct := getPercentage(*resource.NewQuantity(memWekaFEBytes, resource.BinarySI), memAlloc)
-			memFreePct := 100 - memUsedPct - memWekaBEPct - memWekaFEPct
-			if memFreePct < 0 {
-				memFreePct = 0
-			}
-			memBar := drawBarWithWeka(memUsedPct, memWekaBEPct, memWekaFEPct, 0, memFreePct)
-			memFree := subtractQuantity(memAlloc, memReq)
-			memDetail := fmt.Sprintf("%s allocatable\n%s used, %s free",
-				formatAsGi(&memAlloc), formatAsGi(&memReq),
-				formatAsGi(&memFree))
-
-			// Hugepages visualization
-			hpUsedPct := getPercentage(hpReq, hpAlloc)
-			hpWekaBEBytes := backendReq.HugepagesPerNode * 1024 * 1024
-			hpWekaFEBytes := frontendReq.HugepagesPerNode * 1024 * 1024
-			hpWekaBEPct := getPercentage(*resource.NewQuantity(hpWekaBEBytes, resource.BinarySI), hpAlloc)
-			hpWekaFEPct := getPercentage(*resource.NewQuantity(hpWekaFEBytes, resource.BinarySI), hpAlloc)
-			hpFreePct := 100 - hpUsedPct - hpWekaBEPct - hpWekaFEPct
-			if hpFreePct < 0 {
-				hpFreePct = 0
-			}
-			hpBar := drawBarWithWeka(hpUsedPct, hpWekaBEPct, hpWekaFEPct, 0, hpFreePct)
-			hpFree := subtractQuantity(hpAlloc, hpReq)
-			hpDetail := fmt.Sprintf("%s allocatable\n%s used, %s free",
-				formatAsGi(&hpAlloc), formatAsGi(&hpReq),
-				formatAsGi(&hpFree))
-
-			// Add row to table
-			nodeLabel := nodeName
-			if hc.HTEnabled {
-				nodeLabel += " (HT:ON)"
-			} else {
-				nodeLabel += " (HT:OFF)"
-			}
-
-			vizTable.AppendRow(table.Row{
-				nodeLabel,
-				cpuBar + "\n" + cpuDetail,
-				memBar + "\n" + memDetail,
-				hpBar + "\n" + hpDetail,
-			})
-		}
-
-		vizTable.Render()
-	}
-
-	return hostChecksMap, nil
-}
-
-// getPercentage calculates what percentage 'used' is of 'total'
-func getPercentage(used, total resource.Quantity) int {
-	if total.IsZero() {
-		return 0
-	}
-	pct := int((used.Value() * 100) / total.Value())
-	if pct > 100 {
-		pct = 100
-	}
-	return pct
-}
-
-// subtractQuantity returns total - used
-func subtractQuantity(total, used resource.Quantity) resource.Quantity {
-	result := total.DeepCopy()
-	result.Sub(used)
-	if result.Sign() < 0 {
-		return resource.MustParse("0")
-	}
-	return result
-}
-
 // formatAsGi formats a Quantity as Gi with 1 decimal place
 func formatAsGi(q *resource.Quantity) string {
 	// Get value in bytes
@@ -1144,114 +832,7 @@ func formatAsGi(q *resource.Quantity) string {
 	return fmt.Sprintf("%.1fGi", gi)
 }
 
-// drawBarWithWeka creates a visual bar showing [USED% | WEKA_BE% | WEKA_FE% | WEKA_NFS% | FREE%]
-// Uses █ for used, ▓ for backend, ▒ for S3+envoy, ░ for free
-func drawBarWithWeka(usedPct, bekaPct, fePct, nfsPct, freePct int) string {
-	// ANSI color codes - using mild/pastel versions for better eye comfort
-	const (
-		colorReset        = "\033[0m"
-		colorUsed         = "\033[38;5;217m" // Light red (mild)
-		colorWekaCompute  = "\033[38;5;183m" // Light purple (mild) - for Compute+Drive
-		colorWekaFrontend = "\033[38;5;152m" // Light cyan (mild) - for S3+Envoy
-		colorWekaNFS      = "\033[38;5;230m" // Light yellow (mild) - for NFS
-		colorFree         = "\033[38;5;157m" // Light green (mild)
-	)
-
-	totalChars := 40
-	usedChars := (usedPct * totalChars) / 100
-	beChars := (bekaPct * totalChars) / 100
-	feChars := (fePct * totalChars) / 100
-	nfsChars := (nfsPct * totalChars) / 100
-	freeChars := totalChars - usedChars - beChars - feChars - nfsChars
-
-	// Ensure at least 1 char if percentage > 0
-	if usedPct > 0 && usedChars == 0 {
-		usedChars = 1
-	}
-	if bekaPct > 0 && beChars == 0 {
-		beChars = 1
-	}
-	if fePct > 0 && feChars == 0 {
-		feChars = 1
-	}
-	if nfsPct > 0 && nfsChars == 0 {
-		nfsChars = 1
-	}
-	if freePct > 0 && freeChars == 0 {
-		freeChars = 1
-	}
-
-	bar := "["
-
-	// Used (light red █)
-	if usedChars > 0 {
-		bar += colorUsed
-		for i := 0; i < usedChars; i++ {
-			bar += "█"
-		}
-		bar += colorReset
-	}
-
-	// Backend/Compute/Drive (light purple █)
-	if beChars > 0 {
-		bar += colorWekaCompute
-		for i := 0; i < beChars; i++ {
-			bar += "█"
-		}
-		bar += colorReset
-	}
-
-	// Frontend S3+Envoy (light cyan █)
-	if feChars > 0 {
-		bar += colorWekaFrontend
-		for i := 0; i < feChars; i++ {
-			bar += "█"
-		}
-		bar += colorReset
-	}
-
-	// NFS (light yellow █)
-	if nfsChars > 0 {
-		bar += colorWekaNFS
-		for i := 0; i < nfsChars; i++ {
-			bar += "█"
-		}
-		bar += colorReset
-	}
-
-	// Remaining free (light green ░)
-	if freeChars > 0 {
-		bar += colorFree
-		for i := 0; i < freeChars; i++ {
-			bar += "░"
-		}
-		bar += colorReset
-	}
-
-	bar += "]"
-
-	// Return bar on one line and percentages on next line
-	percentLine := fmt.Sprintf("%s%d%%%s|%s%d%%%s|%s%d%%%s|%s%d%%%s|%s%d%%%s",
-		colorUsed, usedPct, colorReset,
-		colorWekaCompute, bekaPct, colorReset,
-		colorWekaFrontend, fePct, colorReset,
-		colorWekaNFS, nfsPct, colorReset,
-		colorFree, freePct, colorReset)
-
-	return bar + "\n" + percentLine
-}
-
-// findNodeRequirementByPurpose finds a NodeRequirement by its purpose string
-func findNodeRequirementByPurpose(reqs []NodeRequirements, purpose string) NodeRequirements {
-	for _, req := range reqs {
-		if req.Purpose == purpose {
-			return req
-		}
-	}
-	return NodeRequirements{} // Return empty if not found
-}
-
-func validateClusterResources(ctx context.Context, clientset *kubernetes.Clientset, cluster *wekaapi.WekaCluster, nodes []corev1.Node, nodeReqs []NodeRequirements) error {
+func validateClusterResources(ctx context.Context, clientset *kubernetes.Clientset, cluster *wekaapi.WekaCluster, nodes []corev1.Node, nodeReqs []NodeRequirements, containers []ContainerRequirements) error {
 	if len(nodes) == 0 {
 		return fmt.Errorf("no nodes found in cluster")
 	}
@@ -1259,54 +840,123 @@ func validateClusterResources(ctx context.Context, clientset *kubernetes.Clients
 	config := cluster.Spec.Dynamic
 	network := &cluster.Spec.Network
 	nodeSelector := cluster.Spec.NodeSelector
+	roleNodeSelector := &cluster.Spec.RoleNodeSelector
 
 	// Check UDP mode warning
 	if network.UdpMode {
 		fmt.Printf("\n⚠️  WARNING: UDP mode is enabled for cluster. This is not recommended for fast-performance production environments\n\n")
 	}
 
-	// Filter nodes that match nodeSelector
-	eligibleNodes := filterNodesBySelector(nodes, nodeSelector)
-	if len(eligibleNodes) == 0 {
-		return fmt.Errorf("no nodes match the nodeSelector criteria: %v", nodeSelector)
-	}
+	// Build role-based node grouping (union of all nodes that match any selector)
+	roleGrouping := buildRoleNodeGrouping(nodes, nodeSelector, roleNodeSelector)
 
-	// Display node resources and collect host checks data
-	hostChecksMap, err := printNodeResources(ctx, clientset, eligibleNodes, nodeReqs)
-	if err != nil {
-		fmt.Printf("⚠️  Warning: Could not collect full node resource data: %v\n", err)
-	}
-
-	// Save host checks summary to JSON file
-	if len(hostChecksMap) > 0 {
-		summaryPath := "hostchecks-summary.json"
-		if err := saveHostChecksSummary(hostChecksMap, summaryPath); err != nil {
-			fmt.Printf("⚠️  Warning: Could not save host checks summary: %v\n", err)
+	// Check if we have any eligible nodes across all roles
+	totalEligibleNodes := len(roleGrouping.Global)
+	for _, roleGroup := range roleGrouping.ByRole {
+		if len(roleGroup.Nodes) > totalEligibleNodes {
+			totalEligibleNodes = len(roleGroup.Nodes)
 		}
 	}
 
-	// Validate drives
+	if totalEligibleNodes == 0 {
+		return fmt.Errorf("no nodes match any nodeSelector criteria (global: %v, roles: %+v)", nodeSelector, roleNodeSelector)
+	}
+
+	// Display role-based node allocation
+	printRoleNodeGrouping(roleGrouping)
+
+	// Get union of all nodes that match any role selector for resource inspection
+	allEligibleNodes := make(map[string]corev1.Node)
+	for _, node := range roleGrouping.Global {
+		allEligibleNodes[node.Name] = node
+	}
+	for _, roleGroup := range roleGrouping.ByRole {
+		for _, node := range roleGroup.Nodes {
+			allEligibleNodes[node.Name] = node
+		}
+	}
+
+	// Convert map back to slice
+	var allEligibleNodesList []corev1.Node
+	for _, node := range allEligibleNodes {
+		allEligibleNodesList = append(allEligibleNodesList, node)
+	}
+	sort.Slice(allEligibleNodesList, func(i, j int) bool {
+		return allEligibleNodesList[i].Name < allEligibleNodesList[j].Name
+	})
+
+	// STEP 1: Get current pod data to calculate resource usage
+	fmt.Println("\n=== Fetching Cluster Resource Information ===")
+	var podsByNode map[string][]corev1.Pod
+	if clientset != nil {
+		podList, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+		if err != nil {
+			fmt.Printf("⚠️  Warning: Could not get pod data: %v\n", err)
+			podsByNode = make(map[string][]corev1.Pod)
+		} else {
+			podsByNode = make(map[string][]corev1.Pod)
+			for _, pod := range podList.Items {
+				podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], pod)
+			}
+			fmt.Printf("✓ Collected pod data from cluster\n")
+		}
+	} else {
+		podsByNode = make(map[string][]corev1.Pod)
+	}
+
+	// STEP 2: Present table of all nodes matching selection per nodeSelector
+	fmt.Println("\n=== Nodes Matching Selection Criteria ===")
+	printNodesPerSelector(roleGrouping, allEligibleNodesList, podsByNode)
+
+	// STEP 3: Check for overlapping nodeSelectors and warn
+	checkOverlappingSelectors(roleGrouping)
+
+	// STEP 4: Perform pseudo-placement (only if --show-only-schedulable flag is set)
+	var allocationGroups map[string]*NodeAllocationGroup
+	var allocationErr error
+
+	fmt.Println("\n=== Simulating Container Placement ===")
+	if len(roleGrouping.ByRole) > 0 {
+
+		// Create empty hostChecksMap for initial allocation (we don't have host check data yet)
+		emptyHostChecks := make(map[string]HostChecksResult)
+		allocationGroups, allocationErr = simulateActualScheduling(roleGrouping, containers, emptyHostChecks, allEligibleNodesList, podsByNode)
+		if allocationErr != nil {
+			fmt.Printf("❌ Scheduling failed: %v\n", allocationErr)
+		} else {
+			// STEP 5 & 6: Combined placement details and resource visualization
+			printPlacementDetailsWithResourceBars(allocationGroups, allEligibleNodesList, podsByNode)
+		}
+	}
+
+	// Validate drives on nodes that will have drive containers
 	if config.DriveContainers != nil && *config.DriveContainers > 0 && config.NumDrives > 0 {
-		if err := validateDrivesOnNodes(eligibleNodes, *config.DriveContainers, config.NumDrives); err != nil {
+		driveNodes := roleGrouping.ByRole["drive"].Nodes
+		if len(driveNodes) == 0 {
+			driveNodes = roleGrouping.Global // Fallback to global nodes
+		}
+		if err := validateDrivesOnNodes(driveNodes, *config.DriveContainers, config.NumDrives); err != nil {
 			return err
 		}
 	}
 
-	// Validate network configuration (reuse hostChecksMap from printNodeResources)
-	if err := validateNetworkConfiguration(ctx, clientset, eligibleNodes, network, hostChecksMap); err != nil {
+	// Validate network configuration on all eligible nodes
+	if err := validateNetworkConfiguration(ctx, clientset, allEligibleNodesList, network); err != nil {
 		return err
 	}
 
-	// Validate resource availability
-	if err := validateResourceAvailability(eligibleNodes, nodeReqs); err != nil {
+	// Validate resource availability per role
+	if err := validateResourceAvailabilityPerRole(roleGrouping, nodeReqs); err != nil {
 		return err
 	}
 
 	fmt.Printf("\n✅ Cluster validation passed\n")
-	fmt.Printf("   ✓ %d nodes match nodeSelector\n", len(eligibleNodes))
+	fmt.Printf("   ✓ %d total nodes in cluster\n", len(nodes))
+	fmt.Printf("   ✓ %d nodes eligible for Weka deployment\n", len(allEligibleNodesList))
+	fmt.Printf("   ✓ Role-based node allocation configured\n")
 	fmt.Printf("   ✓ All required drives are available\n")
 	fmt.Printf("   ✓ Network configuration is consistent\n")
-	fmt.Printf("   ✓ Sufficient resources available\n")
+	fmt.Printf("   ✓ Sufficient resources available per role\n")
 
 	return nil
 }
@@ -1363,7 +1013,7 @@ func validateDrivesOnNodes(nodes []corev1.Node, driveContainers, numDrives int) 
 	return nil
 }
 
-func validateNetworkConfiguration(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node, network *wekaapi.Network, hostChecksMap map[string]HostChecksResult) error {
+func validateNetworkConfiguration(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node, network *wekaapi.Network) error {
 	if network == nil {
 		return nil
 	}
@@ -1381,31 +1031,64 @@ func validateNetworkConfiguration(ctx context.Context, clientset *kubernetes.Cli
 		return nil
 	}
 
-	// Use the shared network validation function with existing host check data
-	return validateNetworkInterfaceOnNodes(ctx, clientset, nodes, ethDevice, planClusterFailFast, hostChecksMap)
+	// Use the shared network validation function with empty host check data (will be populated later if needed)
+	emptyHostChecks := make(map[string]HostChecksResult)
+	return validateNetworkInterfaceOnNodes(ctx, clientset, nodes, ethDevice, planClusterFailFast, emptyHostChecks)
 }
 
-func validateResourceAvailability(nodes []corev1.Node, nodeReqs []NodeRequirements) error {
+func validateResourceAvailabilityPerRole(grouping RoleNodeGrouping, nodeReqs []NodeRequirements) error {
 	if len(nodeReqs) == 0 {
 		return nil
 	}
 
 	var issues []string
 
+	// Validate backend (compute+drive) requirements
+	backendNodes := grouping.ByRole["compute"].Nodes
+	if len(backendNodes) == 0 {
+		backendNodes = grouping.ByRole["drive"].Nodes
+	}
+	if len(backendNodes) == 0 && len(grouping.Global) > 0 {
+		backendNodes = grouping.Global // Fallback to global
+	}
+
 	for _, req := range nodeReqs {
-		if req.MinNodes > len(nodes) {
-			issues = append(issues, fmt.Sprintf(
-				"- %s: requires %d nodes but only %d available (need %d cores/node, %d MiB hugepages/node, %d MiB memory/node)",
-				req.Purpose, req.MinNodes, len(nodes),
-				req.CoresPerNode, req.HugepagesPerNode, req.MemoryPerNode,
-			))
+		if req.Purpose == "Backend (Compute+Drive)" {
+			if req.MinNodes > len(backendNodes) {
+				issues = append(issues, fmt.Sprintf(
+					"Backend (%s): requires %d nodes but only %d match backend selectors (need %d cores/node, %d MiB hugepages/node, %d MiB memory/node)",
+					req.Description, req.MinNodes, len(backendNodes),
+					req.CoresPerNode, req.HugepagesPerNode, req.MemoryPerNode,
+				))
+			}
+		}
+	}
+
+	// Validate frontend (s3/nfs) requirements
+	frontendNodes := grouping.ByRole["s3"].Nodes
+	if len(frontendNodes) == 0 {
+		frontendNodes = grouping.ByRole["nfs"].Nodes
+	}
+	if len(frontendNodes) == 0 && len(grouping.Global) > 0 {
+		frontendNodes = grouping.Global // Fallback to global
+	}
+
+	for _, req := range nodeReqs {
+		if req.Purpose == "Frontend (S3/NFS)" {
+			if req.MinNodes > len(frontendNodes) {
+				issues = append(issues, fmt.Sprintf(
+					"Frontend (%s): requires %d nodes but only %d match frontend selectors (need %d cores/node, %d MiB hugepages/node, %d MiB memory/node)",
+					req.Description, req.MinNodes, len(frontendNodes),
+					req.CoresPerNode, req.HugepagesPerNode, req.MemoryPerNode,
+				))
+			}
 		}
 	}
 
 	if len(issues) > 0 {
-		errMsg := "insufficient cluster nodes for requirements:\n"
+		errMsg := "insufficient cluster nodes for role requirements:\n"
 		for _, issue := range issues {
-			errMsg += issue + "\n"
+			errMsg += "  - " + issue + "\n"
 		}
 		return fmt.Errorf(errMsg)
 	}
@@ -1413,27 +1096,961 @@ func validateResourceAvailability(nodes []corev1.Node, nodeReqs []NodeRequiremen
 	return nil
 }
 
-func maxInt(a, b int) int {
-	if a > b {
-		return a
+// buildRoleNodeGrouping creates role-based node groups based on global and role-specific selectors
+func buildRoleNodeGrouping(allNodes []corev1.Node, globalSelector map[string]string, roleSelectors *wekaapi.RoleNodeSelector) RoleNodeGrouping {
+	grouping := RoleNodeGrouping{
+		Global: []corev1.Node{},
+		ByRole: make(map[string]RoleNodeGroup),
 	}
-	return b
+
+	// First, filter nodes matching global selector
+	globalNodes := filterNodesBySelector(allNodes, globalSelector)
+	grouping.Global = globalNodes
+
+	// If no roleNodeSelector provided, use global nodes for all roles
+	if roleSelectors == nil {
+		for _, role := range []string{"compute", "drive", "s3", "nfs"} {
+			grouping.ByRole[role] = RoleNodeGroup{
+				Role:     role,
+				Selector: globalSelector,
+				Nodes:    globalNodes,
+			}
+		}
+		return grouping
+	}
+
+	// Define role mapping
+	roles := map[string]*map[string]string{
+		"compute": roleSelectors.Compute,
+		"drive":   roleSelectors.Drive,
+		"s3":      roleSelectors.S3,
+		"nfs":     roleSelectors.Nfs,
+	}
+
+	// For each role, determine target nodes
+	for roleName, roleSelector := range roles {
+		if roleSelector == nil {
+			// No role-specific selector, use global nodes
+			grouping.ByRole[roleName] = RoleNodeGroup{
+				Role:     roleName,
+				Selector: globalSelector,
+				Nodes:    globalNodes,
+			}
+		} else {
+			// Combine global and role-specific selectors
+			combinedSelector := mergeSelectors(globalSelector, *roleSelector)
+			roleNodes := filterNodesBySelector(allNodes, combinedSelector)
+			grouping.ByRole[roleName] = RoleNodeGroup{
+				Role:     roleName,
+				Selector: combinedSelector,
+				Nodes:    roleNodes,
+			}
+		}
+	}
+
+	return grouping
 }
 
-// saveHostChecksSummary writes the collected host checks results to a JSON file
-// The file contains a dictionary where keys are node names and values are HostChecksResult
-func saveHostChecksSummary(results map[string]HostChecksResult, outputPath string) error {
-	// Convert map to JSON
-	jsonData, err := json.MarshalIndent(results, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal host checks results: %v", err)
+// mergeSelectors uses role-specific selector if provided, otherwise falls back to global
+// Role-specific selector completely replaces global selector (not merged)
+func mergeSelectors(global map[string]string, roleSpecific map[string]string) map[string]string {
+	// If role-specific selector exists, use it exclusively
+	if len(roleSpecific) > 0 {
+		// Return a copy of role-specific selector
+		merged := make(map[string]string)
+		for k, v := range roleSpecific {
+			merged[k] = v
+		}
+		return merged
 	}
 
-	// Write to file
-	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
-		return fmt.Errorf("failed to write host checks summary: %v", err)
+	// Otherwise fall back to global
+	merged := make(map[string]string)
+	for k, v := range global {
+		merged[k] = v
+	}
+	return merged
+}
+
+// printRoleNodeGrouping prints information about role-based node groupings
+func printRoleNodeGrouping(grouping RoleNodeGrouping) {
+	fmt.Println("\n=== Role-Based Node Allocation ===\n")
+
+	if len(grouping.Global) > 0 {
+		fmt.Printf("Global NodeSelector matches: %d nodes\n\n", len(grouping.Global))
 	}
 
-	fmt.Printf("✓ Host checks summary saved to: %s\n", outputPath)
-	return nil
+	for _, role := range []string{"compute", "drive", "s3", "nfs"} {
+		if rng, exists := grouping.ByRole[role]; exists {
+			fmt.Printf("%s role:\n", strings.ToUpper(role[:1])+role[1:])
+			fmt.Printf("  Selector: %v\n", rng.Selector)
+			fmt.Printf("  Target nodes: %d\n", len(rng.Nodes))
+			if len(rng.Nodes) > 0 {
+				nodeNames := make([]string, len(rng.Nodes))
+				for i, n := range rng.Nodes {
+					nodeNames[i] = n.Name
+				}
+				fmt.Printf("  Node list: %v\n", nodeNames)
+			} else {
+				fmt.Printf("  ⚠️  WARNING: No nodes match selector!\n")
+			}
+			fmt.Println()
+		}
+	}
+}
+
+// simulateActualScheduling simulates actual Kubernetes scheduler behavior by iteratively
+// placing containers one by one, respecting anti-affinity rules and tracking resource availability
+func simulateActualScheduling(
+	roleGrouping RoleNodeGrouping,
+	containers []ContainerRequirements,
+	hostChecksMap map[string]HostChecksResult,
+	allNodes []corev1.Node,
+	podsByNode map[string][]corev1.Pod,
+) (map[string]*NodeAllocationGroup, error) {
+
+	// Create a map of nodes for quick lookup
+	nodeMap := make(map[string]*corev1.Node)
+	for i := range allNodes {
+		nodeMap[allNodes[i].Name] = &allNodes[i]
+	}
+
+	// Initialize allocation groups for each role
+	allocationGroups := make(map[string]*NodeAllocationGroup)
+	containerCountByRole := make(map[string]int)
+
+	for _, c := range containers {
+		if c.Type == "Compute" {
+			containerCountByRole["compute"] = c.Count
+		} else if c.Type == "Drive" {
+			containerCountByRole["drive"] = c.Count
+		} else if c.Type == "S3" {
+			containerCountByRole["s3"] = c.Count
+		} else if c.Type == "NFS" {
+			containerCountByRole["nfs"] = c.Count
+		} else if c.Type == "Envoy (S3)" {
+			containerCountByRole["envoy"] = c.Count
+		}
+	}
+
+	// Initialize allocation groups with all available nodes
+	for _, role := range []string{"compute", "drive", "s3", "nfs", "envoy"} {
+		if containerCountByRole[role] == 0 {
+			continue // Skip roles not needed
+		}
+
+		rng, exists := roleGrouping.ByRole[role]
+		if !exists {
+			// For envoy, use s3 nodes
+			rng = roleGrouping.ByRole["s3"]
+		}
+
+		// Initialize node allocation states for this role group
+		nodeStates := make(map[string]*NodeAllocationState)
+		for _, node := range rng.Nodes {
+			if k8sNode, ok := nodeMap[node.Name]; ok {
+				hostCheck := hostChecksMap[node.Name]
+
+				// Calculate current pod resource usage on this node
+				var allocatedCores int
+				var allocatedMemory int64
+				var allocatedHugepages int64
+
+				podsOnNode := podsByNode[node.Name]
+				for _, pod := range podsOnNode {
+					// Skip non-running pods
+					if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+						continue
+					}
+
+					// Sum container requests
+					for _, container := range pod.Spec.Containers {
+						cpuReq := quantityOrZero(container.Resources.Requests, corev1.ResourceCPU)
+						memReq := quantityOrZero(container.Resources.Requests, corev1.ResourceMemory)
+						hpReq := quantityOrZero(container.Resources.Requests, "hugepages-2Mi")
+
+						allocatedCores += int(cpuReq.MilliValue() / 1000)   // Convert millicores to cores
+						allocatedMemory += memReq.Value() / (1024 * 1024)   // Convert bytes to MiB
+						allocatedHugepages += hpReq.Value() / (1024 * 1024) // Convert bytes to MiB
+					}
+				}
+
+				nodeStates[node.Name] = &NodeAllocationState{
+					Node:               k8sNode,
+					AllocatedCores:     allocatedCores,
+					AllocatedMemory:    allocatedMemory,
+					AllocatedHugepages: allocatedHugepages,
+					PlacedRoles:        make(map[string]int),
+					HostCheck:          &hostCheck,
+				}
+			}
+		}
+
+		allocationGroups[role] = &NodeAllocationGroup{
+			Role:             role,
+			Selector:         rng.Selector,
+			Nodes:            nodeStates,
+			PlacedContainers: []ContainerPlacement{},
+		}
+	}
+
+	// Show available nodes per role
+	fmt.Println("Available nodes per role:")
+	for _, role := range []string{"compute", "drive", "s3", "nfs"} {
+		group, exists := allocationGroups[role]
+		if exists && len(group.Nodes) > 0 {
+			fmt.Printf("  %s: %d nodes available\n", role, len(group.Nodes))
+		}
+	}
+	fmt.Println()
+
+	for _, containerReq := range containers {
+		role := strings.ToLower(containerReq.Type)
+		if role == "envoy (s3)" {
+			role = "envoy"
+		}
+
+		count := containerReq.Count
+		if count == 0 {
+			continue
+		}
+
+		group, exists := allocationGroups[role]
+		if !exists {
+			continue
+		}
+
+		fmt.Printf("Allocating %d %s container(s):\n", count, role)
+
+		// Allocate 'count' containers of this role
+		for containerIdx := 0; containerIdx < count; containerIdx++ {
+			// Find best available node for this container
+			bestNode, err := findBestNodeForContainer(
+				group.Nodes,
+				role,
+				containerReq,
+			)
+
+			if err != nil {
+				group.FailureReason = fmt.Sprintf(
+					"Cannot allocate %s container %d/%d: %v",
+					role, containerIdx+1, count, err,
+				)
+				return allocationGroups, fmt.Errorf(
+					"allocation failed for %s container %d: %v",
+					role, containerIdx+1, err,
+				)
+			}
+
+			// Place container on best node
+			nodeStates := group.Nodes[bestNode.Name]
+			nodeStates.AllocatedCores += int(containerReq.Cores)
+			nodeStates.AllocatedMemory += containerReq.Memory
+			nodeStates.AllocatedHugepages += containerReq.Hugepages
+			nodeStates.PlacedRoles[role]++
+
+			placement := ContainerPlacement{
+				Role:      role,
+				Index:     containerIdx,
+				NodeName:  bestNode.Name,
+				Cores:     int(containerReq.Cores),
+				Memory:    containerReq.Memory,
+				Hugepages: containerReq.Hugepages,
+			}
+			group.PlacedContainers = append(group.PlacedContainers, placement)
+
+			// Print placement info
+			fmt.Printf("  ✓ Placed %s container #%d on node %s (Cores: %d, Memory: %d MiB, Hugepages: %d MiB)\n",
+				role, containerIdx, bestNode.Name, placement.Cores, placement.Memory, placement.Hugepages)
+		}
+	}
+
+	return allocationGroups, nil
+}
+
+// findBestNodeForContainer finds the best available node for placing a container
+// respecting anti-affinity rules and resource constraints
+func findBestNodeForContainer(
+	nodeStates map[string]*NodeAllocationState,
+	role string,
+	containerReq ContainerRequirements,
+) (*corev1.Node, error) {
+
+	var bestNode *NodeAllocationState
+	bestAvailableResources := int64(-1)
+
+	for _, nodeState := range nodeStates {
+		if nodeState == nil {
+			continue
+		}
+
+		k8sNode := nodeState.Node
+
+		// Check anti-affinity: no same-role containers on same node
+		if nodeState.PlacedRoles[role] > 0 {
+			continue // This node already has a container of this role
+		}
+
+		// Get allocatable resources
+		cpuAlloc := quantityOrZero(k8sNode.Status.Allocatable, corev1.ResourceCPU)
+		memAlloc := quantityOrZero(k8sNode.Status.Allocatable, corev1.ResourceMemory)
+		hpAlloc := quantityOrZero(k8sNode.Status.Allocatable, "hugepages-2Mi")
+
+		// Calculate already allocated (from actual pods + our allocations)
+		cpuAllocated := resource.NewMilliQuantity(int64(nodeState.AllocatedCores*1000), resource.DecimalSI)
+		memAllocated := resource.NewQuantity(nodeState.AllocatedMemory*1024*1024, resource.BinarySI)
+		hpAllocated := resource.NewQuantity(nodeState.AllocatedHugepages*1024*1024, resource.BinarySI)
+
+		// Calculate free resources
+		cpuFree := cpuAlloc.DeepCopy()
+		cpuFree.Sub(*cpuAllocated)
+
+		memFree := memAlloc.DeepCopy()
+		memFree.Sub(*memAllocated)
+
+		hpFree := hpAlloc.DeepCopy()
+		hpFree.Sub(*hpAllocated)
+
+		// Check if container fits
+		cpuNeeded := resource.NewMilliQuantity(int64(containerReq.Cores*1000), resource.DecimalSI)
+		memNeeded := resource.NewQuantity(containerReq.Memory*1024*1024, resource.BinarySI)
+		hpNeeded := resource.NewQuantity(containerReq.Hugepages*1024*1024, resource.BinarySI)
+
+		if cpuFree.Cmp(*cpuNeeded) < 0 {
+			continue // Not enough CPU
+		}
+		if memFree.Cmp(*memNeeded) < 0 {
+			continue // Not enough memory
+		}
+		if hpFree.Cmp(*hpNeeded) < 0 {
+			continue // Not enough hugepages
+		}
+
+		// For drive containers, check available drives from annotation
+		if role == "drive" {
+			drivesNeeded := 1
+			drivesAvailable := 0
+
+			// Check node annotation for available drives
+			if drivesAnnotation, ok := k8sNode.Annotations["weka.io/weka-drives"]; ok {
+				var drives []string
+				if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
+					drivesAvailable = len(drives)
+				}
+			}
+
+			// Subtract already allocated drives on this node
+			drivesUsed := nodeState.PlacedRoles["drive"]
+			drivesFree := drivesAvailable - drivesUsed
+
+			if drivesFree < drivesNeeded {
+				continue // Not enough drives available
+			}
+		}
+
+		// This node is suitable; prefer the one with most free resources
+		availableRes := memFree.Value() // Use memory as primary metric for "best"
+		if availableRes > bestAvailableResources {
+			bestAvailableResources = availableRes
+			bestNode = nodeState
+		}
+	}
+
+	if bestNode == nil {
+		// Provide detailed error message
+		var errMsg strings.Builder
+		errMsg.WriteString(fmt.Sprintf("no suitable nodes available for %s container %d\n", role, 1))
+		errMsg.WriteString(fmt.Sprintf("  Analyzed %d nodes:\n", len(nodeStates)))
+
+		antiAffinityCount := 0
+		insufficientCoresCount := 0
+		insufficientMemCount := 0
+		insufficientHPCount := 0
+		insufficientDrivesCount := 0
+
+		for _, nodeState := range nodeStates {
+			if nodeState == nil {
+				continue
+			}
+
+			k8sNode := nodeState.Node
+
+			// Check anti-affinity
+			if nodeState.PlacedRoles[role] > 0 {
+				antiAffinityCount++
+				continue
+			}
+
+			// Check resources
+			cpuAlloc := quantityOrZero(k8sNode.Status.Allocatable, corev1.ResourceCPU)
+			memAlloc := quantityOrZero(k8sNode.Status.Allocatable, corev1.ResourceMemory)
+			hpAlloc := quantityOrZero(k8sNode.Status.Allocatable, "hugepages-2Mi")
+
+			cpuAllocated := resource.NewMilliQuantity(int64(nodeState.AllocatedCores*1000), resource.DecimalSI)
+			memAllocated := resource.NewQuantity(nodeState.AllocatedMemory*1024*1024, resource.BinarySI)
+			hpAllocated := resource.NewQuantity(nodeState.AllocatedHugepages*1024*1024, resource.BinarySI)
+
+			cpuFree := cpuAlloc.DeepCopy()
+			cpuFree.Sub(*cpuAllocated)
+			memFree := memAlloc.DeepCopy()
+			memFree.Sub(*memAllocated)
+			hpFree := hpAlloc.DeepCopy()
+			hpFree.Sub(*hpAllocated)
+
+			cpuNeeded := resource.NewMilliQuantity(int64(containerReq.Cores*1000), resource.DecimalSI)
+			memNeeded := resource.NewQuantity(containerReq.Memory*1024*1024, resource.BinarySI)
+			hpNeeded := resource.NewQuantity(containerReq.Hugepages*1024*1024, resource.BinarySI)
+
+			if cpuFree.Cmp(*cpuNeeded) < 0 {
+				insufficientCoresCount++
+				continue
+			}
+			if memFree.Cmp(*memNeeded) < 0 {
+				insufficientMemCount++
+				continue
+			}
+			if hpFree.Cmp(*hpNeeded) < 0 {
+				insufficientHPCount++
+				continue
+			}
+
+			// Check drives for drive containers via annotation
+			if role == "drive" {
+				drivesNeeded := 1
+				drivesAvailable := 0
+
+				// Check node annotation for available drives
+				if drivesAnnotation, ok := k8sNode.Annotations["weka.io/weka-drives"]; ok {
+					var drives []string
+					if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
+						drivesAvailable = len(drives)
+					}
+				}
+
+				drivesFree := drivesAvailable - nodeState.PlacedRoles["drive"]
+
+				if drivesFree < drivesNeeded {
+					insufficientDrivesCount++
+					continue
+				}
+			}
+		}
+
+		errMsg.WriteString(fmt.Sprintf("  Failure breakdown:\n"))
+		if antiAffinityCount > 0 {
+			errMsg.WriteString(fmt.Sprintf("    - %d nodes: already have %s containers (anti-affinity violation)\n", antiAffinityCount, role))
+		}
+		if insufficientCoresCount > 0 {
+			errMsg.WriteString(fmt.Sprintf("    - %d nodes: insufficient CPU cores (need %d, available varies)\n", insufficientCoresCount, containerReq.Cores))
+		}
+		if insufficientMemCount > 0 {
+			errMsg.WriteString(fmt.Sprintf("    - %d nodes: insufficient memory (need %d MiB, available varies)\n", insufficientMemCount, containerReq.Memory))
+		}
+		if insufficientHPCount > 0 {
+			errMsg.WriteString(fmt.Sprintf("    - %d nodes: insufficient hugepages (need %d MiB, available varies)\n", insufficientHPCount, containerReq.Hugepages))
+		}
+		if insufficientDrivesCount > 0 {
+			errMsg.WriteString(fmt.Sprintf("    - %d nodes: insufficient drives (need 1, available varies)\n", insufficientDrivesCount))
+		}
+
+		totalAccounted := antiAffinityCount + insufficientCoresCount + insufficientMemCount + insufficientHPCount + insufficientDrivesCount
+		if totalAccounted < len(nodeStates) {
+			errMsg.WriteString(fmt.Sprintf("    - %d nodes: other constraints\n", len(nodeStates)-totalAccounted))
+		}
+
+		return nil, fmt.Errorf(errMsg.String())
+	}
+
+	return bestNode.Node, nil
+}
+
+// NodeResourceVisualization represents the resource state for visualization
+type NodeResourceVisualization struct {
+	NodeName        string
+	TotalCPU        int64 // millicores
+	TotalMemory     int64 // bytes
+	TotalHugepages  int64 // bytes
+	AllocatedByRole map[string]struct {
+		Cores     int
+		Memory    int64
+		Hugepages int64
+	}
+	UsedByOthers struct {
+		Cores     int
+		Memory    int64
+		Hugepages int64
+	}
+}
+
+// repeatChar repeats a character n times
+func repeatChar(ch rune, count int) string {
+	result := ""
+	for i := 0; i < count; i++ {
+		result += string(ch)
+	}
+	return result
+}
+
+// printNodesPerSelector displays all nodes that match each nodeSelector
+func printNodesPerSelector(roleGrouping RoleNodeGrouping, allNodes []corev1.Node, podsByNode map[string][]corev1.Pod) {
+	// Build node map for quick lookup
+	nodeMap := make(map[string]*corev1.Node)
+	for i := range allNodes {
+		nodeMap[allNodes[i].Name] = &allNodes[i]
+	}
+
+	// Show global nodeSelector nodes
+	if len(roleGrouping.Global) > 0 {
+		fmt.Printf("\nGlobal NodeSelector: %v\n", roleGrouping.ByRole["compute"].Selector)
+		fmt.Printf("  Matching nodes: %d\n", len(roleGrouping.Global))
+
+		t := table.NewWriter()
+		t.SetOutputMirror(os.Stdout)
+		t.AppendHeader(table.Row{"Node", "CPU Alloc.", "CPU Used", "CPU Free", "Memory Alloc.", "Memory Used", "Memory Free", "HP Alloc.", "HP Used", "HP Free"})
+
+		for _, node := range roleGrouping.Global {
+			cpuAlloc := quantityOrZero(node.Status.Allocatable, corev1.ResourceCPU)
+			memAlloc := quantityOrZero(node.Status.Allocatable, corev1.ResourceMemory)
+			hpAlloc := quantityOrZero(node.Status.Allocatable, "hugepages-2Mi")
+
+			// Calculate used resources from pods
+			cpuUsed, memUsed, hpUsed := calculateNodeUsage(node.Name, podsByNode)
+
+			cpuFree := cpuAlloc.DeepCopy()
+			cpuFree.Sub(*resource.NewMilliQuantity(cpuUsed, resource.DecimalSI))
+			memFree := memAlloc.DeepCopy()
+			memFree.Sub(*resource.NewQuantity(memUsed, resource.BinarySI))
+			hpFree := hpAlloc.DeepCopy()
+			hpFree.Sub(*resource.NewQuantity(hpUsed, resource.BinarySI))
+
+			t.AppendRow(table.Row{
+				node.Name,
+				fmt.Sprintf("%.1f", float64(cpuAlloc.MilliValue())/1000),
+				fmt.Sprintf("%.1f", float64(cpuUsed)/1000),
+				fmt.Sprintf("%.1f", float64(cpuFree.MilliValue())/1000),
+				formatAsGi(&memAlloc),
+				formatAsGi(resource.NewQuantity(memUsed, resource.BinarySI)),
+				formatAsGi(&memFree),
+				formatAsGi(&hpAlloc),
+				formatAsGi(resource.NewQuantity(hpUsed, resource.BinarySI)),
+				formatAsGi(&hpFree),
+			})
+		}
+
+		t.SetStyle(table.StyleLight)
+		t.Render()
+	}
+
+	// Show role-specific selectors
+	for _, role := range []string{"compute", "drive", "s3", "nfs"} {
+		rng, exists := roleGrouping.ByRole[role]
+		if !exists || len(rng.Nodes) == 0 {
+			continue
+		}
+
+		// Skip if it's the same as global
+		if len(rng.Nodes) == len(roleGrouping.Global) {
+			same := true
+			for i := range rng.Nodes {
+				if rng.Nodes[i].Name != roleGrouping.Global[i].Name {
+					same = false
+					break
+				}
+			}
+			if same {
+				continue
+			}
+		}
+
+		fmt.Printf("\n%s NodeSelector: %v\n", strings.Title(role), rng.Selector)
+		fmt.Printf("  Matching nodes: %d\n", len(rng.Nodes))
+
+		t := table.NewWriter()
+		t.SetOutputMirror(os.Stdout)
+		t.AppendHeader(table.Row{"Node", "CPU Alloc.", "CPU Used", "CPU Free", "Memory Alloc.", "Memory Used", "Memory Free", "HP Alloc.", "HP Used", "HP Free"})
+
+		for _, node := range rng.Nodes {
+			cpuAlloc := quantityOrZero(node.Status.Allocatable, corev1.ResourceCPU)
+			memAlloc := quantityOrZero(node.Status.Allocatable, corev1.ResourceMemory)
+			hpAlloc := quantityOrZero(node.Status.Allocatable, "hugepages-2Mi")
+
+			// Calculate used resources from pods
+			cpuUsed, memUsed, hpUsed := calculateNodeUsage(node.Name, podsByNode)
+
+			cpuFree := cpuAlloc.DeepCopy()
+			cpuFree.Sub(*resource.NewMilliQuantity(cpuUsed, resource.DecimalSI))
+			memFree := memAlloc.DeepCopy()
+			memFree.Sub(*resource.NewQuantity(memUsed, resource.BinarySI))
+			hpFree := hpAlloc.DeepCopy()
+			hpFree.Sub(*resource.NewQuantity(hpUsed, resource.BinarySI))
+
+			t.AppendRow(table.Row{
+				node.Name,
+				fmt.Sprintf("%.1f", float64(cpuAlloc.MilliValue())/1000),
+				fmt.Sprintf("%.1f", float64(cpuUsed)/1000),
+				fmt.Sprintf("%.1f", float64(cpuFree.MilliValue())/1000),
+				formatAsGi(&memAlloc),
+				formatAsGi(resource.NewQuantity(memUsed, resource.BinarySI)),
+				formatAsGi(&memFree),
+				formatAsGi(&hpAlloc),
+				formatAsGi(resource.NewQuantity(hpUsed, resource.BinarySI)),
+				formatAsGi(&hpFree),
+			})
+		}
+
+		t.SetStyle(table.StyleLight)
+		t.Render()
+	}
+}
+
+// calculateNodeUsage calculates current resource usage on a node from pods
+func calculateNodeUsage(nodeName string, podsByNode map[string][]corev1.Pod) (cpuMillicores int64, memoryBytes int64, hugepagesBytes int64) {
+	podsOnNode := podsByNode[nodeName]
+	for _, pod := range podsOnNode {
+		// Skip non-running pods
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+
+		// Sum container requests
+		for _, container := range pod.Spec.Containers {
+			cpuReq := quantityOrZero(container.Resources.Requests, corev1.ResourceCPU)
+			memReq := quantityOrZero(container.Resources.Requests, corev1.ResourceMemory)
+			hpReq := quantityOrZero(container.Resources.Requests, "hugepages-2Mi")
+
+			cpuMillicores += cpuReq.MilliValue()
+			memoryBytes += memReq.Value()
+			hugepagesBytes += hpReq.Value()
+		}
+	}
+	return
+}
+
+// checkOverlappingSelectors detects and warns about overlapping nodeSelectors
+func checkOverlappingSelectors(roleGrouping RoleNodeGrouping) {
+	// Build map of node -> unique selectors that select it
+	// Key: node name, Value: map of selector string -> list of roles using that selector
+	nodeToSelectors := make(map[string]map[string][]string)
+
+	// Build a global selector map for quick comparison
+	globalNodes := make(map[string]bool)
+	for _, node := range roleGrouping.Global {
+		globalNodes[node.Name] = true
+	}
+
+	for role, rng := range roleGrouping.ByRole {
+		// Convert selector to string for comparison
+		selectorStr := fmt.Sprintf("%v", rng.Selector)
+
+		for _, node := range rng.Nodes {
+			if nodeToSelectors[node.Name] == nil {
+				nodeToSelectors[node.Name] = make(map[string][]string)
+			}
+			nodeToSelectors[node.Name][selectorStr] = append(nodeToSelectors[node.Name][selectorStr], role)
+		}
+	}
+
+	// Check for nodes matching multiple different selectors
+	type SelectorInfo struct {
+		SelectorType string   // "global" or role name
+		Roles        []string // Roles using this selector
+	}
+
+	overlaps := make(map[string][]SelectorInfo)
+
+	for nodeName, selectors := range nodeToSelectors {
+		if len(selectors) > 1 {
+			// This node matches multiple different selectors
+			var selectorInfos []SelectorInfo
+
+			for selectorStr, roles := range selectors {
+				// Check if this is the global selector
+				isGlobal := false
+				if globalNodes[nodeName] {
+					// Check if any role using this selector matches global
+					for _, role := range roles {
+						if _, exists := roleGrouping.ByRole[role]; exists {
+							globalSelectorStr := fmt.Sprintf("%v", roleGrouping.ByRole["compute"].Selector)
+							if selectorStr == globalSelectorStr {
+								isGlobal = true
+								break
+							}
+						}
+					}
+				}
+
+				if isGlobal {
+					selectorInfos = append(selectorInfos, SelectorInfo{
+						SelectorType: "global",
+						Roles:        roles,
+					})
+				} else {
+					// Role-specific selector - use first role name as identifier
+					selectorInfos = append(selectorInfos, SelectorInfo{
+						SelectorType: roles[0], // Use first role as the selector identifier
+						Roles:        roles,
+					})
+				}
+			}
+
+			if len(selectorInfos) > 1 {
+				overlaps[nodeName] = selectorInfos
+			}
+		}
+	}
+
+	if len(overlaps) > 0 {
+		fmt.Printf("\n⚠️  WARNING: Overlapping NodeSelectors Detected\n")
+		fmt.Printf("The following nodes match multiple nodeSelectors:\n")
+
+		for nodeName, selectorInfos := range overlaps {
+			var selectorTypes []string
+			for _, info := range selectorInfos {
+				selectorTypes = append(selectorTypes, info.SelectorType)
+			}
+			fmt.Printf("  • %s: [multiple nodeSelectors match: %s]\n", nodeName, strings.Join(selectorTypes, ", "))
+		}
+
+		fmt.Printf("\nThis means containers of different roles may be placed on the same node.\n")
+		fmt.Printf("Resources allocated to one role will reduce capacity for other roles on shared nodes.\n\n")
+	}
+}
+
+// printPlacementDetailsWithResourceBars displays containers and resource allocation in a single combined table
+func printPlacementDetailsWithResourceBars(allocationGroups map[string]*NodeAllocationGroup, nodeList []corev1.Node, podsByNode map[string][]corev1.Pod) {
+	fmt.Println("\n=== Placement Details & Resource Allocation ===\n")
+
+	// Build map of node -> containers
+	nodeToContainers := make(map[string][]ContainerPlacement)
+	for _, group := range allocationGroups {
+		for _, placement := range group.PlacedContainers {
+			nodeToContainers[placement.NodeName] = append(nodeToContainers[placement.NodeName], placement)
+		}
+	}
+
+	// Create a map of nodes by name
+	nodeMap := make(map[string]*corev1.Node)
+	for i := range nodeList {
+		nodeMap[nodeList[i].Name] = &nodeList[i]
+	}
+
+	// Sort node names
+	var sortedNodeNames []string
+	for nodeName := range nodeToContainers {
+		sortedNodeNames = append(sortedNodeNames, nodeName)
+	}
+	sort.Strings(sortedNodeNames)
+
+	// Create table
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.AppendHeader(table.Row{"Node", "Containers & Resources", "Resource Allocation"})
+
+	// ANSI color codes for roles
+	const (
+		colorCompute = "\033[38;2;100;150;255m" // Blue
+		colorDrive   = "\033[38;2;255;150;100m" // Orange
+		colorS3      = "\033[38;2;150;255;100m" // Light green
+		colorEnvoy   = "\033[38;2;255;255;150m" // Light yellow
+		colorNFS     = "\033[38;2;255;150;200m" // Pink
+		colorReset   = "\033[0m"
+	)
+
+	roleColors := map[string]string{
+		"compute": colorCompute,
+		"drive":   colorDrive,
+		"s3":      colorS3,
+		"envoy":   colorEnvoy,
+		"nfs":     colorNFS,
+	}
+
+	barWidth := 50
+
+	for i, nodeName := range sortedNodeNames {
+		placements := nodeToContainers[nodeName]
+		k8sNode := nodeMap[nodeName]
+
+		// Build container list with colors and resource info
+		var containerLines []string
+		for _, p := range placements {
+			color, exists := roleColors[p.Role]
+			if !exists {
+				color = colorReset
+			}
+
+			line := fmt.Sprintf("%s%s [CORES: %d, RAM: %.1fGi, HP: %.1fGi]%s",
+				color, strings.ToUpper(p.Role[:1])+p.Role[1:],
+				p.Cores,
+				float64(p.Memory)/(1024),
+				float64(p.Hugepages)/(1024),
+				colorReset,
+			)
+			containerLines = append(containerLines, line)
+		}
+
+		// Get node resources and calculate bars
+		var barLines []string
+		if k8sNode != nil {
+			// Get allocatable resources
+			cpuAlloc := quantityOrZero(k8sNode.Status.Allocatable, corev1.ResourceCPU)
+			memAlloc := quantityOrZero(k8sNode.Status.Allocatable, corev1.ResourceMemory)
+			hpAlloc := quantityOrZero(k8sNode.Status.Allocatable, "hugepages-2Mi")
+
+			// Calculate actual pod resource usage
+			podsOnNode := podsByNode[nodeName]
+			cpuUsed := resource.MustParse("0")
+			memUsed := resource.MustParse("0")
+			hpUsed := resource.MustParse("0")
+
+			for _, p := range podsOnNode {
+				if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+					continue
+				}
+				for _, c := range p.Spec.Containers {
+					cpuUsed.Add(quantityOrZero(c.Resources.Requests, corev1.ResourceCPU))
+					memUsed.Add(quantityOrZero(c.Resources.Requests, corev1.ResourceMemory))
+					hpUsed.Add(quantityOrZero(c.Resources.Requests, "hugepages-2Mi"))
+				}
+			}
+
+			// Build role allocation maps
+			roleAllocCPU := make(map[string]int64)
+			roleAllocMem := make(map[string]int64)
+			roleAllocHP := make(map[string]int64)
+
+			for _, placement := range placements {
+				roleAllocCPU[placement.Role] += int64(placement.Cores) * 1000
+				roleAllocMem[placement.Role] += placement.Memory * 1024 * 1024
+				roleAllocHP[placement.Role] += placement.Hugepages * 1024 * 1024
+			}
+
+			// Generate bars (without percentages in legend)
+			cpuBar := generateBarWithoutLegend(cpuAlloc.MilliValue(), cpuUsed.MilliValue(), roleAllocCPU, barWidth)
+			memBar := generateBarWithoutLegend(memAlloc.Value(), memUsed.Value(), roleAllocMem, barWidth)
+			hpBar := generateBarWithoutLegend(hpAlloc.Value(), hpUsed.Value(), roleAllocHP, barWidth)
+
+			barLines = []string{
+				"CPU: " + cpuBar,
+				"Mem: " + memBar,
+				"HP:  " + hpBar,
+			}
+		}
+
+		// Pad to ensure same number of lines
+		maxLines := len(containerLines)
+		if len(barLines) > maxLines {
+			maxLines = len(barLines)
+		}
+
+		for len(containerLines) < maxLines {
+			containerLines = append(containerLines, "")
+		}
+		for len(barLines) < maxLines {
+			barLines = append(barLines, "")
+		}
+		if i > 0 {
+			t.AppendSeparator() // Add row separators for better readability
+		}
+		t.AppendRow(table.Row{
+			nodeName,
+			strings.Join(containerLines, "\n"),
+			strings.Join(barLines, "\n"),
+		})
+	}
+
+	t.SetStyle(table.StyleLight)
+	t.Render()
+	fmt.Println()
+}
+
+// generateBarWithoutLegend creates a resource bar without the percentage legend
+func generateBarWithoutLegend(total int64, used int64, roleAlloc map[string]int64, width int) string {
+	const (
+		colorReset   = "\033[0m"
+		colorUsed    = "\033[38;2;200;100;100m" // Soft red
+		colorCompute = "\033[38;2;100;150;255m" // Blue
+		colorDrive   = "\033[38;2;255;150;100m" // Orange
+		colorS3      = "\033[38;2;150;255;100m" // Light green
+		colorEnvoy   = "\033[38;2;255;255;150m" // Light yellow
+		colorNFS     = "\033[38;2;255;150;200m" // Pink
+		colorFree    = "\033[38;2;150;150;150m" // Gray
+	)
+
+	if total == 0 {
+		return "[empty]"
+	}
+
+	computeAlloc := roleAlloc["compute"]
+	driveAlloc := roleAlloc["drive"]
+	s3Alloc := roleAlloc["s3"]
+	envoyAlloc := roleAlloc["envoy"]
+	nfsAlloc := roleAlloc["nfs"]
+
+	// Calculate percentages
+	usedPct := int((used * 100) / total)
+	computePct := int((computeAlloc * 100) / total)
+	drivePct := int((driveAlloc * 100) / total)
+	s3Pct := int((s3Alloc * 100) / total)
+	envoyPct := int((envoyAlloc * 100) / total)
+	nfsPct := int((nfsAlloc * 100) / total)
+
+	// Calculate bar characters
+	usedChars := (usedPct * width) / 100
+	computeChars := (computePct * width) / 100
+	driveChars := (drivePct * width) / 100
+	s3Chars := (s3Pct * width) / 100
+	envoyChars := (envoyPct * width) / 100
+	nfsChars := (nfsPct * width) / 100
+	freeChars := width - usedChars - computeChars - driveChars - s3Chars - envoyChars - nfsChars
+
+	// Ensure minimum of 1 char if percentage > 0
+	if usedPct > 0 && usedChars == 0 {
+		usedChars = 1
+	}
+	if computePct > 0 && computeChars == 0 {
+		computeChars = 1
+	}
+	if drivePct > 0 && driveChars == 0 {
+		driveChars = 1
+	}
+	if s3Pct > 0 && s3Chars == 0 {
+		s3Chars = 1
+	}
+	if envoyPct > 0 && envoyChars == 0 {
+		envoyChars = 1
+	}
+	if nfsPct > 0 && nfsChars == 0 {
+		nfsChars = 1
+	}
+	if freeChars < 0 {
+		freeChars = 0
+	}
+
+	// Build bar
+	bar := "["
+
+	if usedChars > 0 {
+		bar += colorUsed + repeatChar('█', usedChars) + colorReset
+	}
+	if computeChars > 0 {
+		bar += colorCompute + repeatChar('█', computeChars) + colorReset
+	}
+	if driveChars > 0 {
+		bar += colorDrive + repeatChar('█', driveChars) + colorReset
+	}
+	if s3Chars > 0 {
+		bar += colorS3 + repeatChar('█', s3Chars) + colorReset
+	}
+	if envoyChars > 0 {
+		bar += colorEnvoy + repeatChar('█', envoyChars) + colorReset
+	}
+	if nfsChars > 0 {
+		bar += colorNFS + repeatChar('█', nfsChars) + colorReset
+	}
+	if freeChars > 0 {
+		bar += colorFree + repeatChar('░', freeChars) + colorReset
+	}
+
+	bar += "]"
+	return bar
 }
