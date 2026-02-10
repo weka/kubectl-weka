@@ -90,9 +90,9 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 	if !getClusterInstancesNoHeaders {
 		if includeNamespaceColumn {
 			if getClusterInstancesWide {
-				fmt.Fprintln(w, "WEKACLUSTER\tNAMESPACE\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID\tAGE\tCPU_UTIL")
+				fmt.Fprintln(w, "NAMESPACE\tWEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID\tAGE\tCPU_UTIL")
 			} else {
-				fmt.Fprintln(w, "WEKACLUSTER\tNAMESPACE\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID")
+				fmt.Fprintln(w, "NAMESPACE\tWEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID")
 			}
 		} else {
 			if getClusterInstancesWide {
@@ -201,7 +201,7 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 				}
 				if includeNamespaceColumn {
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						clusterName, ns, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil)
+						ns, clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil)
 				} else {
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 						clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil)
@@ -209,7 +209,7 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 			} else {
 				if includeNamespaceColumn {
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						clusterName, ns, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID)
+						ns, clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID)
 				} else {
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 						clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID)
