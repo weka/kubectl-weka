@@ -129,19 +129,206 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		nodeMap[nodes[i].Name] = &nodes[i]
 	}
 
-	fmt.Println("Collecting results...")
+	// Create module instances to get their templates
+	osModule := &OSModule{}
+	xfsModule := &XFSModule{}
+	wekaClientModule := &WekaClientModule{}
+	networkModule := &NetworkModule{}
+
+	fmt.Println("Collecting and processing results...")
 	receivedCount := 0
+
+	// Map to store aggregated results per node
+	nodeResults := make(map[string]*AggregatedResult, len(nodes))
+
 	for nodeResult := range resultChan {
 		receivedCount++
 		hostFacts[nodeResult.nodeName] = nodeResult.result
 		if nodeResult.err != nil {
 			scanErrs = append(scanErrs, hostScanError{node: nodeResult.nodeName, err: nodeResult.err})
 		}
+
+		// Build module results from hostcheck data
+		node := nodeMap[nodeResult.nodeName]
+		hf := nodeResult.result
+
+		moduleResults := make(map[string]*HostCheckResult)
+
+		// OS check
+		osImage := node.Status.NodeInfo.OSImage
+		osOK := strings.Contains(strings.ToLower(osImage), "ubuntu")
+		moduleResults["os"] = &HostCheckResult{
+			ModuleName:      "os",
+			Status:          statusToModuleStatus(passOrFail(osOK)),
+			SuccessTemplate: osModule.SuccessTemplate(),
+			WarningTemplate: osModule.WarningTemplate(),
+			ErrorTemplate:   osModule.ErrorTemplate(),
+			SuggestedFix:    osImage,
+		}
+
+		// Kernel check
+		moduleResults["kernel"] = &HostCheckResult{
+			ModuleName:   "kernel",
+			Status:       "success",
+			SuggestedFix: node.Status.NodeInfo.KernelVersion,
+		}
+
+		// Hugepages check
+		hpSet := quantityOrZero(node.Status.Capacity, "hugepages-2Mi")
+		hpAlloc := quantityOrZero(node.Status.Allocatable, "hugepages-2Mi")
+		hpOK := !(hpSet.IsZero() && hpAlloc.IsZero())
+		moduleResults["hugepages"] = &HostCheckResult{
+			ModuleName:   "hugepages",
+			Status:       statusToModuleStatus(passOrFail(hpOK)),
+			SuggestedFix: fmt.Sprintf("set=%s allocatable=%s", hpSet.String(), hpAlloc.String()),
+		}
+
+		// Free memory and hugepages
+		memFree, hpFree, warn := computeFreeFromPods(node, hpAlloc, podsByNode[node.Name])
+		memOK := memFree.Cmp(minFreeMem) >= 0
+		moduleResults["mem_free"] = &HostCheckResult{
+			ModuleName:   "mem_free",
+			Status:       statusToModuleStatus(passOrFail(memOK)),
+			SuggestedFix: fmt.Sprintf("%s free (min %s)%s", memFree.String(), minFreeMem.String(), warnSuffix(warn)),
+		}
+
+		hpFreeOK := hpFree.Cmp(minFreeHP) >= 0
+		moduleResults["hugepages_free"] = &HostCheckResult{
+			ModuleName:   "hugepages_free",
+			Status:       statusToModuleStatus(passOrFail(hpFreeOK)),
+			SuggestedFix: fmt.Sprintf("%s free (min %s)%s", hpFree.String(), minFreeHP.String(), warnSuffix(warn)),
+		}
+
+		// Weka directory check
+		minFailWeka := preflightWekaDirFailGB * 1000 * 1000 * 1000
+		minWarnWeka := preflightWekaDirWarnGB * 1000 * 1000 * 1000
+		wakaDirStatus := statusPass
+		wakaDirDetail := ""
+
+		if hf.WekaDirDetail == "directory does not exist" {
+			wakaDirStatus = statusFail
+			wakaDirDetail = "directory does not exist"
+		} else if hf.WekaDirAvailBytes < minFailWeka {
+			wakaDirStatus = statusFail
+			availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
+			wakaDirDetail = fmt.Sprintf("%.1fGB available (min: %dGB)", availGB, preflightWekaDirFailGB)
+		} else if hf.WekaDirAvailBytes < minWarnWeka {
+			wakaDirStatus = statusWarn
+			availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
+			wakaDirDetail = fmt.Sprintf("%.1fGB available (min: %dGB)", availGB, preflightWekaDirWarnGB)
+		} else {
+			wakaDirStatus = statusPass
+			availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
+			wakaDirDetail = fmt.Sprintf("%s: %.1fGB available", nonEmpty(hf.WekaDirPath, "(unknown)"), availGB)
+		}
+
+		moduleResults["weka_dir"] = &HostCheckResult{
+			ModuleName:      "weka_dir",
+			Status:          statusToModuleStatus(wakaDirStatus),
+			SuccessTemplate: "✅ OK:  {{.FriendlyName}}: {{.Detail}}",
+			WarningTemplate: "⚠️  WARN: {{.FriendlyName}}: {{.Detail}}",
+			ErrorTemplate:   "❌ ERROR: {{.FriendlyName}}: {{.Detail}}",
+			SuggestedFix:    wakaDirDetail,
+		}
+
+		// XFS check
+		moduleResults["xfs"] = &HostCheckResult{
+			ModuleName:      "xfs",
+			Status:          statusToModuleStatus(passOrFail(hf.XFSInstalled)),
+			SuccessTemplate: xfsModule.SuccessTemplate(),
+			WarningTemplate: xfsModule.WarningTemplate(),
+			ErrorTemplate:   xfsModule.ErrorTemplate(),
+			SuggestedFix:    nonEmpty(hf.XFSDetail, "no details"),
+		}
+
+		// Weka client check
+		moduleResults["weka_client"] = &HostCheckResult{
+			ModuleName:      "weka_client",
+			Status:          statusToModuleStatus(passOrFail(hf.WekaClientClean)),
+			SuccessTemplate: wekaClientModule.SuccessTemplate(),
+			WarningTemplate: wekaClientModule.WarningTemplate(),
+			ErrorTemplate:   wekaClientModule.ErrorTemplate(),
+			SuggestedFix:    nonEmpty(hf.WekaClientDetail, "no details"),
+		}
+
+		// Mellanox NIC check
+		var mellanoxDetail string
+		var mellanoxStatus checkStatus
+		if len(hf.MlxIfaces) == 0 {
+			mellanoxStatus = statusWarn
+			mellanoxDetail = "No Mellanox NIC detected; only UDP mode is supported"
+		} else {
+			mellanoxStatus = statusPass
+			var lines []string
+			for _, nic := range hf.MlxIfaces {
+				spd := nic.Speed
+				if strings.TrimSpace(spd) == "" {
+					spd = "unknown"
+				}
+				if nic.Bond != "" {
+					lines = append(lines, fmt.Sprintf("%s [*%s] %s %s", nic.Name, nic.Bond, spd, nic.Model))
+				} else {
+					ip := nic.IP
+					if strings.TrimSpace(ip) == "" {
+						ip = "-"
+					} else {
+						lines = append(lines, fmt.Sprintf("%s [%s] %s %s", nic.Name, ip, spd, nic.Model))
+					}
+				}
+			}
+			for _, b := range hf.MlxBonds {
+				ip := b.IP
+				if strings.TrimSpace(ip) == "" {
+					ip = "-"
+				}
+				spd := b.Speed
+				if strings.TrimSpace(spd) == "" {
+					spd = "unknown"
+				}
+				lines = append(lines, fmt.Sprintf("%s [%s] %s (%s)", b.Name, ip, spd, strings.Join(b.Slaves, ", ")))
+			}
+			mellanoxDetail = strings.Join(lines, "\n")
+		}
+
+		moduleResults["mellanox_nic"] = &HostCheckResult{
+			ModuleName:      "mellanox_nic",
+			Status:          statusToModuleStatus(mellanoxStatus),
+			SuccessTemplate: networkModule.SuccessTemplate(),
+			WarningTemplate: networkModule.WarningTemplate(),
+			ErrorTemplate:   networkModule.ErrorTemplate(),
+			SuggestedFix:    mellanoxDetail,
+		}
+
+		// Bond LACP check
+		moduleResults["bond_lacp"] = &HostCheckResult{
+			ModuleName:   "bond_lacp",
+			Status:       statusToModuleStatus(passOrFail(hf.BondLACPOk)),
+			SuggestedFix: nonEmpty(hf.BondLACPDetail, "no details"),
+		}
+
+		// Determine overall status
+		overallStatus := "success"
+		for _, mr := range moduleResults {
+			if mr.Status == "error" {
+				overallStatus = "failure"
+				break
+			}
+			if mr.Status == "warning" && overallStatus == "success" {
+				overallStatus = "partial"
+			}
+		}
+
+		nodeResults[nodeResult.nodeName] = &AggregatedResult{
+			NodeName:      nodeResult.nodeName,
+			Status:        overallStatus,
+			ModuleResults: moduleResults,
+		}
+
 		if receivedCount%10 == 0 || receivedCount == len(nodes) {
-			fmt.Printf("Received %d/%d results...\n", receivedCount, len(nodes))
+			fmt.Printf("Processed %d/%d results...\n", receivedCount, len(nodes))
 		}
 	}
-	fmt.Printf("All %d results collected!\n", receivedCount)
+	fmt.Printf("All %d results processed!\n", receivedCount)
 
 	if len(scanErrs) > 0 {
 		fmt.Printf("\nNote: host checks encountered %d issues\n", len(scanErrs))
@@ -160,31 +347,31 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	kernels := make(map[string]struct{})
 	oses := make(map[string]struct{})
 
-	// Process all nodes (podsByNode already available from upfront fetch)
+	// Process all nodes
 	for i := range nodes {
 		n := &nodes[i]
-		hf, ok := hostFacts[n.Name]
+		aggResult, ok := nodeResults[n.Name]
 		if !ok {
 			continue // node result wasn't received
 		}
 
 		checked++
-		var checks []nodeCheck
-		var nodeStatus checkStatus
 
+		var nodeStatus checkStatus
 		if !isNodeReady(n) {
 			nodeStatus = statusSkipped
 		} else {
-			var err error
-			checks, err = buildNodeChecks(ctx, n, hf, podsByNode[n.Name])
-			if err != nil {
-				checks = append(checks, nodeCheck{
-					title:  "node_checks",
-					status: statusFail,
-					detail: fmt.Sprintf("error: %v", err),
-				})
+			// Determine node status from aggregated result
+			switch aggResult.Status {
+			case "success":
+				nodeStatus = statusPass
+			case "partial":
+				nodeStatus = statusWarn
+			default:
+				nodeStatus = statusFail
 			}
-			nodeStatus = aggregateNodeStatus(checks)
+
+			hf := hostFacts[n.Name]
 			kernels[n.Status.NodeInfo.KernelVersion] = struct{}{}
 			oses[hf.OSRelease] = struct{}{}
 		}
@@ -209,10 +396,78 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		}
 
 		printNodeHeader(n.Name, nodeStatus)
-		// Only print non-PASS checks
-		for _, c := range checks {
-			if !preflightSummaryOnly || c.status != statusPass {
-				printNodeSubcheck(c)
+
+		// Print module results using Summary() format
+		// Define the order of checks to display
+		checkOrder := []string{"os", "kernel", "hugepages", "mem_free", "hugepages_free", "weka_dir", "xfs", "weka_client", "mellanox_nic", "bond_lacp"}
+
+		for _, moduleName := range checkOrder {
+			moduleResult, exists := aggResult.ModuleResults[moduleName]
+			if !exists {
+				continue
+			}
+
+			if !preflightSummaryOnly || moduleResult.Status != "success" {
+				// Map module name to friendly name
+				var friendlyName string
+				switch moduleName {
+				case "os":
+					friendlyName = "Operating System"
+				case "kernel":
+					friendlyName = "Kernel"
+				case "hugepages":
+					friendlyName = "Hugepages"
+				case "mem_free":
+					friendlyName = "Free Memory"
+				case "hugepages_free":
+					friendlyName = "Free Hugepages"
+				case "weka_dir":
+					friendlyName = "Weka Directory"
+				case "xfs":
+					friendlyName = "XFS Tools"
+				case "weka_client":
+					friendlyName = "Weka Client"
+				case "mellanox_nic":
+					friendlyName = "Network Configuration"
+				case "bond_lacp":
+					friendlyName = "Bond LACP"
+				default:
+					friendlyName = moduleName
+				}
+
+				// Create context params for Summary()
+				contextParams := map[string]interface{}{
+					"FriendlyName": friendlyName,
+					"Detail":       moduleResult.SuggestedFix,
+					"NodeName":     n.Name,
+				}
+
+				// Use Summary() if templates are available, otherwise format manually
+				var displayText string
+				if moduleResult.SuccessTemplate != "" || moduleResult.WarningTemplate != "" || moduleResult.ErrorTemplate != "" {
+					displayText = moduleResult.Summary(contextParams)
+				} else {
+					// Fallback for modules without templates
+					switch moduleResult.Status {
+					case "success":
+						displayText = fmt.Sprintf("✅ OK:  %s: %s", friendlyName, moduleResult.SuggestedFix)
+					case "warning":
+						displayText = fmt.Sprintf("⚠️  WARN: %s: %s", friendlyName, moduleResult.SuggestedFix)
+					default:
+						displayText = fmt.Sprintf("❌ ERROR: %s: %s", friendlyName, moduleResult.SuggestedFix)
+					}
+				}
+
+				// Handle multiline details (like mellanox_nic)
+				if strings.Contains(displayText, "\n") {
+					lines := strings.Split(displayText, "\n")
+					fmt.Printf("     %s\n", lines[0])
+					for i := 1; i < len(lines); i++ {
+						fmt.Printf("                         %s\n", lines[i])
+					}
+				} else {
+					fmt.Printf("     %s\n", displayText)
+				}
 			}
 		}
 		fmt.Println()
@@ -269,190 +524,7 @@ func mapKeysToList(m map[string]struct{}) []string {
 	return keys
 }
 
-func buildNodeChecks(
-	ctx context.Context,
-	n *corev1.Node,
-	hf HostChecksResult,
-	podsOnNode []corev1.Pod,
-) ([]nodeCheck, error) {
-	var out []nodeCheck
-
-	// 1) OS must be Ubuntu (from kube nodeInfo)
-	osImage := n.Status.NodeInfo.OSImage
-	osOK := strings.Contains(strings.ToLower(osImage), "ubuntu")
-	out = append(out, nodeCheck{
-		title:  "os",
-		status: passOrFail(osOK),
-		detail: chooseDetail(osOK, osImage, fmt.Sprintf("OS is %q, expected Ubuntu", osImage)),
-	})
-	// print out kernel version
-	out = append(out, nodeCheck{
-		title:  "kernel",
-		status: statusPass,
-		detail: n.Status.NodeInfo.KernelVersion,
-	})
-
-	// 2) hugepages configured (from node status)
-	hpSet := quantityOrZero(n.Status.Capacity, "hugepages-2Mi")
-	hpAlloc := quantityOrZero(n.Status.Allocatable, "hugepages-2Mi")
-	hpOK := !(hpSet.IsZero() && hpAlloc.IsZero())
-
-	out = append(out, nodeCheck{
-		title:  "hugepages",
-		status: passOrFail(hpOK),
-		detail: chooseDetail(
-			hpOK,
-			fmt.Sprintf("set=%s allocatable=%s", hpSet.String(), hpAlloc.String()),
-			"No hugepages configured on node",
-		),
-	})
-
-	// 3/4) free resources (allocatable - sum(pod requests))
-	// Use pre-fetched pods instead of making API calls
-	memFree, hpFree, warn := computeFreeFromPods(n, hpAlloc, podsOnNode)
-
-	memOK := memFree.Cmp(minFreeMem) >= 0
-	out = append(out, nodeCheck{
-		title:  "mem_free",
-		status: passOrFail(memOK),
-		detail: fmt.Sprintf("%s free (min %s)%s", memFree.String(), minFreeMem.String(), warnSuffix(warn)),
-	})
-
-	hpFreeOK := hpFree.Cmp(minFreeHP) >= 0
-	out = append(out, nodeCheck{
-		title:  "hugepages_free",
-		status: passOrFail(hpFreeOK),
-		detail: fmt.Sprintf("%s free (min %s)%s", hpFree.String(), minFreeHP.String(), warnSuffix(warn)),
-	})
-
-	// --- Host-based checks (via per-node host-check pod) ---
-
-	// 5) Weka directory exists and has >= 300GB available
-	// For RHCOS: /root/k8s-weka ; otherwise: /opt/k8s-weka (handled by pod script)
-	// FAIL: < preflightWekaDirFailGB, WARN: < preflightWekaDirWarnGB, PASS: >= preflightWekaDirWarnGB
-	minFailWeka := preflightWekaDirFailGB * 1000 * 1000 * 1000 // Convert GB to bytes
-	minWarnWeka := preflightWekaDirWarnGB * 1000 * 1000 * 1000 // Convert GB to bytes
-
-	wakaDirStatus := statusPass
-	wakaDirDetail := ""
-
-	if hf.WekaDirDetail == "directory does not exist" {
-		wakaDirStatus = statusFail
-		wakaDirDetail = "directory does not exist"
-	} else if hf.WekaDirAvailBytes < minFailWeka {
-		wakaDirStatus = statusFail
-		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
-		wakaDirDetail = fmt.Sprintf("%.1fGB available (min: %dGB)", availGB, preflightWekaDirFailGB)
-	} else if hf.WekaDirAvailBytes < minWarnWeka {
-		wakaDirStatus = statusWarn
-		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
-		wakaDirDetail = fmt.Sprintf("%.1fGB available (min: %dGB)", availGB, preflightWekaDirWarnGB)
-	} else {
-		wakaDirStatus = statusPass
-		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
-		wakaDirDetail = fmt.Sprintf("%.1fGB available", availGB)
-	}
-
-	out = append(out, nodeCheck{
-		title:  "weka_dir",
-		status: wakaDirStatus,
-		detail: fmt.Sprintf("%s: %s", nonEmpty(hf.WekaDirPath, "(unknown)"), wakaDirDetail),
-	})
-
-	// 6) XFS installed (mkfs.xfs exists on host)
-	out = append(out, nodeCheck{
-		title:  "xfs",
-		status: passOrFail(hf.XFSInstalled),
-		detail: nonEmpty(hf.XFSDetail, "no details"),
-	})
-
-	// 7) Node is not running WEKA client
-	// - no wekanode processes
-	// - weka-agent service does not exist
-	out = append(out, nodeCheck{
-		title:  "weka_client",
-		status: passOrFail(hf.WekaClientClean),
-		detail: nonEmpty(hf.WekaClientDetail, "no details"),
-	})
-
-	out = append(out, formatMellanoxBlock(hf))
-	out = append(out, formatBondLACPCheck(hf))
-
-	return out, nil
-}
-
-func formatMellanoxBlock(hf HostChecksResult) nodeCheck {
-	if len(hf.MlxIfaces) == 0 {
-		return nodeCheck{
-			title:  "mellanox_nic",
-			status: statusWarn,
-			detail: "No Mellanox NIC detected; only UDP mode is supported",
-		}
-	}
-
-	var lines []string
-
-	for _, nic := range hf.MlxIfaces {
-		spd := nic.Speed
-		if strings.TrimSpace(spd) == "" {
-			spd = "unknown"
-		}
-
-		if nic.Bond != "" {
-			lines = append(lines, fmt.Sprintf("%s [*%s] %s %s", nic.Name, nic.Bond, spd, nic.Model))
-		} else {
-			ip := nic.IP
-			if strings.TrimSpace(ip) == "" {
-				ip = "-"
-			} else {
-				lines = append(lines, fmt.Sprintf("%s [%s] %s %s", nic.Name, ip, spd, nic.Model))
-			}
-		}
-	}
-
-	for _, b := range hf.MlxBonds {
-		ip := b.IP
-		if strings.TrimSpace(ip) == "" {
-			ip = "-"
-		}
-		spd := b.Speed
-		if strings.TrimSpace(spd) == "" {
-			spd = "unknown"
-		}
-		lines = append(lines, fmt.Sprintf("%s [%s] %s (%s)", b.Name, ip, spd, strings.Join(b.Slaves, ", ")))
-	}
-
-	return nodeCheck{
-		title:  "mellanox_nic",
-		status: statusPass,
-		detail: strings.Join(lines, "\n"),
-	}
-}
-
-func formatBondLACPCheck(hf HostChecksResult) nodeCheck {
-	return nodeCheck{
-		title:  "bond_lacp",
-		status: passOrFail(hf.BondLACPOk),
-		detail: nonEmpty(hf.BondLACPDetail, "no details"),
-	}
-}
-
-func aggregateNodeStatus(checks []nodeCheck) checkStatus {
-	hasWarn := false
-	for _, c := range checks {
-		if c.status == statusFail {
-			return statusFail
-		}
-		if c.status == statusWarn {
-			hasWarn = true
-		}
-	}
-	if hasWarn {
-		return statusWarn
-	}
-	return statusPass
-}
-
+// Helper functions for module status conversion
 func passOrFail(ok bool) checkStatus {
 	if ok {
 		return statusPass
@@ -460,11 +532,18 @@ func passOrFail(ok bool) checkStatus {
 	return statusFail
 }
 
-func chooseDetail(ok bool, okDetail, failDetail string) string {
-	if ok {
-		return okDetail
+// Helper functions for status conversion
+func statusToModuleStatus(st checkStatus) string {
+	switch st {
+	case statusPass:
+		return "success"
+	case statusWarn:
+		return "warning"
+	case statusFail:
+		return "error"
+	default:
+		return "error"
 	}
-	return failDetail
 }
 
 func warnSuffix(w string) string {
