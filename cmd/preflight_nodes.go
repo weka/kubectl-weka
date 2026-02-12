@@ -45,10 +45,10 @@ func init() {
 type checkStatus string
 
 const (
-	statusPass    checkStatus = "PASS"
-	statusWarn    checkStatus = "WARN"
-	statusFail    checkStatus = "FAIL"
-	statusSkipped checkStatus = "SKIPPED"
+	statusPass    checkStatus = "✅ OK"
+	statusWarn    checkStatus = "⚠️ WARNING"
+	statusFail    checkStatus = "❌ FAILED"
+	statusSkipped checkStatus = "⏭️ SKIPPED (Node not ready)"
 )
 
 type nodeCheck struct {
@@ -152,6 +152,20 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		node := nodeMap[nodeResult.nodeName]
 		hf := nodeResult.result
 
+		// Skip health check processing for non-ready nodes - they will be marked as skipped later
+		if !isNodeReady(node) {
+			// Store a minimal result indicating the node was skipped
+			nodeResults[nodeResult.nodeName] = &AggregatedResult{
+				NodeName:      nodeResult.nodeName,
+				Status:        "skipped",
+				ModuleResults: make(map[string]*HostCheckResult),
+			}
+			if receivedCount%10 == 0 || receivedCount == len(nodes) {
+				fmt.Printf("Processed %d/%d results...\n", receivedCount, len(nodes))
+			}
+			continue
+		}
+
 		moduleResults := make(map[string]*HostCheckResult)
 
 		// OS check
@@ -226,7 +240,7 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 			ModuleName:      "weka_dir",
 			Status:          statusToModuleStatus(wakaDirStatus),
 			SuccessTemplate: "✅ OK:  {{.FriendlyName}}: {{.Detail}}",
-			WarningTemplate: "⚠️  WARN: {{.FriendlyName}}: {{.Detail}}",
+			WarningTemplate: "⚠️ WARN: {{.FriendlyName}}: {{.Detail}}",
 			ErrorTemplate:   "❌ ERROR: {{.FriendlyName}}: {{.Detail}}",
 			SuggestedFix:    wakaDirDetail,
 		}
@@ -358,19 +372,20 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		checked++
 
 		var nodeStatus checkStatus
-		if !isNodeReady(n) {
+		// Determine node status from aggregated result
+		switch aggResult.Status {
+		case "success":
+			nodeStatus = statusPass
+		case "partial":
+			nodeStatus = statusWarn
+		case "skipped":
 			nodeStatus = statusSkipped
-		} else {
-			// Determine node status from aggregated result
-			switch aggResult.Status {
-			case "success":
-				nodeStatus = statusPass
-			case "partial":
-				nodeStatus = statusWarn
-			default:
-				nodeStatus = statusFail
-			}
+		default:
+			nodeStatus = statusFail
+		}
 
+		// Only collect kernel/OS info for ready nodes
+		if nodeStatus != statusSkipped {
 			hf := hostFacts[n.Name]
 			kernels[n.Status.NodeInfo.KernelVersion] = struct{}{}
 			oses[hf.OSRelease] = struct{}{}
@@ -575,6 +590,7 @@ func statusString(s checkStatus) string {
 }
 
 func printNodeHeader(name string, st checkStatus) {
+	// For skipped nodes, print a clear reason
 	fmt.Printf("  %s: %s\n", name, statusString(st))
 }
 
