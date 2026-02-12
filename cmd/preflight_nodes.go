@@ -274,19 +274,20 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		} else {
 			mellanoxStatus = statusPass
 			var lines []string
+			lines = append(lines, "")
 			for _, nic := range hf.MlxIfaces {
 				spd := nic.Speed
 				if strings.TrimSpace(spd) == "" {
 					spd = "unknown"
 				}
 				if nic.Bond != "" {
-					lines = append(lines, fmt.Sprintf("%s [*%s] %s %s", nic.Name, nic.Bond, spd, nic.Model))
+					lines = append(lines, fmt.Sprintf("• %s [*%s] %s %s", nic.Name, nic.Bond, spd, nic.Model))
 				} else {
 					ip := nic.IP
 					if strings.TrimSpace(ip) == "" {
 						ip = "-"
 					} else {
-						lines = append(lines, fmt.Sprintf("%s [%s] %s %s", nic.Name, ip, spd, nic.Model))
+						lines = append(lines, fmt.Sprintf("• %s [%s] %s %s", nic.Name, ip, spd, nic.Model))
 					}
 				}
 			}
@@ -299,7 +300,7 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 				if strings.TrimSpace(spd) == "" {
 					spd = "unknown"
 				}
-				lines = append(lines, fmt.Sprintf("%s [%s] %s (%s)", b.Name, ip, spd, strings.Join(b.Slaves, ", ")))
+				lines = append(lines, fmt.Sprintf("• %s [%s] %s (%s)", b.Name, ip, spd, strings.Join(b.Slaves, ", ")))
 			}
 			mellanoxDetail = strings.Join(lines, "\n")
 		}
@@ -477,8 +478,12 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 				if strings.Contains(displayText, "\n") {
 					lines := strings.Split(displayText, "\n")
 					fmt.Printf("     %s\n", lines[0])
+					// Indent subsequent lines to align with friendly name + 2 spaces
+					// "     ✅ OK:  " = 13 characters (5 spaces + emoji ~2 chars + " OK:  " 6 chars)
+					// So indent is 13 + 2 = 15 spaces to align with "Network Configuration" + 2
+					indent := "               "
 					for i := 1; i < len(lines); i++ {
-						fmt.Printf("                         %s\n", lines[i])
+						fmt.Printf("%s%s\n", indent, lines[i])
 					}
 				} else {
 					fmt.Printf("     %s\n", displayText)
