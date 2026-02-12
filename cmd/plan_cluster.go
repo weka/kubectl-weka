@@ -1530,33 +1530,6 @@ func printNodeSelectorTable(title, selector string, nodes []corev1.Node, podsByN
 	t.Render()
 }
 
-// calculatePodResourceUsage sums up resource requests for all pods on a node
-func calculatePodResourceUsage(pods []corev1.Pod, resourceName corev1.ResourceName) resource.Quantity {
-	total := resource.NewQuantity(0, resource.BinarySI)
-
-	for _, pod := range pods {
-		// Check regular containers
-		for _, container := range pod.Spec.Containers {
-			if container.Resources.Requests != nil {
-				if val, ok := container.Resources.Requests[resourceName]; ok {
-					total.Add(val)
-				}
-			}
-		}
-
-		// Check init containers
-		for _, container := range pod.Spec.InitContainers {
-			if container.Resources.Requests != nil {
-				if val, ok := container.Resources.Requests[resourceName]; ok {
-					total.Add(val)
-				}
-			}
-		}
-	}
-
-	return *total
-}
-
 // sortNodeNamesNumerically sorts node names using natural/numerical ordering
 // e.g., h1, h2, h10, h11 instead of h1, h10, h11, h2
 func sortNodeNamesNumerically(names []string) {

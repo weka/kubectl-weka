@@ -273,3 +273,30 @@ func SelectorToString(selector map[string]string) string {
 	sort.Strings(pairs)
 	return strings.Join(pairs, ",")
 }
+
+// calculatePodResourceUsage sums up resource requests for all pods on a node
+func calculatePodResourceUsage(pods []v1.Pod, resourceName v1.ResourceName) resource.Quantity {
+	total := resource.NewQuantity(0, resource.BinarySI)
+
+	for _, pod := range pods {
+		// Check regular containers
+		for _, container := range pod.Spec.Containers {
+			if container.Resources.Requests != nil {
+				if val, ok := container.Resources.Requests[resourceName]; ok {
+					total.Add(val)
+				}
+			}
+		}
+
+		// Check init containers
+		for _, container := range pod.Spec.InitContainers {
+			if container.Resources.Requests != nil {
+				if val, ok := container.Resources.Requests[resourceName]; ok {
+					total.Add(val)
+				}
+			}
+		}
+	}
+
+	return *total
+}
