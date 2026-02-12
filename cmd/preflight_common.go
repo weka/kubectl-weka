@@ -353,7 +353,79 @@ func getNodeConditionStatus(n *corev1.Node, t corev1.NodeConditionType) corev1.C
 	return ""
 }
 
+func detectK3s(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
+	// K3s detection strategies:
+	// 1. Check for k3s nodes via labels (node.kubernetes.io/instance-type=k3s or provider contains k3s)
+	// 2. Check for k3s-server service in kube-system
+	// 3. Check for k3s components (coredns with k3s labels, etc.)
+
+	// Strategy 1: Check nodes for k3s labels or provider ID
+	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, "", err
+	}
+
+	for _, node := range nodes.Items {
+		// Check labels
+		if val, ok := node.Labels["node.kubernetes.io/instance-type"]; ok {
+			if strings.Contains(strings.ToLower(val), "k3s") {
+				return true, fmt.Sprintf("detected via node %s label", node.Name), nil
+			}
+		}
+
+		// Check providerID (e.g., "k3s://hostname")
+		if strings.HasPrefix(strings.ToLower(node.Spec.ProviderID), "k3s://") {
+			return true, fmt.Sprintf("detected via node %s providerID", node.Name), nil
+		}
+
+		// Check node info (some k3s setups put k3s in the container runtime version or OS image)
+		if strings.Contains(strings.ToLower(node.Status.NodeInfo.ContainerRuntimeVersion), "k3s") {
+			return true, fmt.Sprintf("detected via node %s runtime version", node.Name), nil
+		}
+		if strings.Contains(strings.ToLower(node.Status.NodeInfo.OSImage), "k3s") {
+			return true, fmt.Sprintf("detected via node %s OS image", node.Name), nil
+		}
+	}
+
+	// Strategy 2: Check for k3s services in kube-system
+	svcs, err := clientset.CoreV1().Services("kube-system").List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, svc := range svcs.Items {
+			if svc.Name == "k3s" || svc.Name == "k3s-server" || strings.HasPrefix(svc.Name, "k3s-") {
+				return true, fmt.Sprintf("detected via service kube-system/%s", svc.Name), nil
+			}
+		}
+	}
+
+	// Strategy 3: Check for k3s-specific deployments or pods
+	deploys, err := clientset.AppsV1().Deployments("kube-system").List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, deploy := range deploys.Items {
+			// K3s typically runs coredns with specific labels
+			if deploy.Name == "coredns" {
+				if val, ok := deploy.Labels["k3s-app"]; ok && val == "kube-dns" {
+					return true, "detected via coredns k3s-app label", nil
+				}
+			}
+			if strings.Contains(strings.ToLower(deploy.Name), "k3s") {
+				return true, fmt.Sprintf("detected via deployment kube-system/%s", deploy.Name), nil
+			}
+		}
+	}
+
+	return false, "", nil
+}
+
 func detectKnownCNIDaemonSet(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
+	// Check for K3s built-in CNI (Flannel is integrated into k3s-agent, not a separate daemonset)
+	isK3s, k3sHint, err := detectK3s(ctx, clientset)
+	if err != nil {
+		return false, "", err
+	}
+	if isK3s {
+		return true, fmt.Sprintf("k3s built-in CNI (flannel) %s", k3sHint), nil
+	}
+
 	// Check typical namespaces where CNI runs
 	namespaces := []string{"kube-system", "kube-flannel"}
 
