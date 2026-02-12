@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"k8s.io/apimachinery/pkg/util/version"
 	"strings"
+	"time"
 
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -86,38 +87,74 @@ func quantityOrZero(rl corev1.ResourceList, key corev1.ResourceName) resource.Qu
 // kubelet configz via apiserver proxy:
 // GET /api/v1/nodes/<node>/proxy/configz
 func getCPUManagerPolicyViaConfigz(ctx context.Context, clientset *kubernetes.Clientset, nodeName string) (string, error) {
-	raw, err := clientset.CoreV1().
-		RESTClient().
-		Get().
-		AbsPath("/api/v1/nodes", nodeName, "proxy", "configz").
-		Do(ctx).
-		Raw()
-	if err != nil {
-		return "", err
-	}
+	// Retry logic with exponential backoff for transient errors (503, timeouts, etc.)
+	var lastErr error
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		raw, err := clientset.CoreV1().
+			RESTClient().
+			Get().
+			AbsPath("/api/v1/nodes", nodeName, "proxy", "configz").
+			Do(ctx).
+			Raw()
+		if err == nil {
+			// Success - parse the response
+			var top map[string]any
+			if err := json.Unmarshal(raw, &top); err != nil {
+				return "", err
+			}
 
-	var top map[string]any
-	if err := json.Unmarshal(raw, &top); err != nil {
-		return "", err
-	}
+			if kc, ok := top["kubeletconfig"].(map[string]any); ok {
+				if v, ok := kc["cpuManagerPolicy"].(string); ok && v != "" {
+					return v, nil
+				}
+			}
 
-	if kc, ok := top["kubeletconfig"].(map[string]any); ok {
-		if v, ok := kc["cpuManagerPolicy"].(string); ok && v != "" {
-			return v, nil
+			for _, v := range top {
+				m, ok := v.(map[string]any)
+				if !ok {
+					continue
+				}
+				if pol, ok := m["cpuManagerPolicy"].(string); ok && pol != "" {
+					return pol, nil
+				}
+			}
+
+			return "", fmt.Errorf("cpuManagerPolicy not found in configz")
+		}
+
+		lastErr = err
+		errStr := err.Error()
+
+		// Check if this is a transient error worth retrying
+		// Transient: 503 Service Unavailable, timeout, temporary network issue
+		isTransient := strings.Contains(errStr, "503") ||
+			strings.Contains(errStr, "temporarily unable") ||
+			strings.Contains(errStr, "currently unable to handle") ||
+			strings.Contains(errStr, "timeout") ||
+			strings.Contains(errStr, "connection refused") ||
+			strings.Contains(errStr, "temporary failure")
+
+		if !isTransient {
+			// Permanent error - don't retry
+			return "", err
+		}
+
+		// This is a transient error; retry with backoff
+		if attempt < maxRetries-1 {
+			// Exponential backoff: 100ms, 200ms, 400ms
+			waitTime := time.Duration(100*(1<<uint(attempt))) * time.Millisecond
+			select {
+			case <-time.After(waitTime):
+				// Continue to next attempt
+			case <-ctx.Done():
+				// Context cancelled
+				return "", ctx.Err()
+			}
 		}
 	}
 
-	for _, v := range top {
-		m, ok := v.(map[string]any)
-		if !ok {
-			continue
-		}
-		if pol, ok := m["cpuManagerPolicy"].(string); ok && pol != "" {
-			return pol, nil
-		}
-	}
-
-	return "", fmt.Errorf("cpuManagerPolicy not found in configz")
+	return "", fmt.Errorf("failed to get CPU manager policy after %d retries: %w", maxRetries, lastErr)
 }
 
 func printCheckResult(title string, pass bool, details string) {
@@ -136,19 +173,6 @@ func printCheckResult(title string, pass bool, details string) {
 	} else {
 		fmt.Printf("%s %s\n", title, red("FAIL"))
 	}
-}
-
-func buildCPUDetails(notStatic []string, unknown []string) string {
-	parts := make([]string, 0, 2)
-
-	if len(notStatic) > 0 {
-		parts = append(parts, fmt.Sprintf("%d nodes not static: %s", len(notStatic), joinLimited(notStatic, 5)))
-	}
-	if len(unknown) > 0 {
-		parts = append(parts, fmt.Sprintf("%d nodes unknown: %s", len(unknown), joinLimited(unknown, 3)))
-	}
-
-	return strings.Join(parts, "; ")
 }
 
 func joinLimited(items []string, max int) string {
@@ -513,9 +537,16 @@ func hasAnyLabelValue(labels map[string]string, keys []string, values []string) 
 func checkCPUManagerPolicyStatic(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node) (bool, string) {
 	var notStatic []string
 	var unknown []string
+	var skipped []string
 
 	for i := range nodes {
 		n := &nodes[i]
+
+		// Skip nodes that are not ready
+		if !isNodeReady(n) {
+			skipped = append(skipped, n.Name)
+			continue
+		}
 
 		pol, err := getCPUManagerPolicyViaConfigz(ctx, clientset, n.Name)
 		if err != nil {
@@ -528,18 +559,34 @@ func checkCPUManagerPolicyStatic(ctx context.Context, clientset *kubernetes.Clie
 		}
 	}
 
+	// Success only if all ready nodes are static AND no unknown errors
 	if len(notStatic) == 0 && len(unknown) == 0 {
-		return true, ""
+		if len(skipped) == 0 {
+			return true, ""
+		}
+		// All ready nodes ok, but some skipped - still PASS with note
+		return true, fmt.Sprintf("%d nodes skipped (NotReady)", len(skipped))
 	}
 
-	parts := make([]string, 0, 2)
+	// FAIL if there are non-static nodes or unknown errors
+	parts := make([]string, 0, 3)
+	readyCount := len(nodes) - len(skipped)
+	passCount := readyCount - len(notStatic) - len(unknown)
+
+	if passCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d nodes ok", passCount))
+	}
 	if len(notStatic) > 0 {
-		parts = append(parts, fmt.Sprintf("%d nodes not static: %s", len(notStatic), joinLimited(notStatic, 5)))
+		parts = append(parts, fmt.Sprintf("%d nodes not static: %s", len(notStatic), joinLimited(notStatic, 3)))
 	}
 	if len(unknown) > 0 {
 		parts = append(parts, fmt.Sprintf("%d nodes unknown: %s", len(unknown), joinLimited(unknown, 3)))
 	}
-	return false, strings.Join(parts, "; ")
+	if len(skipped) > 0 {
+		parts = append(parts, fmt.Sprintf("%d nodes skipped (NotReady)", len(skipped)))
+	}
+
+	return false, strings.Join(parts, ", ")
 }
 
 func nodeHasMellanoxNIC(n *corev1.Node) (bool, string) {

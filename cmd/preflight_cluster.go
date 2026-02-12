@@ -97,7 +97,7 @@ func runPreflightK8sCluster(cmd *cobra.Command, args []string) error {
 		title := "Validating cpu policy set to static..."
 		ok, detail := checkCPUManagerPolicyStatic(ctx, clientset, nodes)
 		if ok {
-			printCheckResult(title, true, "")
+			printCheckResult(title, true, detail)
 		} else {
 			printCheckResult(title, false, detail)
 			anyFail = true
