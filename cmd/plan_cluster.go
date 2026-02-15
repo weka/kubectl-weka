@@ -14,12 +14,8 @@ import (
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
-	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var (
@@ -37,6 +33,20 @@ func init() {
 	planCmd.AddCommand(planClusterCmd)
 	planClusterCmd.Flags().BoolVar(&planClusterFailFast, "fail-fast", false, "Stop validation on first error (default: collect all errors)")
 }
+
+// ANSI color codes
+const (
+	colorCompute = "\033[36m" // Cyan for compute
+	colorDrive   = "\033[35m" // Magenta for drive
+	colorS3      = "\033[33m" // Yellow for S3
+	colorNFS     = "\033[32m" // Green for NFS
+	colorEnvoy   = "\033[34m" // Blue for envoy
+	colorClient  = "\033[31m" // Orange for client
+	colorReset   = "\033[0m"  // Reset color
+	colorDefault = "\033[35m" // Default is magenta too
+	colorUsed    = "\033[38;5;52m"
+	colorFree    = "\033[90m" // Dark gray for free
+)
 
 type ContainerRequirements struct {
 	Type      string
@@ -61,12 +71,12 @@ func runPlanCluster(_ *cobra.Command, args []string) error {
 	ctx := context.Background()
 	filePath := args[0]
 
-	cluster, err := parseWekaClusterFile(filePath)
+	cluster, err := ParseWekaResourceFile[*wekaapi.WekaCluster](filePath)
 	if err != nil {
 		return fmt.Errorf("failed to parse WekaCluster file: %w", err)
 	}
 
-	nodes, err := getClusterNodesForPlan(ctx)
+	nodes, err := GetClusterNodes(ctx)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Warning: Could not access cluster nodes: %v\n", err)
 		_, _ = fmt.Fprintf(os.Stderr, "Continuing with planning without drive validation...\n\n")
@@ -78,34 +88,6 @@ func runPlanCluster(_ *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-func parseWekaClusterFile(filePath string) (*wekaapi.WekaCluster, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	s := runtime.NewScheme()
-	if err := scheme.AddToScheme(s); err != nil {
-		return nil, err
-	}
-	if err := wekaapi.AddToScheme(s); err != nil {
-		return nil, err
-	}
-
-	decode := serializer.NewCodecFactory(s).UniversalDeserializer().Decode
-	obj, _, err := decode(data, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	cluster, ok := obj.(*wekaapi.WekaCluster)
-	if !ok {
-		return nil, fmt.Errorf("file does not contain a WekaCluster resource")
-	}
-
-	return cluster, nil
 }
 
 func getKubeConfigForPlan() (*rest.Config, error) {
@@ -120,25 +102,6 @@ func getKubeConfigForPlan() (*rest.Config, error) {
 	}
 
 	return restCfg, nil
-}
-
-func getClusterNodesForPlan(ctx context.Context) ([]corev1.Node, error) {
-	cfg, err := getKubeConfigForPlan()
-	if err != nil {
-		return nil, err
-	}
-
-	k8sClient, err := client.New(cfg, client.Options{})
-	if err != nil {
-		return nil, err
-	}
-
-	nodeList := &corev1.NodeList{}
-	if err := k8sClient.List(ctx, nodeList); err != nil {
-		return nil, err
-	}
-
-	return nodeList.Items, nil
 }
 
 func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []corev1.Node) error {
@@ -322,24 +285,17 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 
 	// Collect pod data from cluster
 	podsByNode := make(map[string][]corev1.Pod)
-	if nodes != nil && len(nodes) > 0 {
-		// Try to fetch pods from cluster
-		cfg, err := getKubeConfigForPlan()
-		if err == nil {
-			k8sClient, err := client.New(cfg, client.Options{})
-			if err == nil {
-				var podList corev1.PodList
-				if err := k8sClient.List(ctx, &podList); err == nil {
-					// Group pods by node
-					for _, pod := range podList.Items {
-						if pod.Spec.NodeName != "" {
-							podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], pod)
-						}
-					}
-				}
+	client := KubeClients.CRClient
+	var podList corev1.PodList
+	if err := client.List(ctx, &podList); err == nil {
+		// Group pods by node
+		for _, pod := range podList.Items {
+			if pod.Spec.NodeName != "" {
+				podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], pod)
 			}
 		}
 	}
+
 	fmt.Printf("✓ Collected pod data from cluster\n")
 
 	fmt.Println("\n=== Nodes Matching Selection Criteria ===")
@@ -698,7 +654,8 @@ func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nod
 		currentUsedHP := calculatePodResourceUsage(podsByNode[nodeName], "hugepages-2Mi")
 
 		if currentUsedCPU.MilliValue() > 0 || currentUsedMem.Value() > 0 || currentUsedHP.Value() > 0 {
-			containersStr += fmt.Sprintf("\033[38;5;52m<ALREADY_USED>\033[0m [CORES: %.1f, RAM: %.1fGi, HP: %.1fGi]\n",
+			containersStr += fmt.Sprintf("%s<ALREADY_USED>%s [CORES: %.1f, RAM: %.1fGi, HP: %.1fGi]\n",
+				colorUsed, colorReset,
 				float64(currentUsedCPU.MilliValue())/1000,
 				float64(currentUsedMem.Value())/(1024*1024*1024),
 				float64(currentUsedHP.Value())/(1024*1024*1024))
@@ -756,15 +713,6 @@ func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nod
 
 // colorizeContainerType returns a colored version of the container type name
 func colorizeContainerType(containerType string) string {
-	// ANSI color codes
-	const (
-		colorCompute = "\033[36m" // Cyan for compute
-		colorDrive   = "\033[35m" // Magenta for drive
-		colorS3      = "\033[33m" // Yellow for S3
-		colorNFS     = "\033[32m" // Green for NFS
-		colorEnvoy   = "\033[34m" // Blue for envoy
-		colorReset   = "\033[0m"  // Reset color
-	)
 
 	switch containerType {
 	case "compute":
@@ -777,104 +725,11 @@ func colorizeContainerType(containerType string) string {
 		return colorNFS + "NFS" + colorReset
 	case "envoy":
 		return colorEnvoy + "Envoy" + colorReset
+	case "client":
+		return colorClient + "Client" + colorReset // Reuse cyan color for client
 	default:
 		return containerType
 	}
-}
-
-// createResourceBar creates a visual bar showing USED + WEKA + FREE with colors for each container type
-func createResourceBar(usedPercent, wekaPercent float64, containerTypes []string) string {
-	const (
-		colorUsed  = "\033[38;5;52m" // Brown/Yellow for existing usage
-		colorFree  = "\033[90m"      // Dark gray for free
-		colorReset = "\033[0m"       // Reset color
-	)
-
-	barWidth := 50
-
-	// Calculate widths
-	usedWidth := int(float64(barWidth) * usedPercent / 100.0)
-	wekaWidth := int(float64(barWidth) * wekaPercent / 100.0)
-
-	if usedWidth < 0 {
-		usedWidth = 0
-	}
-	if wekaWidth < 0 {
-		wekaWidth = 0
-	}
-
-	// Ensure minimum width of 1 for visibility if there's any usage
-	if usedPercent > 0 && usedWidth == 0 {
-		usedWidth = 1
-	}
-	if wekaPercent > 0 && wekaWidth == 0 {
-		wekaWidth = 1
-	}
-
-	if usedWidth+wekaWidth > barWidth {
-		// Scale down if total exceeds bar width
-		total := usedWidth + wekaWidth
-		usedWidth = (usedWidth * barWidth) / total
-		wekaWidth = (wekaWidth * barWidth) / total
-	}
-
-	freeWidth := barWidth - usedWidth - wekaWidth
-	if freeWidth < 0 {
-		freeWidth = 0
-	}
-
-	// Build the bar
-	used := ""
-	if usedWidth > 0 {
-		used = colorUsed + strings.Repeat("█", usedWidth) + colorReset
-	}
-
-	// For Weka portion, use different colors for different container types
-	weka := ""
-	if len(containerTypes) > 0 {
-		// Calculate width per container type
-		widthPerType := wekaWidth / len(containerTypes)
-		remainder := wekaWidth % len(containerTypes)
-
-		for i, cType := range containerTypes {
-			width := widthPerType
-			if i == 0 {
-				width += remainder // Add remainder to first container
-			}
-
-			if width > 0 {
-				var color string
-				switch cType {
-				case "compute":
-					color = "\033[36m" // Cyan
-				case "drive":
-					color = "\033[35m" // Magenta
-				case "s3":
-					color = "\033[33m" // Yellow
-				case "nfs":
-					color = "\033[32m" // Green
-				case "envoy":
-					color = "\033[34m" // Blue (different from S3!)
-				default:
-					color = "\033[35m" // Default magenta
-				}
-
-				weka += color + strings.Repeat("█", width) + colorReset
-			}
-		}
-	} else {
-		// Default color if no container types
-		if wekaWidth > 0 {
-			weka = "\033[35m" + strings.Repeat("█", wekaWidth) + colorReset
-		}
-	}
-
-	free := ""
-	if freeWidth > 0 {
-		free = colorFree + strings.Repeat("░", freeWidth) + colorReset
-	}
-
-	return fmt.Sprintf("[%s%s%s]", used, weka, free)
 }
 
 func validateDrives(nodes []corev1.Node, driveContainers, numDrives int) error {
@@ -1358,7 +1213,7 @@ func printRoleNodeGrouping(grouping RoleNodeGrouping) {
 	for _, role := range []string{"compute", "drive", "s3", "nfs"} {
 		if roleGroup, exists := grouping.ByRole[role]; exists {
 			fmt.Printf("%s role:\n", strings.ToUpper(role[:1])+role[1:])
-			fmt.Printf("  Selector: %s\n", selectorToString(roleGroup.Selector))
+			fmt.Printf("  Selector: %s\n", SelectorToString(roleGroup.Selector))
 			fmt.Printf("  Target nodes: %d\n", len(roleGroup.Nodes))
 			if len(roleGroup.Nodes) > 0 {
 				nodeNames := make([]string, len(roleGroup.Nodes))
@@ -1411,19 +1266,6 @@ func printNodeList(indent string, nodeNames []string) {
 	}
 }
 
-// selectorToString converts a label selector map to a string representation
-func selectorToString(selector map[string]string) string {
-	if len(selector) == 0 {
-		return "(none)"
-	}
-	var parts []string
-	for key, value := range selector {
-		parts = append(parts, fmt.Sprintf("%s=%s", key, value))
-	}
-	sort.Strings(parts)
-	return strings.Join(parts, ",")
-}
-
 // getAllEligibleNodes returns all nodes that match any role selector or global selector
 func getAllEligibleNodes(grouping RoleNodeGrouping) []corev1.Node {
 	nodeMap := make(map[string]corev1.Node)
@@ -1463,7 +1305,7 @@ func printNodesPerSelector(grouping RoleNodeGrouping, globalSelector map[string]
 		sort.Slice(globalNodes, func(i, j int) bool {
 			return globalNodes[i].Name < globalNodes[j].Name
 		})
-		printNodeSelectorTable("Global NodeSelector", selectorToString(globalSelector), globalNodes, podsByNode)
+		printNodeSelectorTable("Global NodeSelector", SelectorToString(globalSelector), globalNodes, podsByNode)
 	}
 
 	// Print role-specific selector tables
@@ -1471,7 +1313,7 @@ func printNodesPerSelector(grouping RoleNodeGrouping, globalSelector map[string]
 		if roleGroup, exists := grouping.ByRole[role]; exists && len(roleGroup.Nodes) > 0 {
 			printNodeSelectorTable(
 				strings.ToUpper(role[:1])+role[1:]+" NodeSelector",
-				selectorToString(roleGroup.Selector),
+				SelectorToString(roleGroup.Selector),
 				roleGroup.Nodes,
 				podsByNode,
 			)
@@ -1528,87 +1370,6 @@ func printNodeSelectorTable(title, selector string, nodes []corev1.Node, podsByN
 	t.SetStyle(table.StyleLight)
 	fmt.Printf("\n%s: %s\n  Matching nodes: %d\n", title, selector, len(nodes))
 	t.Render()
-}
-
-// sortNodeNamesNumerically sorts node names using natural/numerical ordering
-// e.g., h1, h2, h10, h11 instead of h1, h10, h11, h2
-func sortNodeNamesNumerically(names []string) {
-	sort.Slice(names, func(i, j int) bool {
-		return compareNodeNames(names[i], names[j]) < 0
-	})
-}
-
-// compareNodeNames compares two node names numerically
-// Returns -1 if a < b, 0 if a == b, 1 if a > b
-func compareNodeNames(a, b string) int {
-	// Split each name into alternating text and number parts
-	aParts := splitNodeName(a)
-	bParts := splitNodeName(b)
-
-	// Compare each part
-	for i := 0; i < len(aParts) && i < len(bParts); i++ {
-		aPart := aParts[i]
-		bPart := bParts[i]
-
-		// Try to parse as numbers
-		aNum, aIsNum := tryParseInt(aPart)
-		bNum, bIsNum := tryParseInt(bPart)
-
-		if aIsNum && bIsNum {
-			// Both are numbers, compare numerically
-			if aNum < bNum {
-				return -1
-			} else if aNum > bNum {
-				return 1
-			}
-		} else if aIsNum != bIsNum {
-			// One is number, one is text - numbers come after text
-			if aIsNum {
-				return 1
-			}
-			return -1
-		} else {
-			// Both are text, compare alphabetically
-			if aPart < bPart {
-				return -1
-			} else if aPart > bPart {
-				return 1
-			}
-		}
-	}
-
-	// One is prefix of the other
-	if len(aParts) < len(bParts) {
-		return -1
-	} else if len(aParts) > len(bParts) {
-		return 1
-	}
-	return 0
-}
-
-// splitNodeName splits a node name into alternating text and number parts
-// e.g., "h5-15-a" -> ["h", "5", "-", "15", "-", "a"]
-func splitNodeName(name string) []string {
-	var parts []string
-	var current strings.Builder
-	isDigit := false
-
-	for _, r := range name {
-		if (r >= '0' && r <= '9') != isDigit {
-			if current.Len() > 0 {
-				parts = append(parts, current.String())
-				current.Reset()
-			}
-			isDigit = !isDigit
-		}
-		current.WriteRune(r)
-	}
-
-	if current.Len() > 0 {
-		parts = append(parts, current.String())
-	}
-
-	return parts
 }
 
 // tryParseInt tries to parse a string as an integer

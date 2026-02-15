@@ -62,19 +62,6 @@ func MatchesSelector(node v1.Node, selector map[string]string) bool {
 	return true
 }
 
-// ============================================================================
-// Resource Utilities
-// ============================================================================
-
-// FormatAsGi formats a Quantity as Gi with 1 decimal place
-func FormatAsGi(q *resource.Quantity) string {
-	// Get value in bytes
-	bytes := q.Value()
-	// Convert to Gi (1 Gi = 1024^3 bytes)
-	gi := float64(bytes) / (1024 * 1024 * 1024)
-	return fmt.Sprintf("%.1fGi", gi)
-}
-
 // QuantityOrZero returns the quantity value or zero if not found
 func QuantityOrZero(resourceList v1.ResourceList, resourceName v1.ResourceName) resource.Quantity {
 	val, ok := resourceList[resourceName]
@@ -84,45 +71,6 @@ func QuantityOrZero(resourceList v1.ResourceList, resourceName v1.ResourceName) 
 	return val
 }
 
-// ============================================================================
-// Pod & Resource Calculation
-// ============================================================================
-
-// CalculateNodeUsage calculates current resource usage on a node from pods
-func CalculateNodeUsage(nodeName string, podsByNode map[string][]v1.Pod) (cpuMillicores int64, memoryBytes int64, hugepagesBytes int64) {
-	podsOnNode := podsByNode[nodeName]
-	for _, pod := range podsOnNode {
-		// Skip non-running pods
-		if pod.Status.Phase == v1.PodSucceeded || pod.Status.Phase == v1.PodFailed {
-			continue
-		}
-
-		// Sum container requests
-		for _, container := range pod.Spec.Containers {
-			cpuReq := QuantityOrZero(container.Resources.Requests, v1.ResourceCPU)
-			memReq := QuantityOrZero(container.Resources.Requests, v1.ResourceMemory)
-			hpReq := QuantityOrZero(container.Resources.Requests, "hugepages-2Mi")
-
-			cpuMillicores += cpuReq.MilliValue()
-			memoryBytes += memReq.Value()
-			hugepagesBytes += hpReq.Value()
-		}
-	}
-	return
-}
-
-// ============================================================================
-// File Parsing
-// ============================================================================
-
-// ParseWekaResourceFile parses a Weka YAML file and returns the specified resource type
-// This is a generic function that works with any Weka resource type.
-// Example usage:
-//
-//	cluster, err := ParseWekaResourceFile[*wekaapi.WekaCluster](filePath)
-//	policy, err := ParseWekaResourceFile[*wekaapi.WekaPolicy](filePath)
-//	client, err := ParseWekaResourceFile[*wekaapi.WekaClient](filePath)
-//	container, err := ParseWekaResourceFile[*wekaapi.WekaContainer](filePath)
 func ParseWekaResourceFile[T runtime.Object](filePath string) (T, error) {
 	var result T
 
@@ -175,92 +123,6 @@ func GetFileBytes(filePath string) ([]byte, error) {
 	return os.ReadFile(filePath)
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-// RepeatChar repeats a character n times
-func RepeatChar(ch rune, count int) string {
-	result := ""
-	for i := 0; i < count; i++ {
-		result += string(ch)
-	}
-	return result
-}
-
-// SubtractQuantity returns total - used
-// This is a utility function for resource calculations, used by plan_clients
-// nolint:unused
-func SubtractQuantity(total, used resource.Quantity) resource.Quantity {
-	result := total.DeepCopy()
-	result.Sub(used)
-	if result.Sign() < 0 {
-		return resource.MustParse("0")
-	}
-	return result
-}
-
-// GetPercentage calculates what percentage 'used' is of 'total'
-// This is a utility function for resource calculations, used by plan_clients
-// nolint:unused
-func GetPercentage(used, total resource.Quantity) int {
-	if total.IsZero() {
-		return 0
-	}
-	pct := int((used.Value() * 100) / total.Value())
-	if pct > 100 {
-		pct = 100
-	}
-	return pct
-}
-
-// ============================================================================
-// Sorting Helpers
-// ============================================================================
-
-// SortNodeNames returns a sorted list of node names
-func SortNodeNames(nodes []v1.Node) []string {
-	var names []string
-	for _, node := range nodes {
-		names = append(names, node.Name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// SortStringKeys returns sorted keys from a string map
-func SortStringKeys(m map[string]interface{}) []string {
-	var keys []string
-	for key := range m {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// ============================================================================
-// Label & Selector Utilities
-// ============================================================================
-
-// MergeSelectorMaps merges selectors, with role-specific taking precedence
-func MergeSelectorMaps(global map[string]string, roleSpecific map[string]string) map[string]string {
-	// If role-specific selector exists, use it exclusively
-	if len(roleSpecific) > 0 {
-		merged := make(map[string]string)
-		for k, v := range roleSpecific {
-			merged[k] = v
-		}
-		return merged
-	}
-
-	// Otherwise fall back to global
-	merged := make(map[string]string)
-	for k, v := range global {
-		merged[k] = v
-	}
-	return merged
-}
-
 // SelectorToString converts selector map to a readable string
 func SelectorToString(selector map[string]string) string {
 	if len(selector) == 0 {
@@ -299,4 +161,177 @@ func calculatePodResourceUsage(pods []v1.Pod, resourceName v1.ResourceName) reso
 	}
 
 	return *total
+}
+
+// createResourceBar creates a visual bar showing USED + WEKA + FREE with colors for each container type
+func createResourceBar(usedPercent, wekaPercent float64, containerTypes []string) string {
+
+	barWidth := 50
+
+	// Calculate widths
+	usedWidth := int(float64(barWidth) * usedPercent / 100.0)
+	wekaWidth := int(float64(barWidth) * wekaPercent / 100.0)
+
+	if usedWidth < 0 {
+		usedWidth = 0
+	}
+	if wekaWidth < 0 {
+		wekaWidth = 0
+	}
+
+	// Ensure minimum width of 1 for visibility if there's any usage
+	if usedPercent > 0 && usedWidth == 0 {
+		usedWidth = 1
+	}
+	if wekaPercent > 0 && wekaWidth == 0 {
+		wekaWidth = 1
+	}
+
+	if usedWidth+wekaWidth > barWidth {
+		// Scale down if total exceeds bar width
+		total := usedWidth + wekaWidth
+		usedWidth = (usedWidth * barWidth) / total
+		wekaWidth = (wekaWidth * barWidth) / total
+	}
+
+	freeWidth := barWidth - usedWidth - wekaWidth
+	if freeWidth < 0 {
+		freeWidth = 0
+	}
+
+	// Build the bar
+	used := ""
+	if usedWidth > 0 {
+		used = colorUsed + strings.Repeat("█", usedWidth) + colorReset
+	}
+
+	// For Weka portion, use different colors for different container types
+	weka := ""
+	if len(containerTypes) > 0 {
+		// Calculate width per container type
+		widthPerType := wekaWidth / len(containerTypes)
+		remainder := wekaWidth % len(containerTypes)
+
+		for i, cType := range containerTypes {
+			width := widthPerType
+			if i == 0 {
+				width += remainder // Add remainder to first container
+			}
+
+			if width > 0 {
+				var color string
+				switch cType {
+				case "compute":
+					color = colorCompute
+				case "drive":
+					color = colorDrive
+				case "s3":
+					color = colorS3
+				case "nfs":
+					color = colorNFS
+				case "envoy":
+					color = colorEnvoy
+				case "client":
+					color = colorClient
+				default:
+					color = colorDefault
+				}
+
+				weka += color + strings.Repeat("█", width) + colorReset
+			}
+		}
+	} else {
+		// Default color if no container types
+		if wekaWidth > 0 {
+			weka = "\033[35m" + strings.Repeat("█", wekaWidth) + colorReset
+		}
+	}
+
+	free := ""
+	if freeWidth > 0 {
+		free = colorFree + strings.Repeat("░", freeWidth) + colorReset
+	}
+
+	return fmt.Sprintf("[%s%s%s]", used, weka, free)
+}
+
+// sortNodeNamesNumerically sorts node names using natural/numerical ordering
+// e.g., h1, h2, h10, h11 instead of h1, h10, h11, h2
+func sortNodeNamesNumerically(names []string) {
+	sort.Slice(names, func(i, j int) bool {
+		return compareNodeNames(names[i], names[j]) < 0
+	})
+}
+
+// compareNodeNames compares two node names numerically
+// Returns -1 if a < b, 0 if a == b, 1 if a > b
+func compareNodeNames(a, b string) int {
+	// Split each name into alternating text and number parts
+	aParts := splitNodeName(a)
+	bParts := splitNodeName(b)
+
+	// Compare each part
+	for i := 0; i < len(aParts) && i < len(bParts); i++ {
+		aPart := aParts[i]
+		bPart := bParts[i]
+
+		// Try to parse as numbers
+		aNum, aIsNum := tryParseInt(aPart)
+		bNum, bIsNum := tryParseInt(bPart)
+
+		if aIsNum && bIsNum {
+			// Both are numbers, compare numerically
+			if aNum < bNum {
+				return -1
+			} else if aNum > bNum {
+				return 1
+			}
+		} else if aIsNum != bIsNum {
+			// One is number, one is text - numbers come after text
+			if aIsNum {
+				return 1
+			}
+			return -1
+		} else {
+			// Both are text, compare alphabetically
+			if aPart < bPart {
+				return -1
+			} else if aPart > bPart {
+				return 1
+			}
+		}
+	}
+
+	// One is prefix of the other
+	if len(aParts) < len(bParts) {
+		return -1
+	} else if len(aParts) > len(bParts) {
+		return 1
+	}
+	return 0
+}
+
+// splitNodeName splits a node name into alternating text and number parts
+// e.g., "h5-15-a" -> ["h", "5", "-", "15", "-", "a"]
+func splitNodeName(name string) []string {
+	var parts []string
+	var current strings.Builder
+	isDigit := false
+
+	for _, r := range name {
+		if (r >= '0' && r <= '9') != isDigit {
+			if current.Len() > 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			}
+			isDigit = !isDigit
+		}
+		current.WriteRune(r)
+	}
+
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+
+	return parts
 }
