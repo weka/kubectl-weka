@@ -23,6 +23,8 @@ var planConvergedCmd = &cobra.Command{
 
 func init() {
 	planCmd.AddCommand(planConvergedCmd)
+	planConvergedCmd.SilenceUsage = true
+
 }
 
 // ConvergedNodeState tracks resource usage on a node through multiple allocation phases
@@ -89,6 +91,13 @@ func runPlanConverged(_ *cobra.Command, args []string) error {
 }
 
 func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster, client *wekaapi.WekaClient, nodes []corev1.Node) error {
+	// Validate that client's targetCluster matches the cluster
+	fmt.Println("\n=== Validating Client-Cluster Compatibility ===")
+	if err := validateClientClusterMatch(cluster, client); err != nil {
+		return fmt.Errorf("client-cluster compatibility validation failed: %w", err)
+	}
+	fmt.Printf("✓ Client targetCluster matches WekaCluster\n")
+
 	// Collect pod data
 	fmt.Println("\n=== Fetching Current Resource Usage ===")
 	podsByNode := make(map[string][]corev1.Pod)
@@ -433,6 +442,48 @@ func getActiveNodes(states map[string]*ConvergedNodeState) []string {
 	}
 	sort.Strings(active)
 	return active
+}
+
+// validateClientClusterMatch ensures the WekaClient's targetCluster matches the WekaCluster
+func validateClientClusterMatch(cluster *wekaapi.WekaCluster, client *wekaapi.WekaClient) error {
+	// Check if client has targetCluster specified
+	if client.Spec.TargetCluster.Name == "" {
+		// If targetCluster is not set, client might use joinIps instead
+		// This is valid, so we skip the check
+		return nil
+	}
+
+	// Validate namespace match
+	targetNamespace := client.Spec.TargetCluster.Namespace
+	if targetNamespace == "" {
+		// If namespace is not specified in targetCluster, it defaults to the client's namespace
+		targetNamespace = client.Namespace
+	}
+
+	if targetNamespace != cluster.Namespace {
+		return fmt.Errorf(
+			"client targetCluster namespace mismatch:\n"+
+				"  Client '%s/%s' targets cluster namespace: %s\n"+
+				"  But WekaCluster is in namespace: %s\n\n"+
+				"The client's targetCluster.namespace must match the WekaCluster namespace.",
+			client.Namespace, client.Name,
+			targetNamespace,
+			cluster.Namespace)
+	}
+
+	// Validate name match
+	if client.Spec.TargetCluster.Name != cluster.Name {
+		return fmt.Errorf(
+			"client targetCluster name mismatch:\n"+
+				"  Client '%s/%s' targets cluster: %s\n"+
+				"  But WekaCluster name is: %s\n\n"+
+				"The client's targetCluster.name must match the WekaCluster name.",
+			client.Namespace, client.Name,
+			client.Spec.TargetCluster.Name,
+			cluster.Name)
+	}
+
+	return nil
 }
 
 // validateContainerCompatibility checks that client, s3, and nfs containers don't coexist on the same node
