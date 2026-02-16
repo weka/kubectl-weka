@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/jedib0t/go-pretty/v6/table"
@@ -74,6 +75,20 @@ func runPlanConverged(_ *cobra.Command, args []string) error {
 	}
 	fmt.Printf("✓ Client: %s/%s\n", client.Namespace, client.Name)
 
+	// Validate YAML-only compatibility (before connecting to Kubernetes)
+	fmt.Println("\n=== Validating Client-Cluster Compatibility ===")
+	if err := validateClientClusterMatch(cluster, client); err != nil {
+		fmt.Printf("client-cluster compatibility validation failed: %v", err)
+		return err
+	}
+	fmt.Printf("✓ Client targetCluster matches WekaCluster\n")
+
+	// Validate image version compatibility
+	if err := validateImageVersionCompatibility(cluster, client); err != nil {
+		fmt.Println("❌ image version validation failed")
+		return err
+	}
+
 	// Get cluster nodes
 	fmt.Println("\n=== Connecting to Kubernetes Cluster ===")
 	nodes, err := GetClusterNodes(ctx)
@@ -91,12 +106,6 @@ func runPlanConverged(_ *cobra.Command, args []string) error {
 }
 
 func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster, client *wekaapi.WekaClient, nodes []corev1.Node) error {
-	// Validate that client's targetCluster matches the cluster
-	fmt.Println("\n=== Validating Client-Cluster Compatibility ===")
-	if err := validateClientClusterMatch(cluster, client); err != nil {
-		return fmt.Errorf("client-cluster compatibility validation failed: %w", err)
-	}
-	fmt.Printf("✓ Client targetCluster matches WekaCluster\n")
 
 	// Collect pod data
 	fmt.Println("\n=== Fetching Current Resource Usage ===")
@@ -484,6 +493,169 @@ func validateClientClusterMatch(cluster *wekaapi.WekaCluster, client *wekaapi.We
 	}
 
 	return nil
+}
+
+// validateImageVersionCompatibility checks that client and cluster images are compatible
+func validateImageVersionCompatibility(cluster *wekaapi.WekaCluster, client *wekaapi.WekaClient) error {
+	clusterImage := cluster.Spec.Image
+	clientImage := client.Spec.Image
+
+	// If images are identical, no validation needed
+	if clusterImage == clientImage {
+		fmt.Printf("✓ Client and cluster images match: %s\n", clusterImage)
+		return nil
+	}
+
+	// Parse versions from images
+	clusterVersion, err := parseWekaVersion(clusterImage)
+	if err != nil {
+		// If we can't parse, just warn about different images
+		fmt.Printf("⚠️  WARNING: Different images detected (cluster: %s, client: %s)\n", clusterImage, clientImage)
+		fmt.Printf("    Unable to parse versions for compatibility check\n")
+		return nil
+	}
+
+	clientVersion, err := parseWekaVersion(clientImage)
+	if err != nil {
+		// If we can't parse, just warn about different images
+		fmt.Printf("⚠️  WARNING: Different images detected (cluster: %s, client: %s)\n", clusterImage, clientImage)
+		fmt.Printf("    Unable to parse versions for compatibility check\n")
+		return nil
+	}
+
+	// Compare versions
+	if clusterVersion.Major != clientVersion.Major {
+		return fmt.Errorf(
+			"incompatible WEKA versions:\n"+
+				"  Cluster image: %s (version %s)\n"+
+				"  Client image:  %s (version %s)\n\n"+
+				"Major version mismatch detected (%d vs %d).\n"+
+				"Client and cluster must use the same major version.",
+			clusterImage, clusterVersion.String(),
+			clientImage, clientVersion.String(),
+			clusterVersion.Major, clientVersion.Major)
+	}
+
+	if clusterVersion.Minor != clientVersion.Minor {
+		return fmt.Errorf(
+			"incompatible WEKA versions:\n"+
+				"  Cluster image: %s (version %s)\n"+
+				"  Client image:  %s (version %s)\n\n"+
+				"Minor version mismatch detected (%d.%d vs %d.%d).\n"+
+				"Client and cluster must use the same minor version.",
+			clusterImage, clusterVersion.String(),
+			clientImage, clientVersion.String(),
+			clusterVersion.Major, clusterVersion.Minor,
+			clientVersion.Major, clientVersion.Minor)
+	}
+
+	// Same major.minor but different patch or build
+	// Client version must be equal to or older than cluster version
+	if clientVersion.Patch < clusterVersion.Patch ||
+		(clientVersion.Patch == clusterVersion.Patch && clientVersion.Build < clusterVersion.Build) {
+		// Client is older - this may work but warn
+		fmt.Printf("⚠️  WARNING: Client version is older than cluster version\n")
+		fmt.Printf("    Cluster: %s (version %s)\n", clusterImage, clusterVersion.String())
+		fmt.Printf("    Client:  %s (version %s)\n", clientImage, clientVersion.String())
+		fmt.Printf("    This may work but is not recommended. Consider upgrading client to match cluster version.\n")
+	} else if clientVersion.Patch > clusterVersion.Patch ||
+		(clientVersion.Patch == clusterVersion.Patch && clientVersion.Build > clusterVersion.Build) {
+		// Client is newer - not allowed
+		return fmt.Errorf(
+			"incompatible WEKA versions:\n"+
+				"  Cluster image: %s (version %s)\n"+
+				"  Client image:  %s (version %s)\n\n"+
+				"Client version is newer than cluster version.\n"+
+				"Client version must be equal to or older than the cluster version.\n"+
+				"Please downgrade client to %s or upgrade cluster to match client version.",
+			clusterImage, clusterVersion.String(),
+			clientImage, clientVersion.String(),
+			clusterVersion.String())
+	} else {
+		// Exact match
+		fmt.Printf("✓ Client and cluster versions compatible: %s\n", clusterVersion.String())
+	}
+
+	return nil
+}
+
+// WekaVersion represents a parsed WEKA version
+type WekaVersion struct {
+	Major int
+	Minor int
+	Patch int
+	Build int
+	Raw   string
+}
+
+func (v WekaVersion) String() string {
+	if v.Build > 0 {
+		return fmt.Sprintf("%d.%d.%d.%d", v.Major, v.Minor, v.Patch, v.Build)
+	}
+	return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
+}
+
+// parseWekaVersion extracts version from WEKA container image
+// Supports formats like:
+//   - quay.io/weka.io/weka-in-container:4.4.10.200
+//   - weka/weka:4.2.5
+//   - registry.example.com/weka:4.3.0.100
+//   - quay.io/weka.io/weka:5.1.0.461-qa-alpha
+func parseWekaVersion(image string) (*WekaVersion, error) {
+	// Extract version from image tag (everything after the last ':')
+	// Format: <registry>/<image>:<version>
+	colonIndex := strings.LastIndex(image, ":")
+	if colonIndex == -1 {
+		return nil, fmt.Errorf("image does not contain version tag: %s", image)
+	}
+
+	versionStr := image[colonIndex+1:]
+
+	// Remove any suffix after a dash (e.g., "-qa-alpha", "-rc1", "-dev")
+	// This allows us to parse "5.1.0.461-qa-alpha" as "5.1.0.461"
+	if dashIndex := strings.Index(versionStr, "-"); dashIndex != -1 {
+		versionStr = versionStr[:dashIndex]
+	}
+
+	// Parse version components (e.g., "4.4.10.200" or "4.2.5")
+	versionParts := strings.Split(versionStr, ".")
+	if len(versionParts) < 3 {
+		return nil, fmt.Errorf("invalid version format: %s (expected at least major.minor.patch)", versionStr)
+	}
+
+	version := &WekaVersion{Raw: versionStr}
+
+	// Parse major version
+	major, err := strconv.Atoi(versionParts[0])
+	if err != nil {
+		return nil, fmt.Errorf("invalid major version '%s': %w", versionParts[0], err)
+	}
+	version.Major = major
+
+	// Parse minor version
+	minor, err := strconv.Atoi(versionParts[1])
+	if err != nil {
+		return nil, fmt.Errorf("invalid minor version '%s': %w", versionParts[1], err)
+	}
+	version.Minor = minor
+
+	// Parse patch version
+	patch, err := strconv.Atoi(versionParts[2])
+	if err != nil {
+		return nil, fmt.Errorf("invalid patch version '%s': %w", versionParts[2], err)
+	}
+	version.Patch = patch
+
+	// Parse build version (optional)
+	if len(versionParts) >= 4 {
+		build, err := strconv.Atoi(versionParts[3])
+		if err != nil {
+			return nil, fmt.Errorf("invalid build version '%s': %w", versionParts[3], err)
+		}
+		version.Build = build
+	}
+
+	return version, nil
 }
 
 // validateContainerCompatibility checks that client, s3, and nfs containers don't coexist on the same node
