@@ -153,14 +153,20 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 		fmt.Println("\n=== Detailed Drive Validation ===")
 		fmt.Println("Scanning nodes for NVMe drives...")
 
-		// Run hostchecks on all eligible nodes to get drive information
+		opts := HostCheckOptions{
+			Verbose:             true,
+			CleanupInBackground: false,
+			Timeout:             2 * time.Minute,
+		}
+
 		var err error
-		hostChecksMap, err = RunHostChecksForDrives(ctx, allEligibleNodes)
+		hostChecksMap, err = GlobalHostCheckRegistry.GetHostChecksForNodes(
+			ctx, allEligibleNodes, opts)
 		if err != nil {
 			fmt.Printf("⚠️  WARNING: Could not scan drives on all nodes: %v\n", err)
 			fmt.Println("   Falling back to basic drive validation...")
 			hostChecksMap = nil
-		} else {
+		} else if hostChecksMap != nil {
 			// Use detailed validation with hostcheck data
 			if err := validateDrivesDetailed(hostChecksMap, allEligibleNodes,
 				*cluster.Spec.Dynamic.DriveContainers,
@@ -171,7 +177,6 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 	}
 
 	// Phase 1: Simulate cluster placement with drive awareness
-	// Phase 1: Simulate cluster placement WITH drive awareness
 	clusterPlacements, err := simulatePlacement(roleGrouping, clusterContainers, podsByNode, hostChecksMap)
 	if err != nil {
 		return fmt.Errorf("cluster placement failed: %w", err)

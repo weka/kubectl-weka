@@ -58,6 +58,7 @@ func Execute() {
 }
 
 func init() {
+	InitializeHostCheckRegistry()
 
 	rootCmd.AddCommand(getCmd)
 	rootCmd.AddCommand(preflightCmd)

@@ -44,6 +44,13 @@ func init() {
 
 }
 
+// AggregatedResult represents the combined results of hostcheck validation for a node
+type AggregatedResult struct {
+	NodeName      string
+	Status        string // "success", "partial", "failure", or "skipped"
+	ModuleResults map[string]*HostCheckResult
+}
+
 type checkStatus string
 
 const (

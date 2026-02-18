@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -122,25 +123,99 @@ func interpolateTemplate(template string, params map[string]interface{}) string 
 }
 
 // HostCheckRegistry manages all available hostcheck modules
-// This is part of the public API and will be used by plan_clients and other future commands
+// and command-specific validation configurations with caching
 type HostCheckRegistry struct {
+	// Modules: available validation modules
 	modules map[string]HostCheckModule
-	order   []string // Preserve registration order
-}
+	order   []string // Preserve module registration order
 
-// NewHostCheckRegistry creates a new registry
-// This is part of the public API for the modular hostcheck system
-// and will be used by plan_clients and other future commands.
-// nolint:unused
-func NewHostCheckRegistry() *HostCheckRegistry {
-	return &HostCheckRegistry{
-		modules: make(map[string]HostCheckModule),
-		order:   []string{},
+	// Command configs: which modules each command validates against
+	commands map[string]*CommandHostCheckConfig
+
+	// Cache: cached hostcheck results to avoid re-running
+	cache struct {
+		mu          sync.RWMutex
+		results     HostChecksMap
+		nodes       []string // Node names that were checked
+		lastUpdated time.Time
 	}
 }
 
-// Register adds a module to the registry
-func (r *HostCheckRegistry) Register(module HostCheckModule) error {
+// CommandHostCheckConfig defines which validation modules a command needs
+// HostChecks always collect the SAME complete data (HostChecksResult)
+// This config only specifies which subset of modules to validate against
+type CommandHostCheckConfig struct {
+	// Command name (e.g., "plan_cluster", "preflight_nodes")
+	CommandName string
+
+	// ModuleNames lists the validation modules to run on hostcheck results
+	// e.g., ["network", "nvme_drives", "cpu_memory"]
+	// The hostcheck data is always the same - only validation differs
+	ModuleNames []string
+}
+
+// NewHostCheckRegistry creates a new registry
+func NewHostCheckRegistry() *HostCheckRegistry {
+	registry := &HostCheckRegistry{
+		modules:  make(map[string]HostCheckModule),
+		order:    []string{},
+		commands: make(map[string]*CommandHostCheckConfig),
+	}
+	registry.cache.results = make(HostChecksMap)
+	return registry
+}
+
+// NewStandardModuleRegistry creates a registry with all standard modules and command configs
+func NewStandardModuleRegistry() *HostCheckRegistry {
+	registry := NewHostCheckRegistry()
+
+	// Register all standard validation modules
+	_ = registry.RegisterModule(&OSModule{})
+	_ = registry.RegisterModule(&WekaDirModule{})
+	_ = registry.RegisterModule(&XFSModule{})
+	_ = registry.RegisterModule(&WekaClientModule{})
+	_ = registry.RegisterModule(&NetworkModule{})
+	_ = registry.RegisterModule(&CPUModule{})
+	_ = registry.RegisterModule(&KernelModule{})
+	_ = registry.RegisterModule(&NVMeDrivesModule{})
+
+	// Register command validation configurations
+	_ = registry.RegisterCommand(&CommandHostCheckConfig{
+		CommandName: "preflight_nodes",
+		ModuleNames: []string{
+			"os", "kernel", "cpu_memory", "weka_dir",
+			"xfs", "weka_client", "network", "nvme_drives",
+		},
+	})
+
+	_ = registry.RegisterCommand(&CommandHostCheckConfig{
+		CommandName: "plan_cluster",
+		ModuleNames: []string{"network", "nvme_drives", "cpu_memory"},
+	})
+
+	_ = registry.RegisterCommand(&CommandHostCheckConfig{
+		CommandName: "plan_client",
+		ModuleNames: []string{"cpu_memory"},
+	})
+
+	_ = registry.RegisterCommand(&CommandHostCheckConfig{
+		CommandName: "plan_converged",
+		ModuleNames: []string{"network", "nvme_drives", "cpu_memory"},
+	})
+
+	return registry
+}
+
+// Global registry instance (modules + commands + cache)
+var GlobalHostCheckRegistry *HostCheckRegistry
+
+// InitializeHostCheckRegistry sets up the global registry
+func InitializeHostCheckRegistry() {
+	GlobalHostCheckRegistry = NewStandardModuleRegistry()
+}
+
+// RegisterModule adds a validation module to the registry
+func (r *HostCheckRegistry) RegisterModule(module HostCheckModule) error {
 	name := module.Name()
 	if _, exists := r.modules[name]; exists {
 		return fmt.Errorf("hostcheck module '%s' already registered", name)
@@ -149,6 +224,61 @@ func (r *HostCheckRegistry) Register(module HostCheckModule) error {
 	r.order = append(r.order, name)
 	return nil
 }
+
+// RegisterCommand adds a command's validation configuration
+func (r *HostCheckRegistry) RegisterCommand(config *CommandHostCheckConfig) error {
+	if config.CommandName == "" {
+		return fmt.Errorf("command name cannot be empty")
+	}
+
+	if _, exists := r.commands[config.CommandName]; exists {
+		return fmt.Errorf("command '%s' already registered", config.CommandName)
+	}
+
+	r.commands[config.CommandName] = config
+	return nil
+}
+
+// GetCommand retrieves a command's validation configuration
+func (r *HostCheckRegistry) GetCommand(commandName string) (*CommandHostCheckConfig, bool) {
+	config, exists := r.commands[commandName]
+	return config, exists
+}
+
+// GetRequiredModules returns the list of validation modules a command needs
+func (r *HostCheckRegistry) GetRequiredModules(commandName string) []string {
+	config, exists := r.commands[commandName]
+	if !exists {
+		return nil
+	}
+	return config.ModuleNames
+}
+
+// ============================================================================
+// Cache Management
+// ============================================================================
+
+// ClearCache clears the hostcheck results cache
+func (r *HostCheckRegistry) ClearCache() {
+	r.cache.mu.Lock()
+	defer r.cache.mu.Unlock()
+
+	r.cache.results = make(HostChecksMap)
+	r.cache.nodes = nil
+	r.cache.lastUpdated = time.Time{}
+}
+
+// GetCacheInfo returns information about the cache state
+func (r *HostCheckRegistry) GetCacheInfo() (nodeCount int, lastUpdated time.Time) {
+	r.cache.mu.RLock()
+	defer r.cache.mu.RUnlock()
+
+	return len(r.cache.results), r.cache.lastUpdated
+}
+
+// ============================================================================
+// Module Access
+// ============================================================================
 
 // Get retrieves a module by name
 func (r *HostCheckRegistry) Get(name string) (HostCheckModule, error) {
@@ -164,84 +294,6 @@ func (r *HostCheckRegistry) ListModules() []string {
 	result := make([]string, len(r.order))
 	copy(result, r.order)
 	return result
-}
-
-// ValidateAll runs all registered modules and returns results with error context
-func (r *HostCheckRegistry) ValidateAll(podOutput string, contextParams map[string]interface{}) (map[string]*HostCheckResult, error) {
-	results := make(map[string]*HostCheckResult)
-	var errors []string
-
-	for _, name := range r.order {
-		module := r.modules[name]
-		result, err := module.Validate(podOutput)
-
-		hcResult := &HostCheckResult{
-			ModuleName: name,
-			Params:     contextParams,
-		}
-
-		if err != nil {
-			hcResult.Status = "error"
-			hcResult.Error = err.Error()
-			hcResult.Data = nil
-			errors = append(errors, fmt.Sprintf("%s: %v", name, err))
-		} else {
-			hcResult.Status = "success"
-			hcResult.Data = result
-		}
-
-		results[name] = hcResult
-	}
-
-	var err error
-	if len(errors) > 0 {
-		err = fmt.Errorf("hostcheck errors: %s", strings.Join(errors, "; "))
-	}
-
-	return results, err
-}
-
-// ValidateSelected runs only specified modules with context parameters
-func (r *HostCheckRegistry) ValidateSelected(podOutput string, contextParams map[string]interface{}, moduleNames ...string) (map[string]*HostCheckResult, error) {
-	results := make(map[string]*HostCheckResult)
-	var errors []string
-
-	for _, name := range moduleNames {
-		module, err := r.Get(name)
-
-		hcResult := &HostCheckResult{
-			ModuleName: name,
-			Params:     contextParams,
-		}
-
-		if err != nil {
-			hcResult.Status = "error"
-			hcResult.Error = err.Error()
-			errors = append(errors, err.Error())
-			results[name] = hcResult
-			continue
-		}
-
-		result, err := module.Validate(podOutput)
-		if err != nil {
-			hcResult.Status = "error"
-			hcResult.Error = err.Error()
-			hcResult.Data = nil
-			errors = append(errors, fmt.Sprintf("%s: %v", name, err))
-		} else {
-			hcResult.Status = "success"
-			hcResult.Data = result
-		}
-
-		results[name] = hcResult
-	}
-
-	var err error
-	if len(errors) > 0 {
-		err = fmt.Errorf("hostcheck errors: %s", strings.Join(errors, "; "))
-	}
-
-	return results, err
 }
 
 // ============================================================================
@@ -292,66 +344,6 @@ func (m *HostCheckModuleStub) Validate(podOutput string) (interface{}, error) {
 }
 
 // ============================================================================
-// HostCheck Result Aggregator
+// Note: Aggregation functionality is now provided by the merged registry's
+// ValidateAll() and ValidateWithModules() methods
 // ============================================================================
-
-// HostCheckAggregator collects results from multiple modules into a structured format
-// This is part of the public API and will be used by plan_clients and other future commands
-type HostCheckAggregator struct {
-	registry  *HostCheckRegistry
-	timestamp time.Time
-	nodeName  string
-}
-
-// NewHostCheckAggregator creates a new aggregator
-// This is part of the public API for the modular hostcheck system
-// and will be used by plan_clients and other future commands.
-// nolint:unused
-func NewHostCheckAggregator(registry *HostCheckRegistry, nodeName string) *HostCheckAggregator {
-	return &HostCheckAggregator{
-		registry:  registry,
-		timestamp: time.Now(),
-		nodeName:  nodeName,
-	}
-}
-
-// AggregatedResult represents the combined results of all hostcheck modules
-type AggregatedResult struct {
-	NodeName      string
-	Timestamp     time.Time
-	ModuleResults map[string]*HostCheckResult `json:"modules"`
-	Errors        []string                    `json:"errors,omitempty"`
-	Status        string                      `json:"status"` // "success" or "partial" or "failure"
-}
-
-// Aggregate runs all modules and returns aggregated results
-func (a *HostCheckAggregator) Aggregate(podOutput string) *AggregatedResult {
-	contextParams := map[string]interface{}{
-		"NodeName": a.nodeName,
-	}
-	results, err := a.registry.ValidateAll(podOutput, contextParams)
-
-	status := "success"
-	var errors []string
-
-	if err != nil {
-		status = "partial"
-		errors = append(errors, err.Error())
-	}
-
-	// Check if any module failed
-	for _, result := range results {
-		if result.Status == "error" {
-			status = "partial"
-			break
-		}
-	}
-
-	return &AggregatedResult{
-		NodeName:      a.nodeName,
-		Timestamp:     a.timestamp,
-		ModuleResults: results,
-		Errors:        errors,
-		Status:        status,
-	}
-}

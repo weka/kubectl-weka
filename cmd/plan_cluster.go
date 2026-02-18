@@ -301,14 +301,21 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 		fmt.Println("\n=== Detailed Drive Validation ===")
 		fmt.Println("Scanning nodes for NVMe drives...")
 
-		// Run hostchecks on all eligible nodes to get drive information
+		// Get hostchecks using registry (cached execution)
+		opts := HostCheckOptions{
+			Verbose:             true,
+			CleanupInBackground: false,
+			Timeout:             2 * time.Minute,
+		}
+
 		var err error
-		hostChecksMap, err = RunHostChecksForDrives(ctx, allEligibleNodes)
+		hostChecksMap, err = GlobalHostCheckRegistry.GetHostChecksForNodes(
+			ctx, allEligibleNodes, opts)
 		if err != nil {
 			fmt.Printf("⚠️  WARNING: Could not scan drives on all nodes: %v\n", err)
 			fmt.Println("   Falling back to basic drive validation...")
 			hostChecksMap = nil
-		} else {
+		} else if hostChecksMap != nil {
 			// Use detailed validation with hostcheck data
 			if err := validateDrivesDetailed(hostChecksMap, allEligibleNodes, *config.DriveContainers, config.NumDrives); err != nil {
 				return err

@@ -236,26 +236,6 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 	return hostChecksMap, nil
 }
 
-// RunHostChecksForDrives is a convenience wrapper for running hostchecks specifically for drive validation
-// This function uses verbose output and foreground cleanup
-func RunHostChecksForDrives(ctx context.Context, nodes []corev1.Node) (HostChecksMap, error) {
-	opts := DefaultHostCheckOptions()
-	opts.Verbose = true
-	opts.CleanupInBackground = false
-
-	return RunHostChecks(ctx, nodes, opts)
-}
-
-// RunHostChecksSilent is a convenience wrapper for running hostchecks with minimal output
-// and background cleanup
-func RunHostChecksSilent(ctx context.Context, nodes []corev1.Node) (HostChecksMap, error) {
-	opts := DefaultHostCheckOptions()
-	opts.Verbose = false
-	opts.CleanupInBackground = true
-
-	return RunHostChecks(ctx, nodes, opts)
-}
-
 // GetNodeDrivesFromHostChecks extracts drive information from hostcheck results
 func (hcm HostChecksMap) GetNodeDrivesFromHostChecks(nodeName string) []NVMeDriveInfo {
 	if result, exists := hcm[nodeName]; exists {
@@ -370,4 +350,192 @@ func (hcm HostChecksMap) FormatSummary() string {
 	sb.WriteString(fmt.Sprintf("  - Nodes with HT enabled: %d/%d\n", htEnabledCount, len(hcm)))
 
 	return sb.String()
+}
+
+// ============================================================================
+// Registry Extension Methods - Cached Execution
+// ============================================================================
+
+// GetHostChecksForNodes executes hostchecks on the specified nodes (or returns cached results)
+// This method is smart about caching:
+// - If nodes are already checked, returns cached results immediately
+// - If new nodes are requested, runs hostchecks only on new nodes
+// - Thread-safe for concurrent access
+func (r *HostCheckRegistry) GetHostChecksForNodes(
+	ctx context.Context,
+	nodes []corev1.Node,
+	opts HostCheckOptions,
+) (HostChecksMap, error) {
+	if len(nodes) == 0 {
+		return make(HostChecksMap), nil
+	}
+
+	// Check cache first (read lock)
+	r.cache.mu.RLock()
+	cacheHit := true
+	var uncachedNodes []corev1.Node
+
+	// Build set of requested node names
+	requestedNodeNames := make(map[string]bool)
+	for _, node := range nodes {
+		requestedNodeNames[node.Name] = true
+
+		// Check if this node is in cache
+		if _, exists := r.cache.results[node.Name]; !exists {
+			cacheHit = false
+			uncachedNodes = append(uncachedNodes, node)
+		}
+	}
+
+	// If all nodes are cached, return immediately
+	if cacheHit {
+		// Build result map with only requested nodes
+		result := make(HostChecksMap)
+		for nodeName := range requestedNodeNames {
+			if cachedResult, exists := r.cache.results[nodeName]; exists {
+				result[nodeName] = cachedResult
+			}
+		}
+		r.cache.mu.RUnlock()
+
+		if opts.Verbose {
+			fmt.Printf("✓ Using cached hostcheck results for %d node(s)\n", len(result))
+		}
+		return result, nil
+	}
+	r.cache.mu.RUnlock()
+
+	// Cache miss - need to run hostchecks on uncached nodes
+	if opts.Verbose && len(uncachedNodes) < len(nodes) {
+		fmt.Printf("⚙️  Using cached results for %d node(s), running hostchecks on %d new node(s)\n",
+			len(nodes)-len(uncachedNodes), len(uncachedNodes))
+	}
+
+	// Run hostchecks on uncached nodes
+	newResults, err := RunHostChecks(ctx, uncachedNodes, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to run hostchecks: %w", err)
+	}
+
+	// Update cache (write lock)
+	r.cache.mu.Lock()
+	for nodeName, result := range newResults {
+		r.cache.results[nodeName] = result
+
+		// Add to tracked nodes if not already there
+		found := false
+		for _, n := range r.cache.nodes {
+			if n == nodeName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			r.cache.nodes = append(r.cache.nodes, nodeName)
+		}
+	}
+	r.cache.lastUpdated = time.Now()
+
+	// Build complete result map with both cached and new results
+	result := make(HostChecksMap)
+	for nodeName := range requestedNodeNames {
+		if cachedResult, exists := r.cache.results[nodeName]; exists {
+			result[nodeName] = cachedResult
+		}
+	}
+	r.cache.mu.Unlock()
+
+	return result, nil
+}
+
+// ValidateWithModules validates hostcheck results using specified modules
+// params can be used for parameterized validation (e.g., {"ethDevice": "bond0"})
+func (r *HostCheckRegistry) ValidateWithModules(
+	commandName string,
+	hostChecksMap HostChecksMap,
+	params map[string]interface{},
+) (map[string]map[string]*HostCheckResult, error) {
+
+	config, exists := r.GetCommand(commandName)
+	if !exists {
+		return nil, fmt.Errorf("command '%s' not registered", commandName)
+	}
+
+	// Results: map[nodeName]map[moduleName]*HostCheckResult
+	results := make(map[string]map[string]*HostCheckResult)
+
+	for nodeName, hostCheck := range hostChecksMap {
+		nodeResults := make(map[string]*HostCheckResult)
+
+		for _, moduleName := range config.ModuleNames {
+			module, err := r.Get(moduleName)
+			if err != nil {
+				// Module not found, skip
+				continue
+			}
+
+			// Convert hostcheck to JSON for module validation
+			hostCheckJSON, err := json.Marshal(hostCheck)
+			if err != nil {
+				nodeResults[moduleName] = &HostCheckResult{
+					ModuleName: moduleName,
+					Status:     "error",
+					Error:      fmt.Sprintf("Failed to marshal hostcheck: %v", err),
+				}
+				continue
+			}
+
+			// Use ValidateWithParams if parameters are provided
+			var result interface{}
+			if len(params) > 0 {
+				result, err = module.ValidateWithParams(string(hostCheckJSON), params)
+			} else {
+				result, err = module.Validate(string(hostCheckJSON))
+			}
+
+			if err != nil {
+				nodeResults[moduleName] = &HostCheckResult{
+					ModuleName: moduleName,
+					Status:     "error",
+					Error:      fmt.Sprintf("Validation error: %v", err),
+					Params:     map[string]interface{}{"NodeName": nodeName},
+				}
+			} else {
+				nodeResults[moduleName] = &HostCheckResult{
+					ModuleName: moduleName,
+					Status:     "success",
+					Data:       result,
+					Params:     map[string]interface{}{"NodeName": nodeName},
+				}
+			}
+		}
+
+		results[nodeName] = nodeResults
+	}
+
+	return results, nil
+}
+
+// ValidateAll runs all validation modules for a command on cached hostcheck data
+// params can be used for parameterized validation (e.g., {"ethDevice": "bond0"})
+func (r *HostCheckRegistry) ValidateAll(
+	ctx context.Context,
+	commandName string,
+	nodes []corev1.Node,
+	opts HostCheckOptions,
+	params map[string]interface{},
+) (map[string]map[string]*HostCheckResult, error) {
+
+	// Get hostchecks (cached or fresh)
+	hostChecksMap, err := r.GetHostChecksForNodes(ctx, nodes, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get hostchecks: %w", err)
+	}
+
+	if len(hostChecksMap) == 0 {
+		return make(map[string]map[string]*HostCheckResult), nil
+	}
+
+	// Validate using registered modules with params
+	return r.ValidateWithModules(commandName, hostChecksMap, params)
 }
