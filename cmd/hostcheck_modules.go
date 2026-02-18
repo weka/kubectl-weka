@@ -53,6 +53,11 @@ func (m *OSModule) Validate(podOutput string) (interface{}, error) {
 	}, nil
 }
 
+// ValidateWithParams implements HostCheckModule - params not used for OS validation
+func (m *OSModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+	return m.Validate(podOutput)
+}
+
 // WekaDirModule validates Weka directory availability
 type WekaDirModule struct{}
 
@@ -104,6 +109,11 @@ func (m *WekaDirModule) Validate(podOutput string) (interface{}, error) {
 	}, nil
 }
 
+// ValidateWithParams implements HostCheckModule - params not used for Weka directory validation
+func (m *WekaDirModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+	return m.Validate(podOutput)
+}
+
 // XFSModule validates XFS tools installation
 type XFSModule struct{}
 
@@ -153,6 +163,11 @@ func (m *XFSModule) Validate(podOutput string) (interface{}, error) {
 	}, nil
 }
 
+// ValidateWithParams implements HostCheckModule - params not used for XFS validation
+func (m *XFSModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+	return m.Validate(podOutput)
+}
+
 // WekaClientModule validates Weka client cleanup
 type WekaClientModule struct{}
 
@@ -200,6 +215,11 @@ func (m *WekaClientModule) Validate(podOutput string) (interface{}, error) {
 		"clean":  hc.WekaClientClean,
 		"detail": hc.WekaClientDetail,
 	}, nil
+}
+
+// ValidateWithParams implements HostCheckModule - params not used for Weka client validation
+func (m *WekaClientModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+	return m.Validate(podOutput)
 }
 
 // NetworkModule validates network configuration (Mellanox, bonds, LACP)
@@ -258,6 +278,69 @@ func (m *NetworkModule) Validate(podOutput string) (interface{}, error) {
 	}, nil
 }
 
+// ValidateWithParams implements HostCheckModule with ethDevice parameter support
+// Params: {"ethDevice": "bond0"} to validate a specific interface
+func (m *NetworkModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+	var hc HostChecksResult
+	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
+		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
+	}
+
+	// If no ethDevice parameter provided, fall back to generic validation
+	ethDevice, hasEthDevice := params["ethDevice"].(string)
+	if !hasEthDevice || ethDevice == "" {
+		return m.Validate(podOutput)
+	}
+
+	// Validate specific ethDevice
+	status := "ok"
+	found := false
+	hasLACP := false
+	var issues []string
+
+	// Check if ethDevice is a regular Mellanox interface
+	for _, iface := range hc.MlxIfaces {
+		if iface.Name == ethDevice {
+			found = true
+			break
+		}
+	}
+
+	// Check if ethDevice is a bond
+	if !found {
+		for _, bond := range hc.MlxBonds {
+			if bond.Name == ethDevice {
+				found = true
+				// Validate LACP if this is a bond
+				if !hc.BondLACPOk {
+					status = "error"
+					issues = append(issues, fmt.Sprintf("Bond not using LACP: %s", hc.BondLACPDetail))
+				} else {
+					hasLACP = true
+				}
+				break
+			}
+		}
+	}
+
+	if !found {
+		status = "error"
+		issues = append(issues, fmt.Sprintf("Interface '%s' not found", ethDevice))
+	}
+
+	return map[string]interface{}{
+		"status":           status,
+		"ethDevice":        ethDevice,
+		"found":            found,
+		"has_lacp":         hasLACP,
+		"issues":           issues,
+		"mlx_ifaces":       hc.MlxIfaces,
+		"mlx_bonds":        hc.MlxBonds,
+		"bond_lacp_ok":     hc.BondLACPOk,
+		"bond_lacp_detail": hc.BondLACPDetail,
+	}, nil
+}
+
 // CPUModule validates CPU and memory resources
 type CPUModule struct{}
 
@@ -307,6 +390,11 @@ func (m *CPUModule) Validate(podOutput string) (interface{}, error) {
 	}, nil
 }
 
+// ValidateWithParams implements HostCheckModule - params not used for CPU validation
+func (m *CPUModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+	return m.Validate(podOutput)
+}
+
 type KernelModule struct{}
 
 func (m *KernelModule) Name() string {
@@ -354,6 +442,11 @@ func (m *KernelModule) Validate(podOutput string) (interface{}, error) {
 	}, nil
 }
 
+// ValidateWithParams implements HostCheckModule - params not used for kernel validation
+func (m *KernelModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+	return m.Validate(podOutput)
+}
+
 // NVMeDrivesModule validates NVMe drive availability and status
 type NVMeDrivesModule struct{}
 
@@ -398,4 +491,9 @@ func (m *NVMeDrivesModule) Validate(podOutput string) (interface{}, error) {
 		"drive_detail": hc.NVMeDriveDetail,
 		"detail":       hc.NVMeDriveDetail,
 	}, nil
+}
+
+// ValidateWithParams implements HostCheckModule - params not used for NVMe drives validation
+func (m *NVMeDrivesModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+	return m.Validate(podOutput)
 }

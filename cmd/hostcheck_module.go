@@ -19,6 +19,12 @@ type HostCheckModule interface {
 	// Receives the pod output and should extract/parse what it needs
 	Validate(podOutput string) (interface{}, error)
 
+	// ValidateWithParams performs parameterized validation
+	// Allows passing custom parameters (e.g., ethDevice for network validation)
+	// Returns same result format as Validate
+	// Default implementation should call Validate and ignore params
+	ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error)
+
 	// Description returns a human-readable description of what this module checks
 	Description() string
 
