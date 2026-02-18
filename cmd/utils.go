@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
+	"math/rand"
 	"sort"
 	"strconv"
 	"strings"
@@ -256,4 +257,14 @@ func capitalizeFirst(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// randomString generates a random string of specified length
+func randomString(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[rand.Intn(len(charset))]
+	}
+	return string(b)
 }

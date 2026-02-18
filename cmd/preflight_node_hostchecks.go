@@ -642,7 +642,8 @@ type nodeHostResult struct {
 func scanHostChecksByPod(ctx context.Context, clients *K8sClients, nodes []corev1.Node) (<-chan nodeHostResult, *sync.WaitGroup) {
 	resultChan := make(chan nodeHostResult, len(nodes))
 
-	ns := "default"
+	// Create temporary namespace for hostcheck pods
+	ns := fmt.Sprintf("kubectl-weka-hostchk-%s", randomString(8))
 	labelKey := "app"
 	labelVal := "weka-preflight-hostchecks"
 
@@ -655,23 +656,63 @@ func scanHostChecksByPod(ctx context.Context, clients *K8sClients, nodes []corev
 
 	pods := make([]podRef, 0, len(nodes))
 
-	// Background cleanup tracker - pods are deleted as soon as logs are collected
+	// Background cleanup - entire namespace will be deleted at the end
 	var cleanupWg sync.WaitGroup
-	cleanupChan := make(chan podRef, len(nodes))
 
-	// Start background cleanup goroutine that processes pods as they complete
+	fmt.Printf("Creating temporary namespace: %s\n", ns)
+
+	// Create namespace
+	namespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "kubectl-weka",
+				"app.kubernetes.io/component":  "hostcheck",
+			},
+		},
+	}
+
+	_, err := clients.Clientset.CoreV1().Namespaces().Create(ctx, namespace, metav1.CreateOptions{})
+	if err != nil {
+		fmt.Printf("Error: Failed to create temporary namespace: %v\n", err)
+		close(resultChan)
+		return resultChan, &cleanupWg
+	}
+
+	// Ensure namespace cleanup even on error or Ctrl-C
+	cleanupWg.Add(1)
 	go func() {
-		eg, _ := errgroupWithLimit(context.Background(), 10)
-		for pr := range cleanupChan {
-			pr := pr
-			cleanupWg.Add(1)
-			eg.Go(func() error {
-				defer cleanupWg.Done()
-				_ = clients.Clientset.CoreV1().Pods(ns).Delete(context.Background(), pr.podName, metav1.DeleteOptions{})
-				return nil
-			})
+		defer cleanupWg.Done()
+
+		// Wait for all results to be processed first
+		<-ctx.Done()
+
+		// Then cleanup namespace
+		cleanupCtx := context.Background() // Use fresh context for cleanup
+		fmt.Printf("\nCleaning up temporary namespace: %s\n", ns)
+
+		err := clients.Clientset.CoreV1().Namespaces().Delete(cleanupCtx, ns, metav1.DeleteOptions{})
+		if err != nil {
+			fmt.Printf("  Warning: Failed to delete namespace: %v\n", err)
+			return
 		}
-		_ = eg.Wait()
+
+		// Wait for namespace deletion (with timeout)
+		fmt.Printf("  Waiting for namespace deletion...")
+		deleteTimeout := 30 * time.Second
+		deleteDeadline := time.Now().Add(deleteTimeout)
+
+		for time.Now().Before(deleteDeadline) {
+			_, err := clients.Clientset.CoreV1().Namespaces().Get(cleanupCtx, ns, metav1.GetOptions{})
+			if err != nil {
+				// Namespace not found = deleted
+				fmt.Printf(" ✓ Done\n")
+				return
+			}
+			time.Sleep(3 * time.Second)
+		}
+
+		fmt.Printf(" (timeout reached, namespace may still be deleting in background)\n")
 	}()
 
 	fmt.Println("Creating pods to verify node information...")
@@ -702,7 +743,7 @@ func scanHostChecksByPod(ctx context.Context, clients *K8sClients, nodes []corev
 				continue
 			}
 
-			podName := fmt.Sprintf("weka-preflight-hostchk-%s-%s", sanitizeName(nodeName), rand.String(5))
+			podName := fmt.Sprintf("hostchk-%s-%s", sanitizeName(nodeName), rand.String(5))
 
 			eg.Go(func() error {
 				p := makeHostChecksPod(ns, nodeName, podName, labelKey, labelVal)
@@ -743,10 +784,7 @@ func scanHostChecksByPod(ctx context.Context, clients *K8sClients, nodes []corev
 			eg2.Go(func() error {
 				res, err := waitHostChecksResult(egCtx2, ns, pr.podName, pr.node)
 
-				// Immediately queue pod for deletion (happens in background)
-				cleanupChan <- pr
-
-				// Send result immediately
+				// Send result immediately (no per-pod cleanup needed - namespace will be deleted)
 				if err != nil {
 					if se, ok := err.(SkipHostCheckError); ok {
 						resultChan <- nodeHostResult{
@@ -789,9 +827,8 @@ func scanHostChecksByPod(ctx context.Context, clients *K8sClients, nodes []corev
 
 		_ = eg2.Wait()
 
-		// Close channels only AFTER both phases complete
+		// Close result channel after all results sent
 		close(resultChan)
-		close(cleanupChan)
 	}()
 
 	return resultChan, &cleanupWg
