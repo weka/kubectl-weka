@@ -13,9 +13,6 @@ import (
 	"github.com/spf13/cobra"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
@@ -88,20 +85,6 @@ func runPlanCluster(_ *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-func getKubeConfigForPlan() (*rest.Config, error) {
-	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(),
-		&clientcmd.ConfigOverrides{},
-	)
-
-	restCfg, err := kubeCfg.ClientConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	return restCfg, nil
 }
 
 func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []corev1.Node) error {
@@ -241,28 +224,34 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 
 	printNodeRequirements(nodeReqs)
 
-	fmt.Println("\n=== Sanity Checks ===")
+	fmt.Println("\n=== Cluster Definition Sanity Checks ===")
 
-	// Sanity check 1: Validate network configuration
+	// Sanity check 1: Validate hot spare recommendation
+	if cluster.Spec.HotSpare == 0 {
+		fmt.Println("⚠️  WARNING: Hot spare is set to 0. At least 1 hot spare is recommended for production clusters to handle drive failures")
+		// This is a warning, not a failure
+	} else {
+		fmt.Printf("✓ Hot spare configured: %d\n", cluster.Spec.HotSpare)
+	}
+
+	// Sanity check 2: Validate drivers distribution service
+	if cluster.Spec.DriversDistService != "" {
+		if err := validateDriversDistService(cluster.Spec.DriversDistService); err != nil {
+			fmt.Printf("⚠️  WARNING: %v\n", err)
+		} else {
+			fmt.Printf("✓ DriversDistService configured: %s\n", cluster.Spec.DriversDistService)
+		}
+	}
+
+	// Sanity check 3: Validate network configuration
 	if cluster.Spec.Network.EthDevice != "" {
 		if err := validateNetworkConfiguration(&cluster.Spec.Network); err != nil {
+			fmt.Printf("❌ Network configuration validation failed: %v\n", err)
 			return fmt.Errorf("network configuration validation failed: %w", err)
 		}
 	}
 
-	// Sanity check 2: Validate hot spare recommendation
-	if cluster.Spec.HotSpare == 0 {
-		fmt.Println("⚠️  WARNING: hotSpare is 0. At least 1 hot spare is recommended for fault tolerance")
-	}
-
-	// Sanity check 3: Validate drivers distribution service
-	if cluster.Spec.DriversDistService != "" {
-		if err := validateDriversDistService(cluster.Spec.DriversDistService); err != nil {
-			fmt.Printf("⚠️  WARNING: %v\n", err)
-		}
-	}
-
-	fmt.Println("\nAll sanity checks passed!")
+	fmt.Println("\n✅ Cluster definition validation passed")
 
 	// If nodes were provided, continue with cluster validation and placement
 	if nodes == nil || len(nodes) == 0 {
@@ -749,11 +738,12 @@ func validateDrives(nodes []corev1.Node, driveContainers, numDrives int) error {
 	}
 
 	if totalDrivesAvailable == 0 {
-		return fmt.Errorf("No NVME drives suitable for WEKA deployment are found in cluster. Make sure that drives were signed by applying DriveSign WekaPolicy first")
+		return fmt.Errorf("❌ No NVMe drives suitable for WEKA deployment found in cluster.\n" +
+			"   Make sure that drives were signed by applying DriveSign WekaPolicy first")
 	}
 
 	if totalDrivesAvailable < totalDrivesNeeded {
-		return fmt.Errorf("insufficient drives: need %d drives (%d containers × %d drives), but only %d available",
+		return fmt.Errorf("❌ Insufficient drives: need %d drives (%d containers × %d drives/container), but only %d available",
 			totalDrivesNeeded, driveContainers, numDrives, totalDrivesAvailable)
 	}
 
@@ -874,7 +864,7 @@ func printContainerRequirements(containers []ContainerRequirements) {
 
 	for _, c := range containers {
 		t.AppendRow(table.Row{
-			c.Type,
+			capitalizeFirst(c.Type),
 			c.Count,
 			c.Cores,
 			c.CoresNoHT,
@@ -1212,8 +1202,8 @@ func printRoleNodeGrouping(grouping RoleNodeGrouping) {
 
 	for _, role := range []string{"compute", "drive", "s3", "nfs"} {
 		if roleGroup, exists := grouping.ByRole[role]; exists {
-			fmt.Printf("%s role:\n", strings.ToUpper(role[:1])+role[1:])
-			fmt.Printf("  Selector: %s\n", SelectorToString(roleGroup.Selector))
+			fmt.Printf("%s role:\n", capitalizeFirst(role))
+			fmt.Printf("  Selector: %s\n", formatSelector(roleGroup.Selector))
 			fmt.Printf("  Target nodes: %d\n", len(roleGroup.Nodes))
 			if len(roleGroup.Nodes) > 0 {
 				nodeNames := make([]string, len(roleGroup.Nodes))
@@ -1305,15 +1295,15 @@ func printNodesPerSelector(grouping RoleNodeGrouping, globalSelector map[string]
 		sort.Slice(globalNodes, func(i, j int) bool {
 			return globalNodes[i].Name < globalNodes[j].Name
 		})
-		printNodeSelectorTable("Global NodeSelector", SelectorToString(globalSelector), globalNodes, podsByNode)
+		printNodeSelectorTable("Global NodeSelector", formatSelector(globalSelector), globalNodes, podsByNode)
 	}
 
 	// Print role-specific selector tables
 	for _, role := range []string{"compute", "drive", "s3", "nfs"} {
 		if roleGroup, exists := grouping.ByRole[role]; exists && len(roleGroup.Nodes) > 0 {
 			printNodeSelectorTable(
-				strings.ToUpper(role[:1])+role[1:]+" NodeSelector",
-				SelectorToString(roleGroup.Selector),
+				capitalizeFirst(role)+" NodeSelector",
+				formatSelector(roleGroup.Selector),
 				roleGroup.Nodes,
 				podsByNode,
 			)
@@ -1348,22 +1338,22 @@ func printNodeSelectorTable(title, selector string, nodes []corev1.Node, podsByN
 		usedMem := calculatePodResourceUsage(podsByNode[node.Name], corev1.ResourceMemory)
 		usedHP := calculatePodResourceUsage(podsByNode[node.Name], "hugepages-2Mi")
 
-		// Calculate free resources
-		freeCPU := resource.NewMilliQuantity(allocCPU.MilliValue()-usedCPU.MilliValue(), resource.DecimalSI)
-		freeMem := resource.NewQuantity(allocMem.Value()-usedMem.Value(), resource.BinarySI)
-		freeHP := resource.NewQuantity(allocHP.Value()-usedHP.Value(), resource.BinarySI)
+		// Calculate free resources (direct arithmetic, no need for Quantity objects)
+		freeCPU := allocCPU.MilliValue() - usedCPU.MilliValue()
+		freeMem := allocMem.Value() - usedMem.Value()
+		freeHP := allocHP.Value() - usedHP.Value()
 
 		t.AppendRow(table.Row{
 			node.Name,
 			fmt.Sprintf("%.1f", float64(allocCPU.MilliValue())/1000),
 			fmt.Sprintf("%.1f", float64(usedCPU.MilliValue())/1000),
-			fmt.Sprintf("%.1f", float64(freeCPU.MilliValue())/1000),
-			fmt.Sprintf("%.1fGi", float64(allocMem.Value())/(1024*1024*1024)),
-			fmt.Sprintf("%.1fGi", float64(usedMem.Value())/(1024*1024*1024)),
-			fmt.Sprintf("%.1fGi", float64(freeMem.Value())/(1024*1024*1024)),
-			fmt.Sprintf("%.1fGi", float64(allocHP.Value())/(1024*1024*1024)),
-			fmt.Sprintf("%.1fGi", float64(usedHP.Value())/(1024*1024*1024)),
-			fmt.Sprintf("%.1fGi", float64(freeHP.Value())/(1024*1024*1024)),
+			fmt.Sprintf("%.1f", float64(freeCPU)/1000),
+			fmt.Sprintf("%.1f Gi", float64(allocMem.Value())/(1024*1024*1024)),
+			fmt.Sprintf("%.1f Gi", float64(usedMem.Value())/(1024*1024*1024)),
+			fmt.Sprintf("%.1f Gi", float64(freeMem)/(1024*1024*1024)),
+			fmt.Sprintf("%.1f Gi", float64(allocHP.Value())/(1024*1024*1024)),
+			fmt.Sprintf("%.1f Gi", float64(usedHP.Value())/(1024*1024*1024)),
+			fmt.Sprintf("%.1f Gi", float64(freeHP)/(1024*1024*1024)),
 		})
 	}
 

@@ -3,12 +3,14 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-	"os"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var (
@@ -82,7 +84,7 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 
 	// Validate client configuration
 	fmt.Println("\n=== Validating Client Configuration ===")
-	if err := validateClientConfig(client); err != nil {
+	if err := validateClientConfig(ctx, client); err != nil {
 		return err
 	}
 	fmt.Println("✓ Configuration valid")
@@ -118,7 +120,7 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 	// Find matching nodes
 	fmt.Println("\n=== Finding Matching Nodes ===")
 	matchingNodes := FilterNodesBySelector(nodes, client.Spec.NodeSelector)
-	fmt.Printf("Found %d nodes matching selector: %s\n", len(matchingNodes), SelectorToString(client.Spec.NodeSelector))
+	fmt.Printf("Found %d nodes matching selector: %s\n", len(matchingNodes), formatSelector(client.Spec.NodeSelector))
 
 	if len(matchingNodes) == 0 {
 		fmt.Println("⚠️  WARNING: No nodes match the nodeSelector")
@@ -148,38 +150,104 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 }
 
 func printClientSpec(client *wekaapi.WekaClient) {
-	fmt.Printf("Name:               %s\n", client.Name)
-	fmt.Printf("Namespace:          %s\n", client.Namespace)
-	fmt.Printf("Image:              %s\n", client.Spec.Image)
-	fmt.Printf("Cores Number:       %d\n", client.Spec.CoresNumber)
-	fmt.Printf("CPU Policy:         %s\n", client.Spec.CpuPolicy)
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.AppendHeader(table.Row{"PROPERTY", "VALUE"})
+
+	t.AppendRow(table.Row{"Name", client.Name})
+	t.AppendRow(table.Row{"Namespace", client.Namespace})
+	t.AppendRow(table.Row{"Image", client.Spec.Image})
+	t.AppendRow(table.Row{"Cores Number", client.Spec.CoresNumber})
+	t.AppendRow(table.Row{"CPU Policy", client.Spec.CpuPolicy})
 
 	if client.Spec.TargetCluster.Name != "" {
-		fmt.Printf("Target Cluster:     %s/%s\n", client.Spec.TargetCluster.Namespace, client.Spec.TargetCluster.Name)
+		targetNs := client.Spec.TargetCluster.Namespace
+		if targetNs == "" {
+			targetNs = client.Namespace // Default to client's namespace
+		}
+		t.AppendRow(table.Row{"Target Cluster", fmt.Sprintf("%s/%s", targetNs, client.Spec.TargetCluster.Name)})
 	} else if len(client.Spec.JoinIps) > 0 {
-		fmt.Printf("Join IPs:           %v\n", client.Spec.JoinIps)
+		t.AppendRow(table.Row{"Join IPs", fmt.Sprintf("%v", client.Spec.JoinIps)})
 	}
 
-	fmt.Printf("Node Selector:      %v\n", client.Spec.NodeSelector)
+	t.AppendRow(table.Row{"Node Selector", formatSelector(client.Spec.NodeSelector)})
+
+	t.SetStyle(table.StyleLight)
+	t.Render()
 }
 
-func validateClientConfig(client *wekaapi.WekaClient) error {
-	// Validate that either targetCluster or joinIps is set
-	if client.Spec.TargetCluster.Name == "" && len(client.Spec.JoinIps) == 0 {
-		return fmt.Errorf("either targetCluster or joinIps must be specified")
-	}
+func validateClientConfig(ctx context.Context, client *wekaapi.WekaClient) error {
+	var errors []string
 
 	// Validate coresNum is set
 	if client.Spec.CoresNumber <= 0 {
-		return fmt.Errorf("coresNum must be greater than 0")
+		errors = append(errors, "❌ CoresNumber must be greater than 0")
 	}
 
 	// Validate image is set
 	if client.Spec.Image == "" {
-		return fmt.Errorf("image must be specified")
+		errors = append(errors, "❌ Image must be specified")
+	}
+
+	// Validate cluster connection configuration
+	if client.Spec.TargetCluster.Name != "" {
+		// TargetCluster is specified - validate it exists in Kubernetes
+		if err := validateTargetClusterExists(ctx, client); err != nil {
+			// Cluster doesn't exist - issue warning
+			fmt.Printf("⚠️  WARNING: Target cluster '%s/%s' does not exist in Kubernetes.\n",
+				getTargetClusterNamespace(client), client.Spec.TargetCluster.Name)
+			fmt.Println("   Are you sure? If you plan to deploy a cluster on same Kubernetes cluster,")
+			fmt.Println("   it is recommended to run 'kubectl weka plan converged' instead.")
+		} else {
+			// Cluster exists - success
+			fmt.Printf("✓ Target cluster '%s/%s' found in Kubernetes\n",
+				getTargetClusterNamespace(client), client.Spec.TargetCluster.Name)
+		}
+	} else {
+		// TargetCluster is empty - validate joinIps/joinIpPorts is specified
+		if len(client.Spec.JoinIps) == 0 {
+			errors = append(errors, "❌ Client is not configured to connect to WEKA cluster: either targetCluster or joinIpPorts must be specified")
+		} else {
+			// JoinIps/JoinIpPorts specified - external cluster
+			fmt.Println("⚠️  WARNING: Client is configured to connect to external WEKA cluster")
+			if len(client.Spec.JoinIps) > 0 {
+				fmt.Printf("   joinIpPorts: %v\n", client.Spec.JoinIps)
+			}
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("client configuration validation failed:\n%s", strings.Join(errors, "\n"))
 	}
 
 	return nil
+}
+
+// validateTargetClusterExists checks if the target WekaCluster exists in Kubernetes
+func validateTargetClusterExists(ctx context.Context, client *wekaapi.WekaClient) error {
+	crClient := KubeClients.CRClient
+
+	targetNamespace := getTargetClusterNamespace(client)
+
+	var cluster wekaapi.WekaCluster
+	clusterKey := ctrlclient.ObjectKey{
+		Namespace: targetNamespace,
+		Name:      client.Spec.TargetCluster.Name,
+	}
+
+	if err := crClient.Get(ctx, clusterKey, &cluster); err != nil {
+		return err // Cluster doesn't exist
+	}
+
+	return nil // Cluster exists
+}
+
+// getTargetClusterNamespace returns the namespace of the target cluster (defaults to client's namespace)
+func getTargetClusterNamespace(client *wekaapi.WekaClient) string {
+	if client.Spec.TargetCluster.Namespace != "" {
+		return client.Spec.TargetCluster.Namespace
+	}
+	return client.Namespace
 }
 
 func calculateClientContainerRequirements(client *wekaapi.WekaClient) ClientContainerRequirements {
@@ -219,12 +287,17 @@ func calculateClientContainerRequirements(client *wekaapi.WekaClient) ClientCont
 }
 
 func printClientContainerRequirements(req ClientContainerRequirements) {
-	fmt.Printf("Per Container Requirements:\n")
-	fmt.Printf("  CPU Cores (with HT):    %d\n", req.Cores)
-	fmt.Printf("  CPU Cores (no HT):      %d\n", req.CoresNoHT)
-	fmt.Printf("  Hugepages:              %dMi\n", req.Hugepages)
-	fmt.Printf("  Memory:                 %.2fGi\n", float64(req.Memory)/float64(1024*1024*1024))
-	fmt.Printf("  CPU (milli):            %dm\n", req.CPUMilli)
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.AppendHeader(table.Row{"RESOURCE", "WITH HT", "WITHOUT HT", "VALUE"})
+
+	t.AppendRow(table.Row{"CPU Cores", req.Cores, req.CoresNoHT, "-"})
+	t.AppendRow(table.Row{"Hugepages", "-", "-", fmt.Sprintf("%d MiB", req.Hugepages)})
+	t.AppendRow(table.Row{"Memory", "-", "-", fmt.Sprintf("%.1f GiB", float64(req.Memory)/(1024*1024*1024))})
+	t.AppendRow(table.Row{"CPU (millicores)", "-", "-", fmt.Sprintf("%dm", req.CPUMilli)})
+
+	t.SetStyle(table.StyleLight)
+	t.Render()
 }
 
 func printClientNodesTable(nodes []corev1.Node, podsByNode map[string][]corev1.Pod) {
@@ -254,21 +327,21 @@ func printClientNodesTable(nodes []corev1.Node, podsByNode map[string][]corev1.P
 		usedHP := calculatePodResourceUsage(podsByNode[node.Name], "hugepages-2Mi")
 
 		// Calculate free resources
-		freeCPU := resource.NewMilliQuantity(allocCPU.MilliValue()-usedCPU.MilliValue(), resource.DecimalSI)
-		freeMem := resource.NewQuantity(allocMem.Value()-usedMem.Value(), resource.BinarySI)
-		freeHP := resource.NewQuantity(allocHP.Value()-usedHP.Value(), resource.BinarySI)
+		freeCPU := allocCPU.MilliValue() - usedCPU.MilliValue()
+		freeMem := allocMem.Value() - usedMem.Value()
+		freeHP := allocHP.Value() - usedHP.Value()
 
 		t.AppendRow(table.Row{
 			node.Name,
 			fmt.Sprintf("%.1f", float64(allocCPU.MilliValue())/1000),
 			fmt.Sprintf("%.1f", float64(usedCPU.MilliValue())/1000),
-			fmt.Sprintf("%.1f", float64(freeCPU.MilliValue())/1000),
-			fmt.Sprintf("%.1fGi", float64(allocMem.Value())/(1024*1024*1024)),
-			fmt.Sprintf("%.1fGi", float64(usedMem.Value())/(1024*1024*1024)),
-			fmt.Sprintf("%.1fGi", float64(freeMem.Value())/(1024*1024*1024)),
-			fmt.Sprintf("%.1fGi", float64(allocHP.Value())/(1024*1024*1024)),
-			fmt.Sprintf("%.1fGi", float64(usedHP.Value())/(1024*1024*1024)),
-			fmt.Sprintf("%.1fGi", float64(freeHP.Value())/(1024*1024*1024)),
+			fmt.Sprintf("%.1f", float64(freeCPU)/1000),
+			fmt.Sprintf("%.1f Gi", float64(allocMem.Value())/(1024*1024*1024)),
+			fmt.Sprintf("%.1f Gi", float64(usedMem.Value())/(1024*1024*1024)),
+			fmt.Sprintf("%.1f Gi", float64(freeMem)/(1024*1024*1024)),
+			fmt.Sprintf("%.1f Gi", float64(allocHP.Value())/(1024*1024*1024)),
+			fmt.Sprintf("%.1f Gi", float64(usedHP.Value())/(1024*1024*1024)),
+			fmt.Sprintf("%.1f Gi", float64(freeHP)/(1024*1024*1024)),
 		})
 	}
 
@@ -350,23 +423,37 @@ func convertClientAllocationsToNodePlacements(allocations []ClientNodeAllocation
 func printClientAllocationFeasibility(allocations []ClientNodeAllocation) {
 	successCount := 0
 	failureCount := 0
+	var failedNodes []string
 
 	for _, alloc := range allocations {
 		if alloc.CanFit {
 			successCount++
 		} else {
 			failureCount++
+			failedNodes = append(failedNodes, alloc.NodeName)
 		}
 	}
 
-	fmt.Printf("✓ %d nodes can accommodate the client container\n", successCount)
+	totalNodes := len(allocations)
+	fmt.Printf("Total nodes analyzed: %d\n", totalNodes)
+	fmt.Printf("✓ Nodes with sufficient resources: %d (%.1f%%)\n",
+		successCount, float64(successCount)*100/float64(totalNodes))
+
 	if failureCount > 0 {
-		fmt.Printf("✗ %d nodes CANNOT accommodate the client container\n", failureCount)
+		fmt.Printf("✗ Nodes with insufficient resources: %d (%.1f%%)\n",
+			failureCount, float64(failureCount)*100/float64(totalNodes))
+
+		if failureCount <= 5 {
+			// Show failed nodes if not too many
+			fmt.Printf("   Failed nodes: %s\n", strings.Join(failedNodes, ", "))
+		}
 	}
 
 	if failureCount == 0 {
 		fmt.Println("\n✅ All nodes can accommodate client containers")
+	} else if successCount > 0 {
+		fmt.Printf("\n⚠️  %d/%d nodes have insufficient resources\n", failureCount, totalNodes)
 	} else {
-		fmt.Printf("\n⚠️  %d nodes have insufficient resources\n", failureCount)
+		fmt.Println("\n❌ No nodes can accommodate client containers - please review resource requirements")
 	}
 }
