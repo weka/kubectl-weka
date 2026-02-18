@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
@@ -301,16 +300,9 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 		fmt.Println("\n=== Detailed Drive Validation ===")
 		fmt.Println("Scanning nodes for NVMe drives...")
 
-		// Get hostchecks using registry (cached execution)
-		opts := HostCheckOptions{
-			Verbose:             true,
-			CleanupInBackground: false,
-			Timeout:             2 * time.Minute,
-		}
-
+		// Get hostchecks using registry (cached execution with defaults)
 		var err error
-		hostChecksMap, err = GlobalHostCheckRegistry.GetHostChecksForNodes(
-			ctx, allEligibleNodes, opts)
+		hostChecksMap, err = GlobalHostCheckRegistry.GetHostChecksForNodes(ctx, allEligibleNodes)
 		if err != nil {
 			fmt.Printf("⚠️  WARNING: Could not scan drives on all nodes: %v\n", err)
 			fmt.Println("   Falling back to basic drive validation...")

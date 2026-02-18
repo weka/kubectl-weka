@@ -3,16 +3,14 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
-	"sort"
-	"strings"
-	"time"
-
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"os"
+	"sort"
+	"strings"
 )
 
 var planConvergedCmd = &cobra.Command{
@@ -153,15 +151,8 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 		fmt.Println("\n=== Detailed Drive Validation ===")
 		fmt.Println("Scanning nodes for NVMe drives...")
 
-		opts := HostCheckOptions{
-			Verbose:             true,
-			CleanupInBackground: false,
-			Timeout:             2 * time.Minute,
-		}
-
 		var err error
-		hostChecksMap, err = GlobalHostCheckRegistry.GetHostChecksForNodes(
-			ctx, allEligibleNodes, opts)
+		hostChecksMap, err = GlobalHostCheckRegistry.GetHostChecksForNodes(ctx, allEligibleNodes)
 		if err != nil {
 			fmt.Printf("⚠️  WARNING: Could not scan drives on all nodes: %v\n", err)
 			fmt.Println("   Falling back to basic drive validation...")

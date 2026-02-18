@@ -364,7 +364,6 @@ func (hcm HostChecksMap) FormatSummary() string {
 func (r *HostCheckRegistry) GetHostChecksForNodes(
 	ctx context.Context,
 	nodes []corev1.Node,
-	opts HostCheckOptions,
 ) (HostChecksMap, error) {
 	if len(nodes) == 0 {
 		return make(HostChecksMap), nil
@@ -398,20 +397,24 @@ func (r *HostCheckRegistry) GetHostChecksForNodes(
 		}
 		r.cache.mu.RUnlock()
 
-		if opts.Verbose {
-			fmt.Printf("✓ Using cached hostcheck results for %d node(s)\n", len(result))
-		}
+		fmt.Printf("✓ Using cached hostcheck results for %d node(s)\n", len(result))
 		return result, nil
 	}
 	r.cache.mu.RUnlock()
 
 	// Cache miss - need to run hostchecks on uncached nodes
-	if opts.Verbose && len(uncachedNodes) < len(nodes) {
+	if len(uncachedNodes) < len(nodes) {
 		fmt.Printf("⚙️  Using cached results for %d node(s), running hostchecks on %d new node(s)\n",
 			len(nodes)-len(uncachedNodes), len(uncachedNodes))
 	}
 
-	// Run hostchecks on uncached nodes
+	// Run hostchecks on uncached nodes with default options
+	opts := HostCheckOptions{
+		Verbose:             true,
+		CleanupInBackground: false,
+		Timeout:             2 * time.Minute,
+	}
+
 	newResults, err := RunHostChecks(ctx, uncachedNodes, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run hostchecks: %w", err)
@@ -522,12 +525,11 @@ func (r *HostCheckRegistry) ValidateAll(
 	ctx context.Context,
 	commandName string,
 	nodes []corev1.Node,
-	opts HostCheckOptions,
 	params map[string]interface{},
 ) (map[string]map[string]*HostCheckResult, error) {
 
 	// Get hostchecks (cached or fresh)
-	hostChecksMap, err := r.GetHostChecksForNodes(ctx, nodes, opts)
+	hostChecksMap, err := r.GetHostChecksForNodes(ctx, nodes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get hostchecks: %w", err)
 	}
