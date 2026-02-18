@@ -36,6 +36,9 @@ type HostChecksResult struct {
 	IsRHCOS   bool   `json:"is_rhcos"`
 	OSRelease string `json:"os_release"`
 
+	// Kernel version detection via /proc/version
+	KernelVersion string `json:"kernel_version"`
+
 	// Weka directory exists + has >=300GB available
 	WekaDirOK         bool   `json:"weka_dir_ok"`
 	WekaDirPath       string `json:"weka_dir_path"`
@@ -69,6 +72,22 @@ type HostChecksResult struct {
 	FreeMemoryBytes int64  `json:"free_memory_bytes"`
 	HugepagesFree   int64  `json:"hugepages_free_bytes"`
 	CPUModel        string `json:"cpu_model"`
+
+	// NVMe drive detection
+	NVMeDrives      []NVMeDriveInfo `json:"nvme_drives"`
+	NVMeDriveCount  int             `json:"nvme_drive_count"`
+	NVMeDriveDetail string          `json:"nvme_drive_detail"`
+}
+
+// NVMeDriveInfo contains information about a single NVMe drive
+type NVMeDriveInfo struct {
+	DeviceName   string `json:"device_name"` // e.g., "nvme0n1"
+	DevicePath   string `json:"device_path"` // e.g., "/dev/nvme0n1"
+	SerialNumber string `json:"serial"`      // Drive serial number
+	Model        string `json:"model"`       // Drive model
+	Size         int64  `json:"size"`        // Size in bytes
+	Mounted      bool   `json:"mounted"`     // Is the drive currently mounted?
+	MountPoint   string `json:"mount_point"` // Mount point if mounted
 }
 
 type hostScanError struct {
@@ -404,6 +423,127 @@ if [ -d /host/sys/kernel/mm/hugepages ]; then
   done
 fi
 
+# ----- Kernel version -----
+KERNEL_VERSION=""
+if [ -f /host/proc/version ]; then
+  KERNEL_VERSION="$(cat /host/proc/version 2>/dev/null | awk '{print $3}')"
+fi
+
+# ----- NVMe Drive Discovery -----
+# Discover NVMe drives by examining /dev and /sys
+NVME_DRIVES_JSON=""
+NVME_DRIVES_COUNT=0
+NVME_DETAIL="no NVMe drives found"
+
+# Function to get drive serial number from sysfs
+get_nvme_serial() {
+  local dev="$1"
+  local serial=""
+  
+  # Try /sys/block/*/device/serial
+  if [ -f "/host-sys/block/$dev/device/serial" ]; then
+    serial="$(cat "/host-sys/block/$dev/device/serial" 2>/dev/null | tr -d ' \t\n\r')"
+  fi
+  
+  # Fallback: try /sys/class/block/*/device/serial
+  if [ -z "$serial" ] && [ -f "/host-sys/class/block/$dev/device/serial" ]; then
+    serial="$(cat "/host-sys/class/block/$dev/device/serial" 2>/dev/null | tr -d ' \t\n\r')"
+  fi
+  
+  echo "$serial"
+}
+
+# Function to get drive model
+get_nvme_model() {
+  local dev="$1"
+  local model=""
+  
+  # Try /sys/block/*/device/model
+  if [ -f "/host-sys/block/$dev/device/model" ]; then
+    model="$(cat "/host-sys/block/$dev/device/model" 2>/dev/null | tr -d '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  fi
+  
+  # Fallback: try /sys/class/block/*/device/model
+  if [ -z "$model" ] && [ -f "/host-sys/class/block/$dev/device/model" ]; then
+    model="$(cat "/host-sys/class/block/$dev/device/model" 2>/dev/null | tr -d '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  fi
+  
+  echo "$model"
+}
+
+# Function to get drive size in bytes
+get_nvme_size() {
+  local dev="$1"
+  local size=0
+  
+  # Read size from /sys/block/*/size (in 512-byte sectors)
+  if [ -f "/host-sys/block/$dev/size" ]; then
+    local sectors="$(cat "/host-sys/block/$dev/size" 2>/dev/null || echo 0)"
+    size=$((sectors * 512))
+  fi
+  
+  echo "$size"
+}
+
+# Function to check if drive or its partitions are mounted
+is_nvme_mounted() {
+  local dev="$1"
+  local mount_point=""
+  
+  # Check /proc/mounts for the device or any partitions
+  if grep -q "^/host/dev/${dev}" /host/proc/mounts 2>/dev/null; then
+    mount_point="$(grep "^/host/dev/${dev}" /host/proc/mounts 2>/dev/null | head -n1 | awk '{print $2}')"
+    echo "true|$mount_point"
+    return
+  fi
+  
+  # Check for partitions (nvme0n1p1, nvme0n1p2, etc.)
+  if grep -q "^/host/dev/${dev}p" /host/proc/mounts 2>/dev/null; then
+    mount_point="$(grep "^/host/dev/${dev}p" /host/proc/mounts 2>/dev/null | head -n1 | awk '{print $2}')"
+    echo "true|$mount_point"
+    return
+  fi
+  
+  echo "false|"
+}
+
+# Scan for NVMe drives in /dev
+for nvme_dev in /host/dev/nvme[0-9]n[0-9]*; do
+  [ -b "$nvme_dev" ] || continue
+  
+  dev_name="$(basename "$nvme_dev")"
+  
+  # Get drive information
+  serial="$(get_nvme_serial "$dev_name")"
+  model="$(get_nvme_model "$dev_name")"
+  size="$(get_nvme_size "$dev_name")"
+  mount_info="$(is_nvme_mounted "$dev_name")"
+  
+  is_mounted="${mount_info%%|*}"
+  mount_point="${mount_info##*|}"
+  
+  # Create JSON object
+  obj="{"
+  obj="$obj\"device_name\":\"$(json_escape "$dev_name")\","
+  obj="$obj\"device_path\":\"/dev/$(json_escape "$dev_name")\","
+  obj="$obj\"serial\":\"$(json_escape "$serial")\","
+  obj="$obj\"model\":\"$(json_escape "$model")\","
+  obj="$obj\"size\":$size,"
+  obj="$obj\"mounted\":$is_mounted,"
+  obj="$obj\"mount_point\":\"$(json_escape "$mount_point")\""
+  obj="$obj}"
+  
+  if [ "$NVME_DRIVES_COUNT" -gt 0 ]; then
+    NVME_DRIVES_JSON="${NVME_DRIVES_JSON},"
+  fi
+  NVME_DRIVES_JSON="${NVME_DRIVES_JSON}${obj}"
+  NVME_DRIVES_COUNT=$((NVME_DRIVES_COUNT+1))
+done
+
+if [ "$NVME_DRIVES_COUNT" -gt 0 ]; then
+  NVME_DETAIL="found $NVME_DRIVES_COUNT NVMe drive(s)"
+fi
+
 # Output JSON (single line)
 printf '{'
 printf '"is_rhcos":%s,' "$([ "$IS_RHCOS" -eq 1 ] && echo true || echo false)"
@@ -426,7 +566,11 @@ printf '"logical_cores":%d,' "$LOGICAL_CORES"
 printf '"memory_bytes":%d,' "$MEMORY_BYTES"
 printf '"free_memory_bytes":%d,' "$FREE_MEMORY_BYTES"
 printf '"hugepages_free_bytes":%d,' "$HUGEPAGES_FREE_BYTES"
-printf '"cpu_model":"%s"' "$(json_escape "$CPU_MODEL")"
+printf '"kernel_version":"%s",' "$(json_escape "$KERNEL_VERSION")"
+printf '"cpu_model":"%s",' "$(json_escape "$CPU_MODEL")"
+printf '"nvme_drives":[%s],' "$NVME_DRIVES_JSON"
+printf '"nvme_drive_count":%d,' "$NVME_DRIVES_COUNT"
+printf '"nvme_drive_detail":"%s"' "$(json_escape "$NVME_DETAIL")"
 printf '}\n'
 `
 	return &corev1.Pod{

@@ -306,3 +306,96 @@ func (m *CPUModule) Validate(podOutput string) (interface{}, error) {
 		"cpu_model":         hc.CPUModel,
 	}, nil
 }
+
+type KernelModule struct{}
+
+func (m *KernelModule) Name() string {
+	return "kernel"
+}
+
+func (m *KernelModule) FriendlyName() string {
+	return "Kernel Version"
+}
+
+func (m *KernelModule) Description() string {
+	return "Kernel version validation (recommended >=5.10)"
+}
+
+func (m *KernelModule) SuccessTemplate() string {
+	return "✅ OK:  {{.FriendlyName}}: {{.KernelVersion}}"
+}
+
+func (m *KernelModule) WarningTemplate() string {
+	return "⚠️  WARN: {{.FriendlyName}}: {{.KernelVersion}} (recommended >=5.10)"
+}
+
+func (m *KernelModule) ErrorTemplate() string {
+	return "❌ ERROR: {{.FriendlyName}}: {{.KernelVersion}} (recommended >=5.10)"
+}
+
+func (m *KernelModule) SuggestedResolutionTemplate() string {
+	return "On node {{.NodeName}}, consider upgrading kernel to version 5.10 or later for optimal performance and compatibility"
+}
+
+func (m *KernelModule) Validate(podOutput string) (interface{}, error) {
+	var hc HostChecksResult
+	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
+		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
+	}
+
+	status := "ok"
+	if hc.KernelVersion <= "5.10" {
+		status = "warning"
+	}
+
+	return map[string]interface{}{
+		"status":         status,
+		"kernel_version": hc.KernelVersion,
+	}, nil
+}
+
+// NVMeDrivesModule validates NVMe drive availability and status
+type NVMeDrivesModule struct{}
+
+func (m *NVMeDrivesModule) Name() string {
+	return "nvme_drives"
+}
+
+func (m *NVMeDrivesModule) FriendlyName() string {
+	return "NVMe Drives"
+}
+
+func (m *NVMeDrivesModule) Description() string {
+	return "NVMe drive discovery and availability check"
+}
+
+func (m *NVMeDrivesModule) SuccessTemplate() string {
+	return "✅ OK:  {{.FriendlyName}}: {{.Detail}}"
+}
+
+func (m *NVMeDrivesModule) WarningTemplate() string {
+	return "⚠️  WARN: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *NVMeDrivesModule) ErrorTemplate() string {
+	return "❌ ERROR: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *NVMeDrivesModule) SuggestedResolutionTemplate() string {
+	return "On node {{.NodeName}}: {{.Resolution}}"
+}
+
+func (m *NVMeDrivesModule) Validate(podOutput string) (interface{}, error) {
+	var hc HostChecksResult
+	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
+		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
+	}
+
+	return map[string]interface{}{
+		"status":       "ok",
+		"drives":       hc.NVMeDrives,
+		"drive_count":  hc.NVMeDriveCount,
+		"drive_detail": hc.NVMeDriveDetail,
+		"detail":       hc.NVMeDriveDetail,
+	}, nil
+}
