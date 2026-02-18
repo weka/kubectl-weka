@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
+	"io"
+	"k8s.io/api/core/v1"
 	"math/rand"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -268,3 +272,42 @@ func randomString(length int) string {
 	}
 	return string(b)
 }
+
+// writeFile writes content to a file
+func writeFile(filename, content string) error {
+	return os.WriteFile(filename, []byte(content), 0644)
+}
+
+// readFile reads content from a file
+func readFile(filename string) (string, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// getPodLogs retrieves logs from a pod container
+func getPodLogs(ctx context.Context, namespace, podName, containerName string) (string, error) {
+	clientset := KubeClients.Clientset
+
+	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, &v1.PodLogOptions{
+		Container: containerName,
+	})
+
+	podLogs, err := req.Stream(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer podLogs.Close()
+
+	buf := new(strings.Builder)
+	_, err = io.Copy(buf, podLogs)
+	if err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+func boolPtr(b bool) *bool { return &b }

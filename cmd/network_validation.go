@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 )
@@ -20,7 +21,7 @@ type NetworkValidationResult struct {
 // and if it's a bond, validates that it's using LACP (802.3ad mode).
 // If hostChecksMap is provided, reuses existing host check data; otherwise creates new pods.
 // If failFast is true, returns immediately on first error; otherwise collects all errors.
-func validateNetworkInterfaceOnNodes(ctx context.Context, clients *K8sClients, nodes []corev1.Node, ethDevice string, failFast bool, hostChecksMap ...map[string]HostChecksResult) error {
+func validateNetworkInterfaceOnNodes(ctx context.Context, clients *K8sClients, nodes []corev1.Node, ethDevice string, failFast bool, hostChecksMap ...HostChecksMap) error {
 	if ethDevice == "" {
 		return nil // No validation needed
 	}
@@ -84,29 +85,25 @@ func validateNetworkInterfaceOnNodes(ctx context.Context, clients *K8sClients, n
 		fmt.Printf("Creating pods to verify network configuration...\n")
 
 		// Run host checks via pods to get network interface information
-		resultChan, cleanupWg := scanHostChecksByPod(ctx, clients, nodes)
+		opts := HostCheckOptions{
+			Verbose:             false, // Less verbose for network validation
+			CleanupInBackground: false, // Wait for cleanup
+			Timeout:             2 * time.Minute,
+		}
 
-		// Ensure cleanup completes before returning
-		defer func() {
-			cleanupWg.Wait()
-		}()
+		hostChecksResult, err := RunHostChecks(ctx, nodes, opts)
+		if err != nil {
+			return fmt.Errorf("failed to run hostchecks: %w", err)
+		}
 
-		// Collect and process results
-		for result := range resultChan {
+		// Process results from the hostChecksMap
+		for nodeName, hostCheck := range hostChecksResult {
 			nodeResult := NetworkValidationResult{
-				NodeName: result.nodeName,
+				NodeName: nodeName,
 				Status:   "PASS",
 				Issues:   []string{},
 			}
 
-			if result.err != nil {
-				nodeResult.Status = "FAIL"
-				nodeResult.Issues = append(nodeResult.Issues, fmt.Sprintf("Cannot inspect host: %v", result.err))
-				nodeResults = append(nodeResults, nodeResult)
-				continue
-			}
-
-			hostCheck := result.result
 			found := false
 
 			// Check if ethDevice is a regular Mellanox interface

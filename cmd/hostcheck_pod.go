@@ -1,101 +1,11 @@
 package cmd
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"golang.org/x/sync/errgroup"
-	"strings"
-	"sync"
-	"time"
-
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/api/core/v1"
+	v2 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-type MellanoxIface struct {
-	Name  string `json:"name"`
-	Bond  string `json:"bond,omitempty"` // bond name if enslaved
-	IP    string `json:"ip,omitempty"`   // CIDR (e.g. 192.168.1.2/24) when not enslaved
-	Model string `json:"model"`          // e.g. "CX-7" or "unknown (15b3:1023 on 0000:3d:00.0)"
-	Speed string `json:"speed,omitempty"`
-}
-
-type BondInfo struct {
-	Name   string   `json:"name"`
-	IP     string   `json:"ip,omitempty"` // CIDR
-	Slaves []string `json:"slaves"`
-	Mode   string   `json:"mode,omitempty"` // e.g. "802.3ad"
-	Speed  string   `json:"speed,omitempty"`
-}
-
-type HostChecksResult struct {
-	// OS detection via /etc/os-release on host
-	IsRHCOS   bool   `json:"is_rhcos"`
-	OSRelease string `json:"os_release"`
-
-	// Kernel version detection via /proc/version
-	KernelVersion string `json:"kernel_version"`
-
-	// Weka directory exists + has >=300GB available
-	WekaDirOK         bool   `json:"weka_dir_ok"`
-	WekaDirPath       string `json:"weka_dir_path"`
-	WekaDirDetail     string `json:"weka_dir_detail"`
-	WekaDirAvailBytes int64  `json:"weka_dir_avail_bytes"`
-
-	// XFS tools
-	XFSInstalled bool   `json:"xfs_installed"`
-	XFSDetail    string `json:"xfs_detail"`
-
-	// Weka client presence
-	WekaClientClean  bool   `json:"weka_client_clean"`
-	WekaClientDetail string `json:"weka_client_detail"`
-
-	// NIC detection
-	Mellanox       bool   `json:"mellanox"`
-	MellanoxDetail string `json:"mellanox_detail"`
-
-	// Mellanox interface inventory + bonds
-	MlxIfaces []MellanoxIface `json:"mlx_ifaces"`
-	MlxBonds  []BondInfo      `json:"mlx_bonds"`
-
-	BondLACPOk     bool   `json:"bond_lacp_ok"`
-	BondLACPDetail string `json:"bond_lacp_detail"`
-
-	// CPU and Memory info
-	HTEnabled       bool   `json:"ht_enabled"`
-	PhysicalCores   int    `json:"physical_cores"`
-	LogicalCores    int    `json:"logical_cores"`
-	MemoryBytes     int64  `json:"memory_bytes"`
-	FreeMemoryBytes int64  `json:"free_memory_bytes"`
-	HugepagesFree   int64  `json:"hugepages_free_bytes"`
-	CPUModel        string `json:"cpu_model"`
-
-	// NVMe drive detection
-	NVMeDrives      []NVMeDriveInfo `json:"nvme_drives"`
-	NVMeDriveCount  int             `json:"nvme_drive_count"`
-	NVMeDriveDetail string          `json:"nvme_drive_detail"`
-}
-
-// NVMeDriveInfo contains information about a single NVMe drive
-type NVMeDriveInfo struct {
-	DeviceName   string `json:"device_name"` // e.g., "nvme0n1"
-	DevicePath   string `json:"device_path"` // e.g., "/dev/nvme0n1"
-	SerialNumber string `json:"serial"`      // Drive serial number
-	Model        string `json:"model"`       // Drive model
-	Size         int64  `json:"size"`        // Size in bytes
-	Mounted      bool   `json:"mounted"`     // Is the drive currently mounted?
-	MountPoint   string `json:"mount_point"` // Mount point if mounted
-}
-
-type hostScanError struct {
-	node string
-	err  error
-}
-
-func makeHostChecksPod(ns, nodeName, podName, labelKey, labelVal string) *corev1.Pod {
+func makeHostChecksPod(ns, nodeName, podName, labelKey, labelVal string) *v1.Pod {
 
 	script := `
 set -eu
@@ -573,331 +483,59 @@ printf '"nvme_drive_count":%d,' "$NVME_DRIVES_COUNT"
 printf '"nvme_drive_detail":"%s"' "$(json_escape "$NVME_DETAIL")"
 printf '}\n'
 `
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
+	return &v1.Pod{
+		ObjectMeta: v2.ObjectMeta{
 			Name:      podName,
 			Namespace: ns,
 			Labels: map[string]string{
 				labelKey: labelVal,
 			},
 		},
-		Spec: corev1.PodSpec{
+		Spec: v1.PodSpec{
 			NodeName:      nodeName,
 			HostNetwork:   true,
-			DNSPolicy:     corev1.DNSClusterFirstWithHostNet,
-			RestartPolicy: corev1.RestartPolicyNever,
-			Tolerations: []corev1.Toleration{
+			DNSPolicy:     v1.DNSClusterFirstWithHostNet,
+			RestartPolicy: v1.RestartPolicyNever,
+			Tolerations: []v1.Toleration{
 				{
-					Operator: corev1.TolerationOpExists, // Tolerate all taints
+					Operator: v1.TolerationOpExists, // Tolerate all taints
 				},
 			},
-			Containers: []corev1.Container{
+			Containers: []v1.Container{
 				{
 					Name:    "hostchecks",
 					Image:   "busybox:1.36",
 					Command: []string{"sh", "-c", script},
-					SecurityContext: &corev1.SecurityContext{
+					SecurityContext: &v1.SecurityContext{
 						AllowPrivilegeEscalation: boolPtr(false),
 						ReadOnlyRootFilesystem:   boolPtr(true),
 					},
-					VolumeMounts: []corev1.VolumeMount{
+					VolumeMounts: []v1.VolumeMount{
 						{Name: "host-root", MountPath: "/host", ReadOnly: true},
 						{Name: "host-sys", MountPath: "/host-sys", ReadOnly: true},
 					},
 				},
 			},
-			Volumes: []corev1.Volume{
+			Volumes: []v1.Volume{
 				{
 					Name: "host-root",
-					VolumeSource: corev1.VolumeSource{
-						HostPath: &corev1.HostPathVolumeSource{
+					VolumeSource: v1.VolumeSource{
+						HostPath: &v1.HostPathVolumeSource{
 							Path: "/",
-							Type: hostPathTypePtr(corev1.HostPathDirectory),
+							Type: hostPathTypePtr(v1.HostPathDirectory),
 						},
 					},
 				},
 				{
 					Name: "host-sys",
-					VolumeSource: corev1.VolumeSource{
-						HostPath: &corev1.HostPathVolumeSource{
+					VolumeSource: v1.VolumeSource{
+						HostPath: &v1.HostPathVolumeSource{
 							Path: "/sys",
-							Type: hostPathTypePtr(corev1.HostPathDirectory),
+							Type: hostPathTypePtr(v1.HostPathDirectory),
 						},
 					},
 				},
 			},
 		},
-	}
-}
-
-func boolPtr(b bool) *bool { return &b }
-
-// nodeHostResult represents a single node's host check result as it arrives
-type nodeHostResult struct {
-	nodeName string
-	result   HostChecksResult
-	err      error
-}
-
-func scanHostChecksByPod(ctx context.Context, clients *K8sClients, nodes []corev1.Node) (<-chan nodeHostResult, *sync.WaitGroup) {
-	resultChan := make(chan nodeHostResult, len(nodes))
-
-	// Create temporary namespace for hostcheck pods
-	ns := fmt.Sprintf("kubectl-weka-hostchk-%s", randomString(8))
-	labelKey := "app"
-	labelVal := "weka-preflight-hostchecks"
-
-	// --- Phase 1: create all pods quickly (sequential create is OK; it's fast),
-	// but we still do it concurrently with a limit to be safe.
-	type podRef struct {
-		node    string
-		podName string
-	}
-
-	pods := make([]podRef, 0, len(nodes))
-
-	// Background cleanup - entire namespace will be deleted at the end
-	var cleanupWg sync.WaitGroup
-
-	fmt.Printf("Creating temporary namespace: %s\n", ns)
-
-	// Create namespace
-	namespace := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: ns,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "kubectl-weka",
-				"app.kubernetes.io/component":  "hostcheck",
-			},
-		},
-	}
-
-	_, err := clients.Clientset.CoreV1().Namespaces().Create(ctx, namespace, metav1.CreateOptions{})
-	if err != nil {
-		fmt.Printf("Error: Failed to create temporary namespace: %v\n", err)
-		close(resultChan)
-		return resultChan, &cleanupWg
-	}
-
-	// Ensure namespace cleanup even on error or Ctrl-C
-	cleanupWg.Add(1)
-	go func() {
-		defer cleanupWg.Done()
-
-		// Wait for all results to be processed first
-		<-ctx.Done()
-
-		// Then cleanup namespace
-		cleanupCtx := context.Background() // Use fresh context for cleanup
-		fmt.Printf("\nCleaning up temporary namespace: %s\n", ns)
-
-		err := clients.Clientset.CoreV1().Namespaces().Delete(cleanupCtx, ns, metav1.DeleteOptions{})
-		if err != nil {
-			fmt.Printf("  Warning: Failed to delete namespace: %v\n", err)
-			return
-		}
-
-		// Wait for namespace deletion (with timeout)
-		fmt.Printf("  Waiting for namespace deletion...")
-		deleteTimeout := 30 * time.Second
-		deleteDeadline := time.Now().Add(deleteTimeout)
-
-		for time.Now().Before(deleteDeadline) {
-			_, err := clients.Clientset.CoreV1().Namespaces().Get(cleanupCtx, ns, metav1.GetOptions{})
-			if err != nil {
-				// Namespace not found = deleted
-				fmt.Printf(" ✓ Done\n")
-				return
-			}
-			time.Sleep(3 * time.Second)
-		}
-
-		fmt.Printf(" (timeout reached, namespace may still be deleting in background)\n")
-	}()
-
-	fmt.Println("Creating pods to verify node information...")
-
-	// Run everything in background - results stream as they complete
-	go func() {
-		// Phase 1: Create pods
-		eg, egCtx := errgroupWithLimit(ctx, 3)
-		mu := &sync.Mutex{}
-
-		for i := range nodes {
-			nodeName := nodes[i].Name
-			node := nodes[i]
-			if !isNodeReady(&node) {
-				resultChan <- nodeHostResult{
-					nodeName: node.Name,
-					result: HostChecksResult{
-						WekaDirOK:        false,
-						WekaDirDetail:    "skipped: node not Ready",
-						XFSInstalled:     false,
-						XFSDetail:        "skipped: node not Ready",
-						WekaClientClean:  false,
-						WekaClientDetail: "skipped: node not Ready",
-						BondLACPOk:       true,
-						BondLACPDetail:   "skipped: node not Ready",
-					},
-				}
-				continue
-			}
-
-			podName := fmt.Sprintf("hostchk-%s-%s", sanitizeName(nodeName), rand.String(5))
-
-			eg.Go(func() error {
-				p := makeHostChecksPod(ns, nodeName, podName, labelKey, labelVal)
-
-				_, err := KubeClients.Clientset.CoreV1().Pods(ns).Create(egCtx, p, metav1.CreateOptions{})
-				if err != nil {
-					resultChan <- nodeHostResult{
-						nodeName: nodeName,
-						result: HostChecksResult{
-							WekaDirOK:        false,
-							WekaDirDetail:    fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-							XFSInstalled:     false,
-							XFSDetail:        fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-							WekaClientClean:  false,
-							WekaClientDetail: fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-							Mellanox:         false,
-							MellanoxDetail:   fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-						},
-						err: err,
-					}
-					return nil
-				}
-
-				mu.Lock()
-				pods = append(pods, podRef{node: nodeName, podName: podName})
-				mu.Unlock()
-				return nil
-			})
-		}
-
-		_ = eg.Wait()
-
-		// Phase 2: Process pods - send results immediately as they complete
-		eg2, egCtx2 := errgroupWithLimit(ctx, 5)
-
-		for _, pr := range pods {
-			pr := pr
-			eg2.Go(func() error {
-				res, err := waitHostChecksResult(egCtx2, ns, pr.podName, pr.node)
-
-				// Send result immediately (no per-pod cleanup needed - namespace will be deleted)
-				if err != nil {
-					if se, ok := err.(SkipHostCheckError); ok {
-						resultChan <- nodeHostResult{
-							nodeName: pr.node,
-							result: HostChecksResult{
-								WekaDirOK:        false,
-								WekaDirDetail:    "skipped: " + se.Reason,
-								XFSInstalled:     false,
-								XFSDetail:        "skipped: " + se.Reason,
-								WekaClientClean:  false,
-								WekaClientDetail: "skipped: " + se.Reason,
-							},
-							err: err,
-						}
-					} else {
-						resultChan <- nodeHostResult{
-							nodeName: pr.node,
-							result: HostChecksResult{
-								WekaDirOK:        false,
-								WekaDirDetail:    fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-								XFSInstalled:     false,
-								XFSDetail:        fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-								WekaClientClean:  false,
-								WekaClientDetail: fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-								Mellanox:         false,
-								MellanoxDetail:   fmt.Sprintf("Cannot inspect host: %s", shortErr(err)),
-							},
-							err: err,
-						}
-					}
-				} else {
-					resultChan <- nodeHostResult{
-						nodeName: pr.node,
-						result:   res,
-					}
-				}
-				return nil
-			})
-		}
-
-		_ = eg2.Wait()
-
-		// Close result channel after all results sent
-		close(resultChan)
-	}()
-
-	return resultChan, &cleanupWg
-}
-
-func errgroupWithLimit(ctx context.Context, limit int) (*errgroup.Group, context.Context) {
-	eg, egCtx := errgroup.WithContext(ctx)
-	eg.SetLimit(limit)
-	return eg, egCtx
-}
-func waitHostChecksResult(ctx context.Context, ns, podName, nodeName string) (HostChecksResult, error) {
-	startDeadline := time.Now().Add(30 * time.Second) // must leave Pending by then
-	doneDeadline := time.Now().Add(120 * time.Second) // overall completion timeout
-
-	// Start with longer sleep to reduce API calls
-	sleepInterval := time.Second
-	clientset := KubeClients.Clientset
-	for {
-		if time.Now().After(doneDeadline) {
-			_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
-			return HostChecksResult{}, fmt.Errorf("timeout waiting for hostchecks pod on node %s", nodeName)
-		}
-
-		p, err := clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				time.Sleep(sleepInterval)
-				continue
-			}
-			return HostChecksResult{}, err
-		}
-
-		switch p.Status.Phase {
-		case corev1.PodPending:
-			// If it's still Pending after 30s, delete + skip.
-			if time.Now().After(startDeadline) {
-				// best-effort delete
-				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
-
-				reason := pendingReason(p)
-				if reason == "" {
-					reason = "pod stayed Pending >30s (node may be NotReady / unschedulable)"
-				}
-				return HostChecksResult{}, SkipHostCheckError{Node: nodeName, Reason: reason}
-			}
-			time.Sleep(sleepInterval)
-
-		case corev1.PodRunning:
-			// Great: started. Now wait for it to complete.
-			time.Sleep(sleepInterval)
-
-		case corev1.PodSucceeded, corev1.PodFailed:
-			logs, err := readPodLogs(ctx, clientset, ns, podName, "hostchecks")
-			if err != nil {
-				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
-				return HostChecksResult{}, err
-			}
-
-			line := strings.TrimSpace(logs)
-			var res HostChecksResult
-			if err := json.Unmarshal([]byte(line), &res); err != nil {
-				_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
-				return HostChecksResult{}, fmt.Errorf("failed to parse hostchecks JSON on %s: %v (raw=%q)", nodeName, err, line)
-			}
-			return res, nil
-
-		default:
-			// Unknown state, keep polling.
-			time.Sleep(sleepInterval)
-		}
 	}
 }

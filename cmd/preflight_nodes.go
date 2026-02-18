@@ -109,21 +109,18 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// SECOND: Run host checks via per-node pods (PCI, /etc/os-release, filesystem, processes, systemd units)
-	resultChan, cleanupWg := scanHostChecksByPod(ctx, KubeClients, nodes)
+	// SECOND: Run host checks using the generic RunHostChecks function
+	opts := HostCheckOptions{
+		Verbose:             true,
+		CleanupInBackground: true, // Do not wait for cleanup in preflight
+		Timeout:             3 * time.Minute,
+	}
 
-	// Ensure cleanup completes before exiting (even on SIGTERM/Ctrl+C)
-	defer func() {
-		fmt.Println("Waiting for pod cleanup to complete...")
-		cleanupWg.Wait()
-		fmt.Println("Cleanup complete.")
-	}()
-
-	fmt.Println("Checking host checks...")
-
-	// Collect results as they stream in - just store them, don't process yet
-	hostFacts := make(map[string]HostChecksResult, len(nodes))
-	var scanErrs []hostScanError
+	fmt.Println("Performing host checks...")
+	hostFacts, err := RunHostChecks(ctx, nodes, opts)
+	if err != nil {
+		return fmt.Errorf("failed to run hostchecks: %w", err)
+	}
 
 	// Build a map for quick node lookup
 	nodeMap := make(map[string]*corev1.Node, len(nodes))
@@ -137,33 +134,29 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	wekaClientModule := &WekaClientModule{}
 	networkModule := &NetworkModule{}
 
-	fmt.Println("Collecting and processing results...")
+	fmt.Println("Processing node results...")
 	receivedCount := 0
 
 	// Map to store aggregated results per node
 	nodeResults := make(map[string]*AggregatedResult, len(nodes))
 
-	for nodeResult := range resultChan {
+	// Process all nodes with hostcheck results
+	for nodeName, hf := range hostFacts {
 		receivedCount++
-		hostFacts[nodeResult.nodeName] = nodeResult.result
-		if nodeResult.err != nil {
-			scanErrs = append(scanErrs, hostScanError{node: nodeResult.nodeName, err: nodeResult.err})
-		}
 
-		// Build module results from hostcheck data
-		node := nodeMap[nodeResult.nodeName]
-		hf := nodeResult.result
+		// Get node from map
+		node, exists := nodeMap[nodeName]
+		if !exists {
+			continue
+		}
 
 		// Skip health check processing for non-ready nodes - they will be marked as skipped later
 		if !isNodeReady(node) {
 			// Store a minimal result indicating the node was skipped
-			nodeResults[nodeResult.nodeName] = &AggregatedResult{
-				NodeName:      nodeResult.nodeName,
+			nodeResults[nodeName] = &AggregatedResult{
+				NodeName:      nodeName,
 				Status:        "skipped",
 				ModuleResults: make(map[string]*HostCheckResult),
-			}
-			if receivedCount%10 == 0 || receivedCount == len(nodes) {
-				fmt.Printf("Processed %d/%d results...\n", receivedCount, len(nodes))
 			}
 			continue
 		}
@@ -335,21 +328,17 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		nodeResults[nodeResult.nodeName] = &AggregatedResult{
-			NodeName:      nodeResult.nodeName,
+		nodeResults[nodeName] = &AggregatedResult{
+			NodeName:      nodeName,
 			Status:        overallStatus,
 			ModuleResults: moduleResults,
 		}
 
-		if receivedCount%10 == 0 || receivedCount == len(nodes) {
-			fmt.Printf("Processed %d/%d results...\n", receivedCount, len(nodes))
+		if receivedCount%10 == 0 || receivedCount == len(hostFacts) {
+			fmt.Printf("Processed %d/%d results...\n", receivedCount, len(hostFacts))
 		}
 	}
 	fmt.Printf("All %d results processed!\n", receivedCount)
-
-	if len(scanErrs) > 0 {
-		fmt.Printf("\nNote: host checks encountered %d issues\n", len(scanErrs))
-	}
 
 	// Process all nodes while pod fetch happens in background
 	checked := 0
@@ -499,10 +488,6 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if len(scanErrs) > 0 && !preflightSummaryOnly {
-		fmt.Printf("\nNote: host checks encountered %d issues\n", len(scanErrs))
-	}
-
 	// Summary
 	fmt.Println("Summary:")
 	fmt.Printf("  Eligible nodes:      %d\n", len(nodes))
@@ -535,9 +520,6 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	if failCnt > 0 {
 		return fmt.Errorf("preflight nodes failed")
 	}
-
-	// Give background Kubernetes client goroutines time to shut down gracefully
-	time.Sleep(100 * time.Millisecond)
 
 	return nil
 }

@@ -6,6 +6,10 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"k8s.io/klog/v2"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 var (
@@ -22,6 +26,22 @@ var rootCmd = &cobra.Command{
 }
 
 func Execute() {
+	// Initialize controller-runtime logger before any client operations
+	// This prevents the "eventuallyFulfillRoot" panic when background goroutines try to log
+	// Use a quiet logger that doesn't spam output
+	opts := zap.Options{
+		Development: false, // Production mode - less verbose
+		Level:       nil,   // Only log errors and above (no info/debug spam)
+	}
+
+	// Create and set the logger
+	logger := zap.New(zap.UseFlagOptions(&opts))
+	ctrl.SetLogger(logger)
+	log.SetLogger(logger)
+
+	// Also configure klog to be quiet (used by some k8s libraries)
+	klog.SetLogger(logger)
+
 	ctx := context.Background()
 	var err error
 	KubeClients, err = NewK8sClients(ctx)

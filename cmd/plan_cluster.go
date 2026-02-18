@@ -4,19 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
-
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 var (
@@ -57,6 +52,7 @@ type ContainerRequirements struct {
 	Cores     int // Cores with HT
 	CoresNoHT int // Cores without HT
 	Memory    int64
+	Drives    int // Number of drives required (only for drive containers)
 }
 
 type NodeRequirements struct {
@@ -149,6 +145,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 		)
 		req.Type = "drive"
 		req.Count = *config.DriveContainers
+		req.Drives = config.NumDrives // Set drive requirements
 
 		// Always calculate non-HT variant for comparison
 		reqNoHT := calculateDriveRequirements(
@@ -304,7 +301,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 
 		// Run hostchecks on all eligible nodes to get drive information
 		var err error
-		hostChecksMap, err = runHostChecksForDrives(ctx, allEligibleNodes)
+		hostChecksMap, err = RunHostChecksForDrives(ctx, allEligibleNodes)
 		if err != nil {
 			fmt.Printf("⚠️  WARNING: Could not scan drives on all nodes: %v\n", err)
 			fmt.Println("   Falling back to basic drive validation...")
@@ -322,7 +319,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 
 	// Simulate container placement
 	fmt.Println("\n=== Simulating Container Placement ===")
-	placement, err := simulatePlacement(roleGrouping, containers, config, podsByNode, hostChecksMap)
+	placement, err := simulatePlacement(roleGrouping, containers, podsByNode, hostChecksMap)
 	if err != nil {
 		return fmt.Errorf("placement simulation failed: %w", err)
 	}
@@ -364,14 +361,8 @@ type PlacedContainer struct {
 }
 
 // simulatePlacement simulates allocation of containers to nodes with anti-affinity rules and drive constraints
-func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequirements, config *wekaapi.WekaConfig, podsByNode map[string][]corev1.Pod, hostChecksMap map[string]HostChecksResult) ([]NodePlacement, error) {
+func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequirements, podsByNode map[string][]corev1.Pod, hostChecksMap map[string]HostChecksResult) ([]NodePlacement, error) {
 	var placements []NodePlacement
-
-	// Get numDrives from config for drive container validation
-	numDrives := 0
-	if config.DriveContainers != nil && *config.DriveContainers > 0 {
-		numDrives = config.NumDrives
-	}
 
 	// Expand containers based on Count field to create individual container entries
 	var expandedContainers []ContainerRequirements
@@ -547,11 +538,8 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 		for i := 0; i < len(containerList); i++ {
 			c := containerList[i]
 
-			// Determine drive requirements for this container
-			requiredDrives := 0
-			if cType == "drive" {
-				requiredDrives = numDrives
-			}
+			// Get drive requirements from container (will be 0 for non-drive containers)
+			requiredDrives := c.Drives
 
 			// Find best node for this container
 			placed := false
@@ -1228,9 +1216,14 @@ func printContainerRequirements(containers []ContainerRequirements) {
 		"Cores (HT Off)",
 		"Hugepages",
 		"Memory",
+		"Drives",
 	})
 
 	for _, c := range containers {
+		drivesStr := "-"
+		if c.Drives > 0 {
+			drivesStr = fmt.Sprintf("%d", c.Drives)
+		}
 		t.AppendRow(table.Row{
 			capitalizeFirst(c.Type),
 			c.Count,
@@ -1238,6 +1231,7 @@ func printContainerRequirements(containers []ContainerRequirements) {
 			c.CoresNoHT,
 			fmt.Sprintf("%d MiB", c.Hugepages),
 			fmt.Sprintf("%d MiB", c.Memory),
+			drivesStr,
 		})
 	}
 
@@ -1735,155 +1729,4 @@ func printNodeSelectorTable(title, selector string, nodes []corev1.Node, podsByN
 func tryParseInt(s string) (int, bool) {
 	num, err := strconv.Atoi(s)
 	return num, err == nil
-}
-
-// runHostChecksForDrives runs hostchecks on specified nodes to gather drive information
-// Uses a temporary namespace for easy cleanup
-func runHostChecksForDrives(ctx context.Context, nodes []corev1.Node) (map[string]HostChecksResult, error) {
-	hostChecksMap := make(map[string]HostChecksResult)
-
-	if len(nodes) == 0 {
-		return hostChecksMap, nil
-	}
-
-	// Create temporary namespace for hostcheck pods
-	namespace := fmt.Sprintf("kubectl-hostchk-%s", randomString(8))
-
-	fmt.Printf("Creating temporary namespace: %s\n", namespace)
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "kubectl-weka",
-				"app.kubernetes.io/component":  "hostcheck",
-			},
-		},
-	}
-
-	if err := KubeClients.CRClient.Create(ctx, ns); err != nil {
-		return nil, fmt.Errorf("failed to create temporary namespace: %w", err)
-	}
-
-	// Ensure namespace cleanup even on Ctrl-C or panic
-	defer func() {
-		cleanupCtx := context.Background() // Use fresh context for cleanup
-		fmt.Printf("\nCleaning up temporary namespace: %s\n", namespace)
-
-		// Delete namespace (this will delete all pods inside)
-		if err := KubeClients.CRClient.Delete(cleanupCtx, ns); err != nil {
-			fmt.Printf("  Warning: Failed to delete namespace: %v\n", err)
-			return
-		}
-
-		// Wait for namespace deletion to complete (with timeout)
-		fmt.Printf("  Waiting for namespace deletion...")
-		deleteTimeout := 30 * time.Second
-		deleteDeadline := time.Now().Add(deleteTimeout)
-
-		for time.Now().Before(deleteDeadline) {
-			var checkNs corev1.Namespace
-			err := KubeClients.CRClient.Get(cleanupCtx, ctrlclient.ObjectKey{Name: namespace}, &checkNs)
-			if err != nil {
-				// Namespace not found = deleted successfully
-				fmt.Printf(" ✓ Done\n")
-				return
-			}
-			time.Sleep(1 * time.Second)
-		}
-
-		fmt.Printf(" (timeout reached, namespace may still be deleting in background)\n")
-	}()
-
-	fmt.Printf("Creating hostcheck pods on %d nodes...\n", len(nodes))
-
-	labelKey := "weka.io/app"
-	labelVal := "hostcheck"
-
-	// Create pods in the temporary namespace
-	createdPods := make(map[string]*corev1.Pod)
-	for _, node := range nodes {
-		podName := fmt.Sprintf("hostchk-%s-%s", sanitizeName(node.Name), randomString(5))
-		pod := makeHostChecksPod(namespace, node.Name, podName, labelKey, labelVal)
-
-		if err := KubeClients.CRClient.Create(ctx, pod); err != nil {
-			fmt.Printf("  [%s] Failed to create pod: %v\n", node.Name, err)
-			continue
-		}
-		createdPods[node.Name] = pod
-	}
-
-	fmt.Printf("✓ Created %d hostcheck pods\n", len(createdPods))
-
-	// Wait for pods to complete and collect results
-	maxWait := 2 * time.Minute
-	deadline := time.Now().Add(maxWait)
-
-	for time.Now().Before(deadline) {
-		allCompleted := true
-
-		for nodeName, pod := range createdPods {
-			var currentPod corev1.Pod
-			if err := KubeClients.CRClient.Get(ctx, ctrlclient.ObjectKey{
-				Namespace: pod.Namespace,
-				Name:      pod.Name,
-			}, &currentPod); err != nil {
-				continue
-			}
-
-			if currentPod.Status.Phase == corev1.PodSucceeded {
-				// Pod completed, read logs
-				if _, exists := hostChecksMap[nodeName]; !exists {
-					logs, err := getPodLogs(ctx, currentPod.Namespace, currentPod.Name, "hostchecks")
-					if err == nil {
-						var hc HostChecksResult
-						if err := json.Unmarshal([]byte(logs), &hc); err == nil {
-							hostChecksMap[nodeName] = hc
-						}
-					}
-				}
-			} else if currentPod.Status.Phase != corev1.PodPending && currentPod.Status.Phase != corev1.PodRunning {
-				// Pod failed
-				delete(createdPods, nodeName)
-			} else {
-				allCompleted = false
-			}
-		}
-
-		if allCompleted && len(hostChecksMap) == len(createdPods) {
-			break
-		}
-
-		time.Sleep(2 * time.Second)
-	}
-
-	fmt.Printf("✓ Collected drive information from %d/%d nodes\n", len(hostChecksMap), len(nodes))
-
-	if len(hostChecksMap) == 0 {
-		return nil, fmt.Errorf("failed to collect drive information from any node")
-	}
-
-	return hostChecksMap, nil
-}
-
-// getPodLogs retrieves logs from a pod container
-func getPodLogs(ctx context.Context, namespace, podName, containerName string) (string, error) {
-	clientset := KubeClients.Clientset
-
-	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
-		Container: containerName,
-	})
-
-	podLogs, err := req.Stream(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer podLogs.Close()
-
-	buf := new(strings.Builder)
-	_, err = io.Copy(buf, podLogs)
-	if err != nil {
-		return "", err
-	}
-
-	return buf.String(), nil
 }

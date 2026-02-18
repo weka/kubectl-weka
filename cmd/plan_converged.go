@@ -157,7 +157,7 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 
 		// Run hostchecks on all eligible nodes to get drive information
 		var err error
-		hostChecksMap, err = runHostChecksForDrives(ctx, allEligibleNodes)
+		hostChecksMap, err = RunHostChecksForDrives(ctx, allEligibleNodes)
 		if err != nil {
 			fmt.Printf("⚠️  WARNING: Could not scan drives on all nodes: %v\n", err)
 			fmt.Println("   Falling back to basic drive validation...")
@@ -173,8 +173,8 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 	}
 
 	// Phase 1: Simulate cluster placement with drive awareness
-	fmt.Println("\n=== Simulating Container Placement ===")
-	clusterPlacements, err := simulatePlacement(roleGrouping, clusterContainers, cluster.Spec.Dynamic, podsByNode, hostChecksMap)
+	// Phase 1: Simulate cluster placement WITH drive awareness
+	clusterPlacements, err := simulatePlacement(roleGrouping, clusterContainers, podsByNode, hostChecksMap)
 	if err != nil {
 		return fmt.Errorf("cluster placement failed: %w", err)
 	}
@@ -571,11 +571,15 @@ func printNodeSelectorSummary(grouping RoleNodeGrouping, globalSelector map[stri
 func printClusterContainerRequirements(containers []ContainerRequirements) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{"TYPE", "COUNT", "CORES (HT ON)", "CORES (HT OFF)", "HUGEPAGES", "MEMORY"})
+	t.AppendHeader(table.Row{"TYPE", "COUNT", "CORES (HT ON)", "CORES (HT OFF)", "HUGEPAGES", "MEMORY", "DRIVES"})
 
 	for _, c := range containers {
 		if c.Count == 0 {
 			continue
+		}
+		drivesStr := "-"
+		if c.Drives > 0 {
+			drivesStr = fmt.Sprintf("%d", c.Drives)
 		}
 		t.AppendRow(table.Row{
 			capitalizeFirst(c.Type),
@@ -584,6 +588,7 @@ func printClusterContainerRequirements(containers []ContainerRequirements) {
 			c.CoresNoHT,
 			fmt.Sprintf("%d MiB", c.Hugepages),
 			fmt.Sprintf("%d MiB", c.Memory),
+			drivesStr,
 		})
 	}
 
@@ -642,6 +647,7 @@ func buildClusterContainerList(cluster *wekaapi.WekaCluster) []ContainerRequirem
 		)
 		req.Type = "drive"
 		req.Count = *config.DriveContainers
+		req.Drives = config.NumDrives // Set drive requirements
 
 		reqNoHT := calculateDriveRequirements(
 			config.DriveCores,
