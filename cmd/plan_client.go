@@ -294,7 +294,6 @@ func printClientContainerRequirements(req ClientContainerRequirements) {
 	t.AppendRow(table.Row{"CPU Cores", req.Cores, req.CoresNoHT, "-"})
 	t.AppendRow(table.Row{"Hugepages", "-", "-", fmt.Sprintf("%d MiB", req.Hugepages)})
 	t.AppendRow(table.Row{"Memory", "-", "-", fmt.Sprintf("%.1f GiB", float64(req.Memory)/(1024*1024*1024))})
-	t.AppendRow(table.Row{"CPU (millicores)", "-", "-", fmt.Sprintf("%dm", req.CPUMilli)})
 
 	t.SetStyle(table.StyleLight)
 	t.Render()
