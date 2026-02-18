@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
@@ -42,6 +43,7 @@ type ConvergedNodeState struct {
 	ClusterUsedCores  int
 	ClusterUsedMemory int64 // MiB
 	ClusterUsedHP     int64 // MiB
+	ClusterUsedDrives int   // Number of drives allocated to cluster containers
 
 	// After client allocation
 	ClientContainers []PlacedContainer
@@ -101,6 +103,9 @@ func runPlanConverged(_ *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Give background Kubernetes client goroutines time to shut down gracefully
+	time.Sleep(100 * time.Millisecond)
+
 	return nil
 }
 
@@ -140,11 +145,36 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 	clientNodes := FilterNodesBySelector(nodes, client.Spec.NodeSelector)
 	fmt.Printf("Client NodeSelector (%s): %d nodes\n", formatSelector(client.Spec.NodeSelector), len(clientNodes))
 
-	// Phase 1: Simulate cluster placement
+	// Get all eligible nodes for drive validation
+	allEligibleNodes := getAllEligibleNodes(roleGrouping)
+
+	// Perform detailed drive validation if drive containers are configured
+	var hostChecksMap map[string]HostChecksResult
+	if cluster.Spec.Dynamic != nil && cluster.Spec.Dynamic.DriveContainers != nil &&
+		*cluster.Spec.Dynamic.DriveContainers > 0 && cluster.Spec.Dynamic.NumDrives > 0 {
+		fmt.Println("\n=== Detailed Drive Validation ===")
+		fmt.Println("Scanning nodes for NVMe drives...")
+
+		// Run hostchecks on all eligible nodes to get drive information
+		var err error
+		hostChecksMap, err = runHostChecksForDrives(ctx, allEligibleNodes)
+		if err != nil {
+			fmt.Printf("⚠️  WARNING: Could not scan drives on all nodes: %v\n", err)
+			fmt.Println("   Falling back to basic drive validation...")
+			hostChecksMap = nil
+		} else {
+			// Use detailed validation with hostcheck data
+			if err := validateDrivesDetailed(hostChecksMap, allEligibleNodes,
+				*cluster.Spec.Dynamic.DriveContainers,
+				cluster.Spec.Dynamic.NumDrives); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Phase 1: Simulate cluster placement with drive awareness
 	fmt.Println("\n=== Simulating Container Placement ===")
-	// Note: simulatePlacement expects a WekaConfig pointer, which we don't have access to in plan_converged
-	// We pass nil and it won't be used since we already have the container list
-	clusterPlacements, err := simulatePlacement(roleGrouping, clusterContainers, nil, podsByNode)
+	clusterPlacements, err := simulatePlacement(roleGrouping, clusterContainers, cluster.Spec.Dynamic, podsByNode, hostChecksMap)
 	if err != nil {
 		return fmt.Errorf("cluster placement failed: %w", err)
 	}
@@ -167,9 +197,9 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 	}
 	fmt.Printf("✓ No conflicting container types on same nodes\n")
 
-	// Print converged placement details
+	// Print converged placement details with drive information
 	fmt.Println("\n=== Converged Deployment Plan ===")
-	printConvergedPlacementDetails(convergedStates)
+	printConvergedPlacementDetails(convergedStates, hostChecksMap)
 
 	// Print summary
 	fmt.Println("\n=== Deployment Summary ===")
@@ -212,6 +242,7 @@ func initializeConvergedStates(nodes []corev1.Node, podsByNode map[string][]core
 			state.ClusterUsedCores = placement.UsedCores
 			state.ClusterUsedMemory = placement.UsedMemory
 			state.ClusterUsedHP = placement.UsedHP
+			state.ClusterUsedDrives = placement.UsedDrives
 		}
 
 		states[nodeName] = state
@@ -276,7 +307,7 @@ func simulateClientOnConverged(states map[string]*ConvergedNodeState, clientNode
 	return nil
 }
 
-func printConvergedPlacementDetails(states map[string]*ConvergedNodeState) {
+func printConvergedPlacementDetails(states map[string]*ConvergedNodeState, hostChecksMap map[string]HostChecksResult) {
 	// Get sorted list of nodes that have any containers
 	var activeNodes []string
 	for nodeName, state := range states {
@@ -316,8 +347,13 @@ func printConvergedPlacementDetails(states map[string]*ConvergedNodeState) {
 		// Show cluster containers
 		for _, pc := range state.ClusterContainers {
 			coloredType := colorizeContainerType(pc.Type)
-			containersStr += fmt.Sprintf("%s [CORES: %d, RAM: %.1fGi, HP: %.1fGi]\n",
-				coloredType, pc.Cores, float64(pc.Memory)/1024, float64(pc.Hugepages)/1024)
+			if pc.Drives > 0 {
+				containersStr += fmt.Sprintf("%s [CORES: %d, RAM: %.1fGi, HP: %.1fGi, DRIVES: %d]\n",
+					coloredType, pc.Cores, float64(pc.Memory)/1024, float64(pc.Hugepages)/1024, pc.Drives)
+			} else {
+				containersStr += fmt.Sprintf("%s [CORES: %d, RAM: %.1fGi, HP: %.1fGi]\n",
+					coloredType, pc.Cores, float64(pc.Memory)/1024, float64(pc.Hugepages)/1024)
+			}
 		}
 
 		// Show client containers
@@ -355,7 +391,7 @@ func printConvergedPlacementDetails(states map[string]*ConvergedNodeState) {
 		}
 		totalWekaPercent := wekaClusterCPUPercent + wekaClientCPUPercent
 		cpuBar := createResourceBar(currentCPUPercent, totalWekaPercent, containerTypes)
-		resourceBarsStr += fmt.Sprintf("CPU: %s\n", cpuBar)
+		resourceBarsStr += fmt.Sprintf("CPU:    %s\n", cpuBar)
 
 		// Memory bar
 		allocMemVal := float64(state.AllocatableMemory.Value())
@@ -375,7 +411,7 @@ func printConvergedPlacementDetails(states map[string]*ConvergedNodeState) {
 		}
 		totalWekaMemPercent := wekaClusterMemPercent + wekaClientMemPercent
 		memBar := createResourceBar(currentMemPercent, totalWekaMemPercent, containerTypes)
-		resourceBarsStr += fmt.Sprintf("Mem: %s\n", memBar)
+		resourceBarsStr += fmt.Sprintf("Mem:    %s\n", memBar)
 
 		// Hugepages bar
 		allocHPVal := float64(state.AllocatableHP.Value())
@@ -395,7 +431,20 @@ func printConvergedPlacementDetails(states map[string]*ConvergedNodeState) {
 		}
 		totalWekaHPPercent := wekaClusterHPPercent + wekaClientHPPercent
 		hpBar := createResourceBar(currentHPPercent, totalWekaHPPercent, containerTypes)
-		resourceBarsStr += fmt.Sprintf("HP:  %s", hpBar)
+		resourceBarsStr += fmt.Sprintf("HP:     %s\n", hpBar)
+
+		// Drives bar (only show if node has drives)
+		if state.ClusterUsedDrives > 0 || hasNodeDrives(state.Node, hostChecksMap) {
+			totalDrives := getNodeTotalDrives(state.Node, hostChecksMap)
+			currentDrivesUsed := 0 // Drives used by existing pods (TODO: could track this if needed)
+			wekaDrivesPercent := 0.0
+			if totalDrives > 0 {
+				wekaDrivesPercent = float64(state.ClusterUsedDrives) * 100.0 / float64(totalDrives)
+			}
+			// Create bar showing drive allocation (no "currently used" for drives)
+			drivesBar := createResourceBar(float64(currentDrivesUsed), wekaDrivesPercent, containerTypes)
+			resourceBarsStr += fmt.Sprintf("Drives: %s", drivesBar)
+		}
 
 		t.AppendRow(table.Row{
 			nodeName,

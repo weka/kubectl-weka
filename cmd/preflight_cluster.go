@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -107,5 +108,9 @@ func runPreflightK8sCluster(cmd *cobra.Command, args []string) error {
 	if anyFail {
 		return fmt.Errorf("preflight cluster failed")
 	}
+
+	// Give background Kubernetes client goroutines time to shut down gracefully
+	time.Sleep(100 * time.Millisecond)
+
 	return nil
 }

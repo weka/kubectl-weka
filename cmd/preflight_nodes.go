@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -40,6 +41,7 @@ func init() {
 	preflightNodesCmd.Flags().Int64Var(&preflightWekaDirFailGB, "weka-dir-min-fail", 100, "Minimum GB for weka directory (FAIL if below, default 100)")
 	preflightNodesCmd.Flags().Int64Var(&preflightWekaDirWarnGB, "weka-dir-min-warn", 300, "Minimum GB for weka directory (WARN if below, default 300)")
 	preflightNodesCmd.SilenceUsage = true
+
 }
 
 type checkStatus string
@@ -533,6 +535,10 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	if failCnt > 0 {
 		return fmt.Errorf("preflight nodes failed")
 	}
+
+	// Give background Kubernetes client goroutines time to shut down gracefully
+	time.Sleep(100 * time.Millisecond)
+
 	return nil
 }
 

@@ -139,7 +139,8 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 
 	// Print placement details with resource allocation (reuses cluster function)
 	fmt.Println("\n=== Placement Details & Resource Allocation ===")
-	printPlacementDetailsWithResourceAllocation(placements, matchingNodes, podsByNode)
+	// Note: Clients don't allocate drives, so pass nil for hostChecksMap
+	printPlacementDetailsWithResourceAllocation(placements, matchingNodes, podsByNode, nil)
 
 	// Check if allocation is feasible
 	fmt.Println("\n=== Allocation Summary ===")

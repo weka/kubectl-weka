@@ -4,15 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var (
@@ -29,6 +33,7 @@ var planClusterCmd = &cobra.Command{
 func init() {
 	planCmd.AddCommand(planClusterCmd)
 	planClusterCmd.Flags().BoolVar(&planClusterFailFast, "fail-fast", false, "Stop validation on first error (default: collect all errors)")
+	planClusterCmd.SilenceUsage = true
 }
 
 // ANSI color codes
@@ -290,18 +295,40 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 	fmt.Println("\n=== Nodes Matching Selection Criteria ===")
 	printNodesPerSelector(roleGrouping, cluster.Spec.NodeSelector, podsByNode)
 
+	// Perform detailed drive validation if drive containers are configured
+	// Also collect hostcheck data for placement simulation
+	var hostChecksMap map[string]HostChecksResult
+	if config.DriveContainers != nil && *config.DriveContainers > 0 && config.NumDrives > 0 {
+		fmt.Println("\n=== Detailed Drive Validation ===")
+		fmt.Println("Scanning nodes for NVMe drives...")
+
+		// Run hostchecks on all eligible nodes to get drive information
+		var err error
+		hostChecksMap, err = runHostChecksForDrives(ctx, allEligibleNodes)
+		if err != nil {
+			fmt.Printf("⚠️  WARNING: Could not scan drives on all nodes: %v\n", err)
+			fmt.Println("   Falling back to basic drive validation...")
+			hostChecksMap = nil
+		} else {
+			// Use detailed validation with hostcheck data
+			if err := validateDrivesDetailed(hostChecksMap, allEligibleNodes, *config.DriveContainers, config.NumDrives); err != nil {
+				return err
+			}
+		}
+	}
+
 	fmt.Println("\n=== Validating Cluster Nodes ===")
 	fmt.Printf("Found %d nodes in cluster\n", len(nodes))
 
 	// Simulate container placement
 	fmt.Println("\n=== Simulating Container Placement ===")
-	placement, err := simulatePlacement(roleGrouping, containers, config, podsByNode)
+	placement, err := simulatePlacement(roleGrouping, containers, config, podsByNode, hostChecksMap)
 	if err != nil {
 		return fmt.Errorf("placement simulation failed: %w", err)
 	}
 
 	fmt.Println("\n=== Placement Details & Resource Allocation ===")
-	printPlacementDetailsWithResourceAllocation(placement, allEligibleNodes, podsByNode)
+	printPlacementDetailsWithResourceAllocation(placement, allEligibleNodes, podsByNode, hostChecksMap)
 
 	fmt.Println("\n=== Validating Network Interface 'enp99s0f0np0' ===")
 	fmt.Println("✓ Network interface validation passed")
@@ -324,6 +351,7 @@ type NodePlacement struct {
 	UsedCores  int
 	UsedMemory int64
 	UsedHP     int64
+	UsedDrives int // Number of drives allocated to containers on this node
 }
 
 type PlacedContainer struct {
@@ -332,11 +360,18 @@ type PlacedContainer struct {
 	Cores     int
 	Memory    int64
 	Hugepages int64
+	Drives    int // Number of drives needed (only for drive containers)
 }
 
-// simulatePlacement simulates allocation of containers to nodes with anti-affinity rules
-func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequirements, config *wekaapi.WekaConfig, podsByNode map[string][]corev1.Pod) ([]NodePlacement, error) {
+// simulatePlacement simulates allocation of containers to nodes with anti-affinity rules and drive constraints
+func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequirements, config *wekaapi.WekaConfig, podsByNode map[string][]corev1.Pod, hostChecksMap map[string]HostChecksResult) ([]NodePlacement, error) {
 	var placements []NodePlacement
+
+	// Get numDrives from config for drive container validation
+	numDrives := 0
+	if config.DriveContainers != nil && *config.DriveContainers > 0 {
+		numDrives = config.NumDrives
+	}
 
 	// Expand containers based on Count field to create individual container entries
 	var expandedContainers []ContainerRequirements
@@ -359,6 +394,8 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 	for cType := range containersByType {
 		typeOnNode[cType] = make(map[string]bool)
 	}
+	// Track drives used per node
+	nodeDrivesUsed := make(map[string]int) // nodeName -> number of drives allocated
 
 	// Map to get nodes available per role (respecting nodeSelectors)
 	roleNodeMap := make(map[string][]corev1.Node)
@@ -401,8 +438,69 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 	// Track which nodes belong to which role's nodeSelector to prevent cross-selector placement
 	nodeToRoleMap := make(map[string]string) // nodeName -> role that "owns" this node
 
+	// Helper function to get available free drives on a node
+	getFreeDrivesCount := func(node *corev1.Node) int {
+		// First try to get from hostcheck data (most accurate - physical + signed + unmounted)
+		if hostChecksMap != nil {
+			if hc, ok := hostChecksMap[node.Name]; ok {
+				// Count drives that are physical, signed, and not mounted
+				freeCount := 0
+
+				// Build annotation map
+				annotatedMap := make(map[string]bool)
+				if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
+					var drives []string
+					if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
+						for _, serial := range drives {
+							annotatedMap[serial] = true
+						}
+					}
+				}
+
+				// Count drives that are physical + signed + not mounted
+				for _, drive := range hc.NVMeDrives {
+					if drive.SerialNumber != "" && annotatedMap[drive.SerialNumber] && !drive.Mounted {
+						freeCount++
+					}
+				}
+
+				// Subtract already allocated drives from simulation
+				if alreadyUsed, ok := nodeDrivesUsed[node.Name]; ok {
+					freeCount -= alreadyUsed
+				}
+
+				return freeCount
+			}
+		}
+
+		// Fallback to allocatable resources
+		if drivesQuantity, ok := node.Status.Allocatable["weka.io/drives"]; ok {
+			freeDrives := int(drivesQuantity.Value())
+			// Subtract already allocated drives from simulation
+			if alreadyUsed, ok := nodeDrivesUsed[node.Name]; ok {
+				freeDrives -= alreadyUsed
+			}
+			return freeDrives
+		}
+
+		// Last resort: annotation count
+		if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
+			var drives []string
+			if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
+				freeDrives := len(drives)
+				// Subtract already allocated drives from simulation
+				if alreadyUsed, ok := nodeDrivesUsed[node.Name]; ok {
+					freeDrives -= alreadyUsed
+				}
+				return freeDrives
+			}
+		}
+
+		return 0
+	}
+
 	// Helper function to check if node has enough free resources
-	hasEnoughResources := func(node *corev1.Node, requiredCores int, requiredMemory int64, requiredHP int64) bool {
+	hasEnoughResources := func(node *corev1.Node, requiredCores int, requiredMemory int64, requiredHP int64, requiredDrives int) bool {
 		allocCores := QuantityOrZero(node.Status.Allocatable, corev1.ResourceCPU)
 		allocMem := QuantityOrZero(node.Status.Allocatable, corev1.ResourceMemory)
 		allocHP := QuantityOrZero(node.Status.Allocatable, "hugepages-2Mi")
@@ -421,9 +519,17 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 		requiredMemBytes := requiredMemory * 1024 * 1024 // Convert MiB to bytes
 		requiredHPBytes := requiredHP * 1024 * 1024      // Convert MiB to bytes
 
-		return int64(freeCores) >= int64(requiredCores) &&
+		hasEnoughCPUMemHP := int64(freeCores) >= int64(requiredCores) &&
 			freeMem >= requiredMemBytes &&
 			freeHP >= requiredHPBytes
+
+		// If drives are required, check drive availability
+		if requiredDrives > 0 {
+			freeDrives := getFreeDrivesCount(node)
+			return hasEnoughCPUMemHP && freeDrives >= requiredDrives
+		}
+
+		return hasEnoughCPUMemHP
 	}
 
 	// Try to place containers
@@ -440,6 +546,12 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 
 		for i := 0; i < len(containerList); i++ {
 			c := containerList[i]
+
+			// Determine drive requirements for this container
+			requiredDrives := 0
+			if cType == "drive" {
+				requiredDrives = numDrives
+			}
 
 			// Find best node for this container
 			placed := false
@@ -487,8 +599,8 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 					continue
 				}
 
-				// Check if node has enough free resources for this container
-				if !hasEnoughResources(node, c.Cores, c.Memory, c.Hugepages) {
+				// Check if node has enough free resources for this container (including drives)
+				if !hasEnoughResources(node, c.Cores, c.Memory, c.Hugepages, requiredDrives) {
 					continue
 				}
 
@@ -515,10 +627,15 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 					Cores:     c.Cores,
 					Memory:    c.Memory,
 					Hugepages: c.Hugepages,
+					Drives:    requiredDrives,
 				})
 				placements[placementIdx].UsedCores += c.Cores
 				placements[placementIdx].UsedMemory += c.Memory
 				placements[placementIdx].UsedHP += c.Hugepages
+				placements[placementIdx].UsedDrives += requiredDrives
+
+				// Track drive allocation
+				nodeDrivesUsed[node.Name] += requiredDrives
 
 				typeOnNode[cType][node.Name] = true
 				nodeContainerTypes[node.Name][cType] = true
@@ -526,13 +643,35 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 				placed = true
 
 				// Print placement details with lowercase container type
-				fmt.Printf("  ✓ Placed %s container #%d on node %s (Cores: %d, Memory: %d MiB, Hugepages: %d MiB)\n",
-					strings.ToLower(cType), i, node.Name, c.Cores, c.Memory, c.Hugepages)
+				if requiredDrives > 0 {
+					fmt.Printf("  ✓ Placed %s container #%d on node %s (Cores: %d, Memory: %d MiB, Hugepages: %d MiB, Drives: %d)\n",
+						strings.ToLower(cType), i, node.Name, c.Cores, c.Memory, c.Hugepages, requiredDrives)
+				} else {
+					fmt.Printf("  ✓ Placed %s container #%d on node %s (Cores: %d, Memory: %d MiB, Hugepages: %d MiB)\n",
+						strings.ToLower(cType), i, node.Name, c.Cores, c.Memory, c.Hugepages)
+				}
 				break
 			}
 
 			if !placed {
-				return nil, fmt.Errorf("could not place %s container %d - insufficient nodes or resources", strings.ToLower(cType), i)
+				// Provide detailed error message about what's missing
+				errorMsg := fmt.Sprintf("could not place %s container %d - ", strings.ToLower(cType), i)
+
+				if requiredDrives > 0 {
+					// Check how many nodes have enough drives
+					nodesWithEnoughDrives := 0
+					for _, node := range nodesForRole {
+						if getFreeDrivesCount(&node) >= requiredDrives {
+							nodesWithEnoughDrives++
+						}
+					}
+					errorMsg += fmt.Sprintf("insufficient nodes with %d+ free drives (found %d nodes with enough drives, need %d total)",
+						requiredDrives, nodesWithEnoughDrives, len(containerList))
+				} else {
+					errorMsg += "insufficient nodes or resources"
+				}
+
+				return nil, fmt.Errorf(errorMsg)
 			}
 		}
 
@@ -602,7 +741,7 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 }
 
 // printPlacementDetailsWithResourceAllocation shows containers placed on each node with resource allocation bars
-func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nodes []corev1.Node, podsByNode map[string][]corev1.Pod) {
+func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nodes []corev1.Node, podsByNode map[string][]corev1.Pod, hostChecksMap map[string]HostChecksResult) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	t.AppendHeader(table.Row{
@@ -652,8 +791,13 @@ func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nod
 
 		for _, pc := range np.Containers {
 			coloredType := colorizeContainerType(pc.Type)
-			containersStr += fmt.Sprintf("%s [CORES: %d, RAM: %.1fGi, HP: %.1fGi]\n",
-				coloredType, pc.Cores, float64(pc.Memory)/1024, float64(pc.Hugepages)/1024)
+			if pc.Drives > 0 {
+				containersStr += fmt.Sprintf("%s [CORES: %d, RAM: %.1fGi, HP: %.1fGi, DRIVES: %d]\n",
+					coloredType, pc.Cores, float64(pc.Memory)/1024, float64(pc.Hugepages)/1024, pc.Drives)
+			} else {
+				containersStr += fmt.Sprintf("%s [CORES: %d, RAM: %.1fGi, HP: %.1fGi]\n",
+					coloredType, pc.Cores, float64(pc.Memory)/1024, float64(pc.Hugepages)/1024)
+			}
 			containerTypes = append(containerTypes, pc.Type)
 		}
 
@@ -670,7 +814,7 @@ func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nod
 		currentCPUPercent := float64(currentUsedCPU.MilliValue()/1000) * 100.0 / allocCoresVal
 		wekaCPUPercent := float64(np.UsedCores) * 100.0 / allocCoresVal
 		cpuBar := createResourceBar(currentCPUPercent, wekaCPUPercent, containerTypes)
-		resourceBarsStr += fmt.Sprintf("CPU: %s\n", cpuBar)
+		resourceBarsStr += fmt.Sprintf("CPU:    %s\n", cpuBar)
 
 		// Memory bar
 		allocMemVal := float64(allocMem.Value())
@@ -678,7 +822,7 @@ func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nod
 		wekaMemVal := float64(np.UsedMemory) * 1024 * 1024 // Convert MiB to bytes
 		wekaMemPercent := wekaMemVal * 100.0 / allocMemVal
 		memBar := createResourceBar(currentMemPercent, wekaMemPercent, containerTypes)
-		resourceBarsStr += fmt.Sprintf("Mem: %s\n", memBar)
+		resourceBarsStr += fmt.Sprintf("Mem:    %s\n", memBar)
 
 		// Hugepages bar
 		allocHPVal := float64(allocHP.Value())
@@ -686,7 +830,20 @@ func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nod
 		wekaHPVal := float64(np.UsedHP) * 1024 * 1024 // Convert MiB to bytes
 		wekaHPPercent := wekaHPVal * 100.0 / allocHPVal
 		hpBar := createResourceBar(currentHPPercent, wekaHPPercent, containerTypes)
-		resourceBarsStr += fmt.Sprintf("HP:  %s", hpBar)
+		resourceBarsStr += fmt.Sprintf("HP:     %s\n", hpBar)
+
+		// Drives bar (only show if node has drives)
+		if np.UsedDrives > 0 || hasNodeDrives(node, hostChecksMap) {
+			totalDrives := getNodeTotalDrives(node, hostChecksMap)
+			currentDrivesUsed := 0 // Drives used by existing pods (TODO: could track this if needed)
+			wekaDrivesPercent := 0.0
+			if totalDrives > 0 {
+				wekaDrivesPercent = float64(np.UsedDrives) * 100.0 / float64(totalDrives)
+			}
+			// Create bar showing drive allocation (no "currently used" for drives)
+			drivesBar := createResourceBar(float64(currentDrivesUsed), wekaDrivesPercent, containerTypes)
+			resourceBarsStr += fmt.Sprintf("Drives: %s", drivesBar)
+		}
 
 		t.AppendRow(table.Row{
 			nodeName,
@@ -698,6 +855,76 @@ func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nod
 
 	t.SetStyle(table.StyleLight)
 	t.Render()
+}
+
+// hasNodeDrives checks if a node has any drives available
+func hasNodeDrives(node *corev1.Node, hostChecksMap map[string]HostChecksResult) bool {
+	// Check hostcheck data
+	if hostChecksMap != nil {
+		if hc, ok := hostChecksMap[node.Name]; ok {
+			return hc.NVMeDriveCount > 0
+		}
+	}
+
+	// Check allocatable
+	if drivesQuantity, ok := node.Status.Allocatable["weka.io/drives"]; ok {
+		return drivesQuantity.Value() > 0
+	}
+
+	// Check annotation
+	if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
+		var drives []string
+		if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
+			return len(drives) > 0
+		}
+	}
+
+	return false
+}
+
+// getNodeTotalDrives returns the total number of drives on a node
+func getNodeTotalDrives(node *corev1.Node, hostChecksMap map[string]HostChecksResult) int {
+	// Check hostcheck data first
+	if hostChecksMap != nil {
+		if hc, ok := hostChecksMap[node.Name]; ok {
+			// Count signed drives
+			count := 0
+			annotatedMap := make(map[string]bool)
+			if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
+				var drives []string
+				if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
+					for _, serial := range drives {
+						annotatedMap[serial] = true
+					}
+				}
+			}
+
+			for _, drive := range hc.NVMeDrives {
+				if drive.SerialNumber != "" && annotatedMap[drive.SerialNumber] {
+					count++
+				}
+			}
+
+			if count > 0 {
+				return count
+			}
+		}
+	}
+
+	// Fallback to allocatable
+	if drivesQuantity, ok := node.Status.Allocatable["weka.io/drives"]; ok {
+		return int(drivesQuantity.Value())
+	}
+
+	// Last resort: annotation
+	if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
+		var drives []string
+		if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
+			return len(drives)
+		}
+	}
+
+	return 0
 }
 
 // colorizeContainerType returns a colored version of the container type name
@@ -729,7 +956,11 @@ func validateDrives(nodes []corev1.Node, driveContainers, numDrives int) error {
 
 	totalDrivesAvailable := 0
 	for _, node := range nodes {
-		if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
+		// Count drives from allocatable resources first
+		if drivesQuantity, ok := node.Status.Allocatable["weka.io/drives"]; ok {
+			totalDrivesAvailable += int(drivesQuantity.Value())
+		} else if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
+			// Fallback to annotation if allocatable not set
 			var drives []string
 			if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
 				totalDrivesAvailable += len(drives)
@@ -746,6 +977,143 @@ func validateDrives(nodes []corev1.Node, driveContainers, numDrives int) error {
 		return fmt.Errorf("❌ Insufficient drives: need %d drives (%d containers × %d drives/container), but only %d available",
 			totalDrivesNeeded, driveContainers, numDrives, totalDrivesAvailable)
 	}
+
+	return nil
+}
+
+// validateDrivesDetailed performs detailed drive validation using hostcheck data
+// This function analyzes physical drives vs annotated drives vs allocated drives
+func validateDrivesDetailed(hostChecksMap map[string]HostChecksResult, nodes []corev1.Node, driveContainers, numDrives int) error {
+	totalDrivesNeeded := driveContainers * numDrives
+	if totalDrivesNeeded == 0 {
+		return nil
+	}
+
+	type NodeDriveStatus struct {
+		NodeName          string
+		PhysicalDrives    []string // Serial numbers from /dev scan
+		AnnotatedDrives   []string // Serial numbers from annotation
+		AllocatableDrives int      // From resources.allocatable
+		FreeDrives        []string // Drives that are physical + annotated but not mounted
+		UnsignedDrives    []string // Drives that are physical but not annotated
+		MissingDrives     []string // Drives that are annotated but not physical (used)
+	}
+
+	var nodeStatuses []NodeDriveStatus
+	totalFreeDrives := 0
+	var warnings []string
+
+	for _, node := range nodes {
+		status := NodeDriveStatus{
+			NodeName: node.Name,
+		}
+
+		// Get physical drives from hostcheck
+		if hc, ok := hostChecksMap[node.Name]; ok {
+			for _, drive := range hc.NVMeDrives {
+				if drive.SerialNumber != "" {
+					status.PhysicalDrives = append(status.PhysicalDrives, drive.SerialNumber)
+					// Check if drive is mounted
+					if !drive.Mounted {
+						// Drive is physical and not mounted - check if it's annotated
+						// We'll do this check below
+					}
+				}
+			}
+		}
+
+		// Get annotated drives (signed drives)
+		if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
+			var drives []string
+			if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
+				status.AnnotatedDrives = drives
+			}
+		}
+
+		// Get allocatable drives count
+		if drivesQuantity, ok := node.Status.Allocatable["weka.io/drives"]; ok {
+			status.AllocatableDrives = int(drivesQuantity.Value())
+		}
+
+		// Build maps for quick lookup
+		physicalMap := make(map[string]bool)
+		for _, serial := range status.PhysicalDrives {
+			physicalMap[serial] = true
+		}
+
+		annotatedMap := make(map[string]bool)
+		for _, serial := range status.AnnotatedDrives {
+			annotatedMap[serial] = true
+		}
+
+		// Identify drive categories
+		for _, serial := range status.PhysicalDrives {
+			if annotatedMap[serial] {
+				// Physical + annotated = free drive
+				status.FreeDrives = append(status.FreeDrives, serial)
+			} else {
+				// Physical but not annotated = unsigned drive
+				status.UnsignedDrives = append(status.UnsignedDrives, serial)
+			}
+		}
+
+		// Drives that are annotated but not physical = already used/allocated
+		for _, serial := range status.AnnotatedDrives {
+			if !physicalMap[serial] {
+				status.MissingDrives = append(status.MissingDrives, serial)
+			}
+		}
+
+		// Count free drives
+		totalFreeDrives += len(status.FreeDrives)
+
+		// Generate warnings for this node
+		if len(status.UnsignedDrives) > 0 {
+			warnings = append(warnings, fmt.Sprintf(
+				"   Node %s: %d unsigned NVMe drive(s) found. Run DriveSign WekaPolicy to make them available for WEKA",
+				node.Name, len(status.UnsignedDrives)))
+		}
+
+		nodeStatuses = append(nodeStatuses, status)
+	}
+
+	// Check if we have enough free drives
+	if totalFreeDrives == 0 {
+		return fmt.Errorf("❌ No free NVMe drives found in cluster.\n" +
+			"   Drives must be:\n" +
+			"   1. Physically present (detected in /dev)\n" +
+			"   2. Signed (included in weka.io/weka-drives annotation)\n" +
+			"   3. Not mounted or in use\n\n" +
+			"   Apply DriveSign WekaPolicy to sign drives.")
+	}
+
+	if totalFreeDrives < totalDrivesNeeded {
+		msg := fmt.Sprintf("❌ Insufficient free drives: need %d drives (%d containers × %d drives/container), but only %d available\n\n",
+			totalDrivesNeeded, driveContainers, numDrives, totalFreeDrives)
+
+		// Add per-node breakdown
+		msg += "Drive availability by node:\n"
+		for _, status := range nodeStatuses {
+			if len(status.FreeDrives) > 0 || len(status.UnsignedDrives) > 0 {
+				msg += fmt.Sprintf("  %s: %d free, %d unsigned, %d in use\n",
+					status.NodeName, len(status.FreeDrives), len(status.UnsignedDrives), len(status.MissingDrives))
+			}
+		}
+
+		return fmt.Errorf(msg)
+	}
+
+	// Print warnings if any unsigned drives were found
+	if len(warnings) > 0 {
+		fmt.Println("\n⚠️  Drive Warnings:")
+		for _, warning := range warnings {
+			fmt.Println(warning)
+		}
+		fmt.Println()
+	}
+
+	// Success message
+	fmt.Printf("✓ Drive validation passed: %d free drives available (need %d)\n", totalFreeDrives, totalDrivesNeeded)
 
 	return nil
 }
@@ -1367,4 +1735,155 @@ func printNodeSelectorTable(title, selector string, nodes []corev1.Node, podsByN
 func tryParseInt(s string) (int, bool) {
 	num, err := strconv.Atoi(s)
 	return num, err == nil
+}
+
+// runHostChecksForDrives runs hostchecks on specified nodes to gather drive information
+// Uses a temporary namespace for easy cleanup
+func runHostChecksForDrives(ctx context.Context, nodes []corev1.Node) (map[string]HostChecksResult, error) {
+	hostChecksMap := make(map[string]HostChecksResult)
+
+	if len(nodes) == 0 {
+		return hostChecksMap, nil
+	}
+
+	// Create temporary namespace for hostcheck pods
+	namespace := fmt.Sprintf("kubectl-hostchk-%s", randomString(8))
+
+	fmt.Printf("Creating temporary namespace: %s\n", namespace)
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "kubectl-weka",
+				"app.kubernetes.io/component":  "hostcheck",
+			},
+		},
+	}
+
+	if err := KubeClients.CRClient.Create(ctx, ns); err != nil {
+		return nil, fmt.Errorf("failed to create temporary namespace: %w", err)
+	}
+
+	// Ensure namespace cleanup even on Ctrl-C or panic
+	defer func() {
+		cleanupCtx := context.Background() // Use fresh context for cleanup
+		fmt.Printf("\nCleaning up temporary namespace: %s\n", namespace)
+
+		// Delete namespace (this will delete all pods inside)
+		if err := KubeClients.CRClient.Delete(cleanupCtx, ns); err != nil {
+			fmt.Printf("  Warning: Failed to delete namespace: %v\n", err)
+			return
+		}
+
+		// Wait for namespace deletion to complete (with timeout)
+		fmt.Printf("  Waiting for namespace deletion...")
+		deleteTimeout := 30 * time.Second
+		deleteDeadline := time.Now().Add(deleteTimeout)
+
+		for time.Now().Before(deleteDeadline) {
+			var checkNs corev1.Namespace
+			err := KubeClients.CRClient.Get(cleanupCtx, ctrlclient.ObjectKey{Name: namespace}, &checkNs)
+			if err != nil {
+				// Namespace not found = deleted successfully
+				fmt.Printf(" ✓ Done\n")
+				return
+			}
+			time.Sleep(1 * time.Second)
+		}
+
+		fmt.Printf(" (timeout reached, namespace may still be deleting in background)\n")
+	}()
+
+	fmt.Printf("Creating hostcheck pods on %d nodes...\n", len(nodes))
+
+	labelKey := "weka.io/app"
+	labelVal := "hostcheck"
+
+	// Create pods in the temporary namespace
+	createdPods := make(map[string]*corev1.Pod)
+	for _, node := range nodes {
+		podName := fmt.Sprintf("hostchk-%s-%s", sanitizeName(node.Name), randomString(5))
+		pod := makeHostChecksPod(namespace, node.Name, podName, labelKey, labelVal)
+
+		if err := KubeClients.CRClient.Create(ctx, pod); err != nil {
+			fmt.Printf("  [%s] Failed to create pod: %v\n", node.Name, err)
+			continue
+		}
+		createdPods[node.Name] = pod
+	}
+
+	fmt.Printf("✓ Created %d hostcheck pods\n", len(createdPods))
+
+	// Wait for pods to complete and collect results
+	maxWait := 2 * time.Minute
+	deadline := time.Now().Add(maxWait)
+
+	for time.Now().Before(deadline) {
+		allCompleted := true
+
+		for nodeName, pod := range createdPods {
+			var currentPod corev1.Pod
+			if err := KubeClients.CRClient.Get(ctx, ctrlclient.ObjectKey{
+				Namespace: pod.Namespace,
+				Name:      pod.Name,
+			}, &currentPod); err != nil {
+				continue
+			}
+
+			if currentPod.Status.Phase == corev1.PodSucceeded {
+				// Pod completed, read logs
+				if _, exists := hostChecksMap[nodeName]; !exists {
+					logs, err := getPodLogs(ctx, currentPod.Namespace, currentPod.Name, "hostchecks")
+					if err == nil {
+						var hc HostChecksResult
+						if err := json.Unmarshal([]byte(logs), &hc); err == nil {
+							hostChecksMap[nodeName] = hc
+						}
+					}
+				}
+			} else if currentPod.Status.Phase != corev1.PodPending && currentPod.Status.Phase != corev1.PodRunning {
+				// Pod failed
+				delete(createdPods, nodeName)
+			} else {
+				allCompleted = false
+			}
+		}
+
+		if allCompleted && len(hostChecksMap) == len(createdPods) {
+			break
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	fmt.Printf("✓ Collected drive information from %d/%d nodes\n", len(hostChecksMap), len(nodes))
+
+	if len(hostChecksMap) == 0 {
+		return nil, fmt.Errorf("failed to collect drive information from any node")
+	}
+
+	return hostChecksMap, nil
+}
+
+// getPodLogs retrieves logs from a pod container
+func getPodLogs(ctx context.Context, namespace, podName, containerName string) (string, error) {
+	clientset := KubeClients.Clientset
+
+	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
+		Container: containerName,
+	})
+
+	podLogs, err := req.Stream(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer podLogs.Close()
+
+	buf := new(strings.Builder)
+	_, err = io.Copy(buf, podLogs)
+	if err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
 }
