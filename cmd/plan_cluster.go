@@ -214,7 +214,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 		fmt.Println("⚠️  WARNING: Hot spare is set to 0. At least 1 hot spare is recommended for production clusters to handle drive failures")
 		// This is a warning, not a failure
 	} else {
-		fmt.Printf("✓ Hot spare configured: %d\n", cluster.Spec.HotSpare)
+		fmt.Printf("✅ Hot spare configured: %d\n", cluster.Spec.HotSpare)
 	}
 
 	// Sanity check 2: Validate drivers distribution service
@@ -222,7 +222,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 		if err := validateDriversDistService(cluster.Spec.DriversDistService); err != nil {
 			fmt.Printf("⚠️  WARNING: %v\n", err)
 		} else {
-			fmt.Printf("✓ DriversDistService configured: %s\n", cluster.Spec.DriversDistService)
+			fmt.Printf("✅ DriversDistService configured: %s\n", cluster.Spec.DriversDistService)
 		}
 	}
 
@@ -268,7 +268,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 		}
 	}
 
-	fmt.Printf("✓ Collected pod data from cluster\n")
+	fmt.Printf("✅ Collected pod data from cluster\n")
 
 	fmt.Println("\n=== Nodes Matching Selection Criteria ===")
 	printNodesPerSelector(roleGrouping, cluster.Spec.NodeSelector, podsByNode)
@@ -309,15 +309,15 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 	printPlacementDetailsWithResourceAllocation(placement, allEligibleNodes, podsByNode, hostChecksMap)
 
 	fmt.Println("\n=== Validating Network Interface 'enp99s0f0np0' ===")
-	fmt.Println("✓ Network interface validation passed")
+	fmt.Println("✅ Network interface validation passed")
 
 	fmt.Printf("\n✅ Cluster validation passed\n")
-	fmt.Printf("   ✓ %d total nodes in cluster\n", len(nodes))
-	fmt.Printf("   ✓ %d nodes eligible for Weka deployment\n", len(allEligibleNodes))
-	fmt.Printf("   ✓ Role-based node allocation configured\n")
-	fmt.Printf("   ✓ All required drives are available\n")
-	fmt.Printf("   ✓ Network configuration is consistent\n")
-	fmt.Printf("   ✓ Sufficient resources available per role\n")
+	fmt.Printf("   ✅ %d total nodes in cluster\n", len(nodes))
+	fmt.Printf("   ✅ %d nodes eligible for Weka deployment\n", len(allEligibleNodes))
+	fmt.Printf("   ✅ Role-based node allocation configured\n")
+	fmt.Printf("   ✅ All required drives are available\n")
+	fmt.Printf("   ✅ Network configuration is consistent\n")
+	fmt.Printf("   ✅ Sufficient resources available per role\n")
 
 	return nil
 }
@@ -594,10 +594,10 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 
 				// Print placement details with lowercase container type
 				if requiredDrives > 0 {
-					fmt.Printf("  ✓ Placed %s container #%d on node %s (Cores: %d, Memory: %d MiB, Hugepages: %d MiB, Drives: %d)\n",
+					fmt.Printf("  ✅ Placed %s container #%d on node %s (Cores: %d, Memory: %d MiB, Hugepages: %d MiB, Drives: %d)\n",
 						strings.ToLower(cType), i, node.Name, c.Cores, c.Memory, c.Hugepages, requiredDrives)
 				} else {
-					fmt.Printf("  ✓ Placed %s container #%d on node %s (Cores: %d, Memory: %d MiB, Hugepages: %d MiB)\n",
+					fmt.Printf("  ✅ Placed %s container #%d on node %s (Cores: %d, Memory: %d MiB, Hugepages: %d MiB)\n",
 						strings.ToLower(cType), i, node.Name, c.Cores, c.Memory, c.Hugepages)
 				}
 				break
@@ -675,7 +675,7 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 					typeOnNode["envoy"][p.NodeName] = true
 					nodeContainerTypes[p.NodeName]["envoy"] = true
 
-					fmt.Printf("  ✓ Placed envoy container #%d on node %s (Cores: %d, Memory: %d MiB, Hugepages: %d MiB)\n",
+					fmt.Printf("  ✅ Placed envoy container #%d on node %s (Cores: %d, Memory: %d MiB, Hugepages: %d MiB)\n",
 						envoyIdx, p.NodeName, envoyReq.Cores, envoyReq.Memory, envoyReq.Hugepages)
 					envoyIdx++
 				}
@@ -1063,7 +1063,7 @@ func validateDrivesDetailed(hostChecksMap HostChecksMap, nodes []corev1.Node, dr
 	}
 
 	// Success message
-	fmt.Printf("✓ Drive validation passed: %d free drives available (need %d)\n", totalFreeDrives, totalDrivesNeeded)
+	fmt.Printf("✅ Drive validation passed: %d free drives available (need %d)\n", totalFreeDrives, totalDrivesNeeded)
 
 	return nil
 }

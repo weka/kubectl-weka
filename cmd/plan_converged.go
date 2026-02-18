@@ -66,13 +66,13 @@ func runPlanConverged(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to parse cluster file: %w", err)
 	}
-	fmt.Printf("✓ Cluster: %s/%s\n", cluster.Namespace, cluster.Name)
+	fmt.Printf("✅ Cluster: %s/%s\n", cluster.Namespace, cluster.Name)
 
 	client, err := ParseWekaResourceFile[*wekaapi.WekaClient](clientFile)
 	if err != nil {
 		return fmt.Errorf("failed to parse client file: %w", err)
 	}
-	fmt.Printf("✓ Client: %s/%s\n", client.Namespace, client.Name)
+	fmt.Printf("✅ Client: %s/%s\n", client.Namespace, client.Name)
 
 	// Validate YAML-only compatibility (before connecting to Kubernetes)
 	fmt.Println("\n=== Validating Client-Cluster Compatibility ===")
@@ -80,7 +80,7 @@ func runPlanConverged(_ *cobra.Command, args []string) error {
 		fmt.Printf("client-cluster compatibility validation failed: %v", err)
 		return err
 	}
-	fmt.Printf("✓ Client targetCluster matches WekaCluster\n")
+	fmt.Printf("✅ Client targetCluster matches WekaCluster\n")
 
 	// Validate image version compatibility
 	if err := validateImageVersionCompatibility(cluster, client); err != nil {
@@ -94,7 +94,7 @@ func runPlanConverged(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get cluster nodes: %w", err)
 	}
-	fmt.Printf("✓ Connected. Found %d nodes\n", len(nodes))
+	fmt.Printf("✅ Connected. Found %d nodes\n", len(nodes))
 
 	// Validate and plan converged deployment
 	if err := validateAndPlanConverged(ctx, cluster, client, nodes); err != nil {
@@ -119,7 +119,7 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 			}
 		}
 	}
-	fmt.Printf("✓ Collected pod data from cluster\n")
+	fmt.Printf("✅ Collected pod data from cluster\n")
 
 	// Calculate cluster container requirements
 	fmt.Println("\n=== Cluster Container Requirements ===")
@@ -172,7 +172,7 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 	if err != nil {
 		return fmt.Errorf("cluster placement failed: %w", err)
 	}
-	fmt.Printf("✓ Successfully placed all cluster containers\n")
+	fmt.Printf("✅ Successfully placed all cluster containers\n")
 
 	// Phase 2: Initialize converged state with cluster allocations
 	convergedStates := initializeConvergedStates(nodes, podsByNode, clusterPlacements)
@@ -182,14 +182,14 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 	if err := simulateClientOnConverged(convergedStates, clientNodes, clientReqs); err != nil {
 		return fmt.Errorf("client placement failed: %w", err)
 	}
-	fmt.Printf("✓ Successfully placed all client containers\n")
+	fmt.Printf("✅ Successfully placed all client containers\n")
 
 	// Phase 4: Validate no conflicts between client/s3/nfs
 	fmt.Println("\n=== Validating Container Compatibility ===")
 	if err := validateContainerCompatibility(convergedStates); err != nil {
 		return fmt.Errorf("container compatibility validation failed: %w", err)
 	}
-	fmt.Printf("✓ No conflicting container types on same nodes\n")
+	fmt.Printf("✅ No conflicting container types on same nodes\n")
 
 	// Print converged placement details with drive information
 	fmt.Println("\n=== Converged Deployment Plan ===")
@@ -478,10 +478,10 @@ func printConvergedSummary(states map[string]*ConvergedNodeState) {
 		}
 	}
 
-	fmt.Printf("✓ Cluster containers: %d across %d nodes\n", totalClusterContainers, nodesWithCluster)
-	fmt.Printf("✓ Client containers: %d across %d nodes\n", totalClientContainers, nodesWithClient)
-	fmt.Printf("✓ Converged nodes (both cluster + client): %d\n", nodesWithBoth)
-	fmt.Printf("✓ Total nodes used: %d\n", len(getActiveNodes(states)))
+	fmt.Printf("✅ Cluster containers: %d across %d nodes\n", totalClusterContainers, nodesWithCluster)
+	fmt.Printf("✅ Client containers: %d across %d nodes\n", totalClientContainers, nodesWithClient)
+	fmt.Printf("✅ Converged nodes (both cluster + client): %d\n", nodesWithBoth)
+	fmt.Printf("✅ Total nodes used: %d\n", len(getActiveNodes(states)))
 }
 
 func getActiveNodes(states map[string]*ConvergedNodeState) []string {

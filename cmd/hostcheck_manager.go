@@ -139,7 +139,7 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 				if err != nil {
 					// Namespace not found = deleted successfully
 					if opts.Verbose {
-						fmt.Printf(" ✓ Done\n")
+						fmt.Printf(" ✅ Done\n")
 					}
 					return
 				}
@@ -181,7 +181,7 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 	}
 
 	if opts.Verbose {
-		fmt.Printf("✓ Created %d hostcheck pods\n", len(createdPods))
+		fmt.Printf("✅ Created %d hostcheck pods\n", len(createdPods))
 	}
 
 	// Wait for pods to complete and collect results
@@ -226,7 +226,7 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 	}
 
 	if opts.Verbose {
-		fmt.Printf("✓ Collected hostcheck data from %d/%d nodes\n", len(hostChecksMap), len(nodes))
+		fmt.Printf("✅ Collected hostcheck data from %d/%d nodes\n", len(hostChecksMap), len(nodes))
 	}
 
 	if len(hostChecksMap) == 0 {
@@ -397,7 +397,7 @@ func (r *HostCheckRegistry) GetHostChecksForNodes(
 		}
 		r.cache.mu.RUnlock()
 
-		fmt.Printf("✓ Using cached hostcheck results for %d node(s)\n", len(result))
+		fmt.Printf("✅ Using cached hostcheck results for %d node(s)\n", len(result))
 		return result, nil
 	}
 	r.cache.mu.RUnlock()

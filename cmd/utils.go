@@ -123,7 +123,7 @@ func validateImageVersionCompatibility(cluster *v1alpha1.WekaCluster, client *v1
 
 	// If images are identical, no validation needed
 	if clusterImage == clientImage {
-		fmt.Printf("✓ Client and cluster images match: %s\n", clusterImage)
+		fmt.Printf("✅ Client and cluster images match: %s\n", clusterImage)
 		return nil
 	}
 
@@ -194,7 +194,7 @@ func validateImageVersionCompatibility(cluster *v1alpha1.WekaCluster, client *v1
 			clusterVersion.String())
 	} else {
 		// Exact match
-		fmt.Printf("✓ Client and cluster versions compatible: %s\n", clusterVersion.String())
+		fmt.Printf("✅ Client and cluster versions compatible: %s\n", clusterVersion.String())
 	}
 
 	return nil

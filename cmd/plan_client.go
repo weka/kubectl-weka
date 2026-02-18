@@ -87,7 +87,7 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 	if err := validateClientConfig(ctx, client); err != nil {
 		return err
 	}
-	fmt.Println("✓ Configuration valid")
+	fmt.Println("✅ Configuration valid")
 
 	// Calculate container requirements
 	fmt.Println("\n=== Container Resource Requirements ===")
@@ -115,7 +115,7 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 			}
 		}
 	}
-	fmt.Printf("✓ Collected pod data from cluster\n")
+	fmt.Printf("✅ Collected pod data from cluster\n")
 
 	// Find matching nodes
 	fmt.Println("\n=== Finding Matching Nodes ===")
@@ -146,7 +146,7 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 	fmt.Println("\n=== Allocation Summary ===")
 	printClientAllocationFeasibility(allocations)
 
-	fmt.Println("\n✓ Plan complete!")
+	fmt.Println("\n✅ Plan complete!")
 	return nil
 }
 
@@ -201,7 +201,7 @@ func validateClientConfig(ctx context.Context, client *wekaapi.WekaClient) error
 			fmt.Println("   it is recommended to run 'kubectl weka plan converged' instead.")
 		} else {
 			// Cluster exists - success
-			fmt.Printf("✓ Target cluster '%s/%s' found in Kubernetes\n",
+			fmt.Printf("✅ Target cluster '%s/%s' found in Kubernetes\n",
 				getTargetClusterNamespace(client), client.Spec.TargetCluster.Name)
 		}
 	} else {
@@ -436,7 +436,7 @@ func printClientAllocationFeasibility(allocations []ClientNodeAllocation) {
 
 	totalNodes := len(allocations)
 	fmt.Printf("Total nodes analyzed: %d\n", totalNodes)
-	fmt.Printf("✓ Nodes with sufficient resources: %d (%.1f%%)\n",
+	fmt.Printf("✅ Nodes with sufficient resources: %d (%.1f%%)\n",
 		successCount, float64(successCount)*100/float64(totalNodes))
 
 	if failureCount > 0 {
