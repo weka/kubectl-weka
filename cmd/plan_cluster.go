@@ -4,14 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/jedib0t/go-pretty/v6/table"
-	"github.com/spf13/cobra"
-	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
-	corev1 "k8s.io/api/core/v1"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/jedib0t/go-pretty/v6/table"
+	"github.com/spf13/cobra"
+	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 )
 
 var (
@@ -294,7 +296,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 
 	// Perform detailed drive validation if drive containers are configured
 	// Also collect hostcheck data for placement simulation
-	var hostChecksMap map[string]HostChecksResult
+	var hostChecksMap HostChecksMap
 	if config.DriveContainers != nil && *config.DriveContainers > 0 && config.NumDrives > 0 {
 		fmt.Println("\n=== Detailed Drive Validation ===")
 		fmt.Println("Scanning nodes for NVMe drives...")
@@ -361,7 +363,7 @@ type PlacedContainer struct {
 }
 
 // simulatePlacement simulates allocation of containers to nodes with anti-affinity rules and drive constraints
-func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequirements, podsByNode map[string][]corev1.Pod, hostChecksMap map[string]HostChecksResult) ([]NodePlacement, error) {
+func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequirements, podsByNode map[string][]corev1.Pod, hostChecksMap HostChecksMap) ([]NodePlacement, error) {
 	var placements []NodePlacement
 
 	// Expand containers based on Count field to create individual container entries
@@ -729,7 +731,7 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 }
 
 // printPlacementDetailsWithResourceAllocation shows containers placed on each node with resource allocation bars
-func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nodes []corev1.Node, podsByNode map[string][]corev1.Pod, hostChecksMap map[string]HostChecksResult) {
+func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nodes []corev1.Node, podsByNode map[string][]corev1.Pod, hostChecksMap HostChecksMap) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	t.AppendHeader(table.Row{
@@ -846,7 +848,7 @@ func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nod
 }
 
 // hasNodeDrives checks if a node has any drives available
-func hasNodeDrives(node *corev1.Node, hostChecksMap map[string]HostChecksResult) bool {
+func hasNodeDrives(node *corev1.Node, hostChecksMap HostChecksMap) bool {
 	// Check hostcheck data
 	if hostChecksMap != nil {
 		if hc, ok := hostChecksMap[node.Name]; ok {
@@ -871,7 +873,7 @@ func hasNodeDrives(node *corev1.Node, hostChecksMap map[string]HostChecksResult)
 }
 
 // getNodeTotalDrives returns the total number of drives on a node
-func getNodeTotalDrives(node *corev1.Node, hostChecksMap map[string]HostChecksResult) int {
+func getNodeTotalDrives(node *corev1.Node, hostChecksMap HostChecksMap) int {
 	// Check hostcheck data first
 	if hostChecksMap != nil {
 		if hc, ok := hostChecksMap[node.Name]; ok {
@@ -971,7 +973,7 @@ func validateDrives(nodes []corev1.Node, driveContainers, numDrives int) error {
 
 // validateDrivesDetailed performs detailed drive validation using hostcheck data
 // This function analyzes physical drives vs annotated drives vs allocated drives
-func validateDrivesDetailed(hostChecksMap map[string]HostChecksResult, nodes []corev1.Node, driveContainers, numDrives int) error {
+func validateDrivesDetailed(hostChecksMap HostChecksMap, nodes []corev1.Node, driveContainers, numDrives int) error {
 	totalDrivesNeeded := driveContainers * numDrives
 	if totalDrivesNeeded == 0 {
 		return nil

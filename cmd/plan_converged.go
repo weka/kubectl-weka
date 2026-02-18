@@ -103,9 +103,6 @@ func runPlanConverged(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Give background Kubernetes client goroutines time to shut down gracefully
-	time.Sleep(100 * time.Millisecond)
-
 	return nil
 }
 
@@ -148,8 +145,9 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 	// Get all eligible nodes for drive validation
 	allEligibleNodes := getAllEligibleNodes(roleGrouping)
 
-	// Perform detailed drive validation if drive containers are configured
-	var hostChecksMap map[string]HostChecksResult
+	// Get hostchecks for all eligible nodes (cached execution)
+	// This runs hostchecks on-demand and caches results for subsequent use
+	var hostChecksMap HostChecksMap
 	if cluster.Spec.Dynamic != nil && cluster.Spec.Dynamic.DriveContainers != nil &&
 		*cluster.Spec.Dynamic.DriveContainers > 0 && cluster.Spec.Dynamic.NumDrives > 0 {
 		fmt.Println("\n=== Detailed Drive Validation ===")
@@ -307,7 +305,7 @@ func simulateClientOnConverged(states map[string]*ConvergedNodeState, clientNode
 	return nil
 }
 
-func printConvergedPlacementDetails(states map[string]*ConvergedNodeState, hostChecksMap map[string]HostChecksResult) {
+func printConvergedPlacementDetails(states map[string]*ConvergedNodeState, hostChecksMap HostChecksMap) {
 	// Get sorted list of nodes that have any containers
 	var activeNodes []string
 	for nodeName, state := range states {

@@ -17,7 +17,7 @@ import (
 // ============================================================================
 
 // HostChecksMap is a map of node names to their hostcheck results
-type HostChecksMap map[string]HostChecksResult
+type HostChecksMap map[string]*HostChecksResult
 
 // HostCheckOptions configures hostcheck execution
 type HostCheckOptions struct {
@@ -206,7 +206,7 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 					if err == nil {
 						var hc HostChecksResult
 						if err := json.Unmarshal([]byte(logs), &hc); err == nil {
-							hostChecksMap[nodeName] = hc
+							hostChecksMap[nodeName] = &hc
 						}
 					}
 				}
