@@ -3,19 +3,33 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"sort"
+
+	"github.com/jedib0t/go-pretty/v6/table"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/kubernetes/scheme"
-	"os"
-	"sort"
 	"strings"
 )
 
-// Common types used by both cluster and client planning
-// Note: NodeRequirements is defined in plan_cluster.go and should be moved here in the future
+// ============================================================================
+// Common Types
+// ============================================================================
+
+// NodeRequirements represents the minimum node requirements for a specific purpose
+type NodeRequirements struct {
+	Purpose          string
+	MinNodes         int
+	CoresPerNode     int // Cores per node with HT
+	CoresPerNodeNoHT int // Cores per node without HT
+	HugepagesPerNode int64
+	MemoryPerNode    int64
+	Description      string
+}
 
 // ============================================================================
 // Node Operations
@@ -334,4 +348,220 @@ func splitNodeName(name string) []string {
 	}
 
 	return parts
+}
+
+// NodePlacement represents simulated placement of containers on nodes
+type NodePlacement struct {
+	NodeName   string
+	Containers []PlacedContainer
+	UsedCores  int
+	UsedMemory int64
+	UsedHP     int64
+	UsedDrives int // Number of drives allocated to containers on this node
+}
+
+type PlacedContainer struct {
+	Type      string
+	Index     int
+	Cores     int
+	Memory    int64
+	Hugepages int64
+	Drives    int // Number of drives needed (only for drive containers)
+}
+
+type ContainerRequirements struct {
+	Type      string
+	Count     int
+	Hugepages int64
+	Cores     int // Cores with HT
+	CoresNoHT int // Cores without HT
+	Memory    int64
+	Drives    int // Number of drives required (only for drive containers)
+}
+
+// ============================================================================
+// Node Requirements Calculation & Display
+// ============================================================================
+
+// calculateNodeRequirements calculates minimum node requirements per purpose (Backend, Frontend)
+// Adds 10% spare capacity to all resources
+func calculateNodeRequirements(_ *wekaapi.WekaConfig, containers []ContainerRequirements) []NodeRequirements {
+	nodeReqs := []NodeRequirements{}
+
+	computeCount := 0
+	driveCount := 0
+	var computeReq, driveReq ContainerRequirements
+
+	for _, c := range containers {
+		if c.Type == "compute" {
+			computeCount = c.Count
+			computeReq = c
+		} else if c.Type == "drive" {
+			driveCount = c.Count
+			driveReq = c
+		}
+	}
+
+	if computeCount > 0 || driveCount > 0 {
+		backendNodes := maxInt(computeCount, driveCount)
+
+		totalCores := 0
+		totalCoresNoHT := 0
+		totalHugepages := int64(0)
+		totalMemory := int64(0)
+
+		if computeCount > 0 {
+			totalCores += computeReq.Cores
+			totalCoresNoHT += computeReq.CoresNoHT
+			totalHugepages += computeReq.Hugepages
+			totalMemory += computeReq.Memory
+		}
+		if driveCount > 0 {
+			totalCores += driveReq.Cores
+			totalCoresNoHT += driveReq.CoresNoHT
+			totalHugepages += driveReq.Hugepages
+			totalMemory += driveReq.Memory
+		}
+
+		// Add 10% spare
+		totalCores = int(float64(totalCores) * 1.1)
+		totalCoresNoHT = int(float64(totalCoresNoHT) * 1.1)
+		totalHugepages = int64(float64(totalHugepages) * 1.1)
+		totalMemory = int64(float64(totalMemory) * 1.1)
+
+		nodeReqs = append(nodeReqs, NodeRequirements{
+			Purpose:          "Backend (Compute+Drive)",
+			MinNodes:         backendNodes,
+			CoresPerNode:     totalCores,
+			CoresPerNodeNoHT: totalCoresNoHT,
+			HugepagesPerNode: totalHugepages,
+			MemoryPerNode:    totalMemory,
+			Description:      fmt.Sprintf("To accommodate %d compute and %d drive containers", computeCount, driveCount),
+		})
+	}
+
+	s3Count := 0
+	nfsCount := 0
+	var s3Req, nfsReq, envoyReq ContainerRequirements
+
+	for _, c := range containers {
+		switch c.Type {
+		case "s3":
+			s3Count = c.Count
+			s3Req = c
+		case "nfs":
+			nfsCount = c.Count
+			nfsReq = c
+		case "envoy":
+			envoyReq = c
+		}
+	}
+
+	if s3Count > 0 || nfsCount > 0 {
+		frontendNodes := maxInt(s3Count, nfsCount)
+
+		totalCores := 0
+		totalCoresNoHT := 0
+		totalHugepages := int64(0)
+		totalMemory := int64(0)
+
+		if s3Count > 0 {
+			totalCores += s3Req.Cores + envoyReq.Cores
+			totalCoresNoHT += s3Req.CoresNoHT + envoyReq.Cores // Envoy doesn't change with HT
+			totalHugepages += s3Req.Hugepages + envoyReq.Hugepages
+			totalMemory += s3Req.Memory + envoyReq.Memory
+		}
+		if nfsCount > 0 {
+			totalCores += nfsReq.Cores
+			totalCoresNoHT += nfsReq.CoresNoHT
+			totalHugepages += nfsReq.Hugepages
+			totalMemory += nfsReq.Memory
+		}
+
+		// Add 10% spare
+		totalCores = int(float64(totalCores) * 1.1)
+		totalCoresNoHT = int(float64(totalCoresNoHT) * 1.1)
+		totalHugepages = int64(float64(totalHugepages) * 1.1)
+		totalMemory = int64(float64(totalMemory) * 1.1)
+
+		description := ""
+		if s3Count > 0 && nfsCount > 0 {
+			description = fmt.Sprintf("To accommodate %d S3+Envoy and %d NFS containers", s3Count, nfsCount)
+		} else if s3Count > 0 {
+			description = fmt.Sprintf("To accommodate %d S3+Envoy containers", s3Count)
+		} else {
+			description = fmt.Sprintf("To accommodate %d NFS containers", nfsCount)
+		}
+
+		nodeReqs = append(nodeReqs, NodeRequirements{
+			Purpose:          "Frontend (S3/NFS)",
+			MinNodes:         frontendNodes,
+			CoresPerNode:     totalCores,
+			CoresPerNodeNoHT: totalCoresNoHT,
+			HugepagesPerNode: totalHugepages,
+			MemoryPerNode:    totalMemory,
+			Description:      description,
+		})
+	}
+
+	return nodeReqs
+}
+
+// printNodeRequirements displays node requirements in a formatted table
+func printNodeRequirements(nodeReqs []NodeRequirements) {
+	if flagNoHeaders {
+		for _, nr := range nodeReqs {
+			fmt.Printf("%s\t%d\t%d\t%d\t%d MiB\t%d MiB\t%s\n",
+				nr.Purpose, nr.MinNodes, nr.CoresPerNode, nr.CoresPerNodeNoHT,
+				nr.HugepagesPerNode, nr.MemoryPerNode, nr.Description)
+		}
+		if len(nodeReqs) > 0 {
+			fmt.Printf("Recommendation\t-\t-\t-\t-\t-\tAt least 1 more node of required capacity for fault tolerance\n")
+		}
+		return
+	}
+
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.AppendHeader(table.Row{
+		"Purpose",
+		"Min Nodes",
+		"Cores/Node (HT On)",
+		"Cores/Node (HT Off)",
+		"Hugepages/Node",
+		"Memory/Node",
+		"Description",
+	})
+
+	// Sort by node count descending
+	sort.Slice(nodeReqs, func(i, j int) bool {
+		return nodeReqs[i].MinNodes > nodeReqs[j].MinNodes
+	})
+
+	for _, nr := range nodeReqs {
+		t.AppendRow(table.Row{
+			nr.Purpose,
+			nr.MinNodes,
+			nr.CoresPerNode,
+			nr.CoresPerNodeNoHT,
+			fmt.Sprintf("%d MiB", nr.HugepagesPerNode),
+			fmt.Sprintf("%d MiB", nr.MemoryPerNode),
+			nr.Description,
+		})
+	}
+
+	t.SetStyle(table.StyleLight)
+	fmt.Println("\n=== Node Requirements (with 10% spare) ===")
+	t.Render()
+
+	if len(nodeReqs) > 0 {
+		fmt.Printf("\n💡 Recommendation: At least 1 more node of the required capacity is recommended to provide fault tolerance.\n")
+	}
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
