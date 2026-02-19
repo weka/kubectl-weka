@@ -138,14 +138,46 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 
 	// Get node groupings for cluster
 	fmt.Println("\n=== Analyzing Node Selectors ===")
-	roleGrouping := buildRoleNodeGrouping(nodes, cluster.Spec.NodeSelector, &cluster.Spec.RoleNodeSelector)
+
+	// Track NotReady nodes for warnings
+	readyNodes := FilterReadyNodes(nodes)
+	totalNotReadyNodes := CountNotReadyNodes(nodes)
+	hasNotReadyNodes := totalNotReadyNodes > 0
+
+	// Build role grouping with ready nodes only
+	roleGrouping := buildRoleNodeGrouping(readyNodes, cluster.Spec.NodeSelector, &cluster.Spec.RoleNodeSelector)
 	printNodeSelectorSummary(roleGrouping, cluster.Spec.NodeSelector)
 
 	// Show client node selector info
+	allClientNodes := FilterNodesBySelector(nodes, client.Spec.NodeSelector)
+	clientNodes = FilterNodesBySelector(readyNodes, client.Spec.NodeSelector)
+	clientNotReadyCount := len(allClientNodes) - len(clientNodes)
 	fmt.Printf("Client NodeSelector (%s): %d nodes\n", formatSelector(client.Spec.NodeSelector), len(clientNodes))
 
-	// Get all eligible nodes for drive validation
+	// Check how many NotReady nodes matched the cluster selectors
+	allClusterMatching := getAllEligibleNodes(buildRoleNodeGrouping(nodes, cluster.Spec.NodeSelector, &cluster.Spec.RoleNodeSelector))
 	allEligibleNodes := getAllEligibleNodes(roleGrouping)
+	clusterNotReadyMatchingCount := len(allClusterMatching) - len(allEligibleNodes)
+
+	// Warn about NotReady nodes
+	totalNotReadyMatching := clusterNotReadyMatchingCount
+	if clientNotReadyCount > clusterNotReadyMatchingCount {
+		// Some NotReady nodes matched client selector but not cluster selector
+		totalNotReadyMatching = clientNotReadyCount
+	}
+
+	if totalNotReadyMatching > 0 {
+		fmt.Printf("\n⚠️ WARNING: Additional %d node(s) match the selectors but are in NotReady state.\n", totalNotReadyMatching)
+		if clusterNotReadyMatchingCount > 0 {
+			fmt.Printf("   - %d node(s) match cluster selectors\n", clusterNotReadyMatchingCount)
+		}
+		if clientNotReadyCount > 0 {
+			fmt.Printf("   - %d node(s) match client selector\n", clientNotReadyCount)
+		}
+		fmt.Println("   These nodes will not be checked for compliancy.")
+	}
+
+	// Get all eligible nodes for drive validation (already filtered to ready)
 
 	// Get hostchecks for all eligible nodes (cached execution)
 	// This runs hostchecks on-demand and caches results for subsequent use
@@ -158,7 +190,7 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 		var err error
 		hostChecksMap, err = GlobalHostCheckRegistry.GetHostChecksForNodes(ctx, allEligibleNodes)
 		if err != nil {
-			fmt.Printf("⚠️  WARNING: Could not scan drives on all nodes: %v\n", err)
+			fmt.Printf("⚠️ WARNING: Could not scan drives on all nodes: %v\n", err)
 			fmt.Println("   Falling back to basic drive validation...")
 			hostChecksMap = nil
 		} else if hostChecksMap != nil {
@@ -203,7 +235,22 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 	fmt.Println("\n=== Deployment Summary ===")
 	printConvergedSummary(convergedStates)
 
-	fmt.Println("\n✅ Converged deployment plan complete!")
+	// Final summary with NotReady node warning if applicable
+	if hasNotReadyNodes && totalNotReadyMatching > 0 {
+		fmt.Println("\n⚠️ WARNING: Plan completed with warnings")
+		fmt.Printf("   ⚠️ %d node(s) were not ready during planning and were skipped\n", totalNotReadyNodes)
+		if clusterNotReadyMatchingCount > 0 {
+			fmt.Printf("   ⚠️ %d of the skipped nodes matched cluster selectors\n", clusterNotReadyMatchingCount)
+		}
+		if clientNotReadyCount > 0 {
+			fmt.Printf("   ⚠️ %d of the skipped nodes matched client selector\n", clientNotReadyCount)
+		}
+		fmt.Println("   Please notice that required validations were not performed on these nodes.")
+		fmt.Println("   Recommended to remediate the nodes and rerun plan.")
+	} else {
+		fmt.Println("\n✅ Converged deployment plan complete!")
+	}
+
 	return nil
 }
 

@@ -76,6 +76,38 @@ func MatchesSelector(node v1.Node, selector map[string]string) bool {
 	return true
 }
 
+// IsNodeReady checks if a node is in Ready state
+func IsNodeReady(node v1.Node) bool {
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == v1.NodeReady {
+			return condition.Status == v1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// FilterReadyNodes returns only nodes that are in Ready state
+func FilterReadyNodes(nodes []v1.Node) []v1.Node {
+	var ready []v1.Node
+	for _, node := range nodes {
+		if IsNodeReady(node) {
+			ready = append(ready, node)
+		}
+	}
+	return ready
+}
+
+// CountNotReadyNodes counts how many nodes are not in Ready state
+func CountNotReadyNodes(nodes []v1.Node) int {
+	count := 0
+	for _, node := range nodes {
+		if !IsNodeReady(node) {
+			count++
+		}
+	}
+	return count
+}
+
 // QuantityOrZero returns the quantity value or zero if not found
 func QuantityOrZero(resourceList v1.ResourceList, resourceName v1.ResourceName) resource.Quantity {
 	val, ok := resourceList[resourceName]

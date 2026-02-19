@@ -466,7 +466,7 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 					case "success":
 						displayText = fmt.Sprintf("✅ OK:  %s: %s", friendlyName, moduleResult.SuggestedFix)
 					case "warning":
-						displayText = fmt.Sprintf("⚠️  WARN: %s: %s", friendlyName, moduleResult.SuggestedFix)
+						displayText = fmt.Sprintf("⚠️ WARN: %s: %s", friendlyName, moduleResult.SuggestedFix)
 					default:
 						displayText = fmt.Sprintf("❌ ERROR: %s: %s", friendlyName, moduleResult.SuggestedFix)
 					}

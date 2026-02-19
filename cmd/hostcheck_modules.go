@@ -242,11 +242,11 @@ func (m *NetworkModule) SuccessTemplate() string {
 }
 
 func (m *NetworkModule) WarningTemplate() string {
-	return "⚠️  WARN: {{.FriendlyName}}: {{.Issue}}"
+	return "⚠️ WARN: {{.FriendlyName}}: {{.Issue}}"
 }
 
 func (m *NetworkModule) ErrorTemplate() string {
-	return "⚠️  {{.FriendlyName}}: {{.Issue}}"
+	return "⚠️ {{.FriendlyName}}: {{.Issue}}"
 }
 
 func (m *NetworkModule) SuggestedResolutionTemplate() string {
@@ -414,7 +414,7 @@ func (m *KernelModule) SuccessTemplate() string {
 }
 
 func (m *KernelModule) WarningTemplate() string {
-	return "⚠️  WARN: {{.FriendlyName}}: {{.KernelVersion}} (recommended >=5.10)"
+	return "⚠️ WARN: {{.FriendlyName}}: {{.KernelVersion}} (recommended >=5.10)"
 }
 
 func (m *KernelModule) ErrorTemplate() string {
@@ -467,7 +467,7 @@ func (m *NVMeDrivesModule) SuccessTemplate() string {
 }
 
 func (m *NVMeDrivesModule) WarningTemplate() string {
-	return "⚠️  WARN: {{.FriendlyName}}: {{.Issue}}"
+	return "⚠️ WARN: {{.FriendlyName}}: {{.Issue}}"
 }
 
 func (m *NVMeDrivesModule) ErrorTemplate() string {

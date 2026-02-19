@@ -211,7 +211,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 
 	// Sanity check 1: Validate hot spare recommendation
 	if cluster.Spec.HotSpare == 0 {
-		fmt.Println("⚠️  WARNING: Hot spare is set to 0. At least 1 hot spare is recommended for production clusters to handle drive failures")
+		fmt.Println("⚠️ WARNING: Hot spare is set to 0. At least 1 hot spare is recommended for production clusters to handle drive failures")
 		// This is a warning, not a failure
 	} else {
 		fmt.Printf("✅ Hot spare configured: %d\n", cluster.Spec.HotSpare)
@@ -220,7 +220,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 	// Sanity check 2: Validate drivers distribution service
 	if cluster.Spec.DriversDistService != "" {
 		if err := validateDriversDistService(cluster.Spec.DriversDistService); err != nil {
-			fmt.Printf("⚠️  WARNING: %v\n", err)
+			fmt.Printf("⚠️ WARNING: %v\n", err)
 		} else {
 			fmt.Printf("✅ DriversDistService configured: %s\n", cluster.Spec.DriversDistService)
 		}
@@ -238,20 +238,37 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 
 	// If nodes were provided, continue with cluster validation and placement
 	if nodes == nil || len(nodes) == 0 {
-		fmt.Println("\n⚠️  Cluster nodes not available - skipping validation and placement simulation")
+		fmt.Println("\n⚠️ Cluster nodes not available - skipping validation and placement simulation")
 		return nil
 	}
 
 	fmt.Println("\n=== Role-Based Node Allocation ===")
 
-	// Build role-based node grouping
-	roleGrouping := buildRoleNodeGrouping(nodes, cluster.Spec.NodeSelector, &cluster.Spec.RoleNodeSelector)
+	// Track NotReady nodes for warnings
+	totalNotReadyNodes := CountNotReadyNodes(nodes)
+	hasNotReadyNodes := totalNotReadyNodes > 0
+
+	// Filter to only ready nodes for planning
+	readyNodes := FilterReadyNodes(nodes)
+
+	// Build role-based node grouping (only with ready nodes)
+	roleGrouping := buildRoleNodeGrouping(readyNodes, cluster.Spec.NodeSelector, &cluster.Spec.RoleNodeSelector)
 
 	// Print role-based allocation
 	printRoleNodeGrouping(cluster, roleGrouping)
 
 	// Get all eligible nodes for validation
 	allEligibleNodes := getAllEligibleNodes(roleGrouping)
+
+	// Check how many NotReady nodes matched the selectors
+	allMatchingNodes := getAllEligibleNodes(buildRoleNodeGrouping(nodes, cluster.Spec.NodeSelector, &cluster.Spec.RoleNodeSelector))
+	notReadyMatchingCount := len(allMatchingNodes) - len(allEligibleNodes)
+
+	// Warn about NotReady nodes if any matched the selectors
+	if notReadyMatchingCount > 0 {
+		fmt.Printf("\n⚠️ WARNING: Additional %d node(s) match the selectors but are in NotReady state.\n", notReadyMatchingCount)
+		fmt.Println("   These nodes will not be checked for compliancy.")
+	}
 
 	fmt.Println("\n=== Fetching Cluster Resource Information ===")
 
@@ -284,7 +301,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 		var err error
 		hostChecksMap, err = GlobalHostCheckRegistry.GetHostChecksForNodes(ctx, allEligibleNodes)
 		if err != nil {
-			fmt.Printf("⚠️  WARNING: Could not scan drives on all nodes: %v\n", err)
+			fmt.Printf("⚠️ WARNING: Could not scan drives on all nodes: %v\n", err)
 			fmt.Println("   Falling back to basic drive validation...")
 			hostChecksMap = nil
 		} else if hostChecksMap != nil {
@@ -311,13 +328,30 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 	fmt.Println("\n=== Validating Network Interface 'enp99s0f0np0' ===")
 	fmt.Println("✅ Network interface validation passed")
 
-	fmt.Printf("\n✅ Cluster validation passed\n")
-	fmt.Printf("   ✅ %d total nodes in cluster\n", len(nodes))
-	fmt.Printf("   ✅ %d nodes eligible for Weka deployment\n", len(allEligibleNodes))
-	fmt.Printf("   ✅ Role-based node allocation configured\n")
-	fmt.Printf("   ✅ All required drives are available\n")
-	fmt.Printf("   ✅ Network configuration is consistent\n")
-	fmt.Printf("   ✅ Sufficient resources available per role\n")
+	// Final summary
+	if hasNotReadyNodes {
+		fmt.Printf("\n⚠️ WARNING: Plan completed with warnings\n")
+		fmt.Printf("   ✅ %d total nodes in cluster\n", len(nodes))
+		fmt.Printf("   ✅ %d nodes eligible for Weka deployment\n", len(allEligibleNodes))
+		fmt.Printf("   ⚠️ %d node(s) were not ready during planning and were skipped\n", totalNotReadyNodes)
+		if notReadyMatchingCount > 0 {
+			fmt.Printf("   ⚠️ %d of the skipped nodes matched the node selectors\n", notReadyMatchingCount)
+		}
+		fmt.Printf("   ✅ Role-based node allocation configured\n")
+		fmt.Printf("   ✅ All required drives are available\n")
+		fmt.Printf("   ✅ Network configuration is consistent\n")
+		fmt.Printf("   ✅ Sufficient resources available per role\n")
+		fmt.Println("\n⚠️ Please notice that required validations were not performed on the NotReady nodes.")
+		fmt.Println("   Recommended to remediate the nodes and rerun plan.")
+	} else {
+		fmt.Printf("\n✅ Cluster validation passed\n")
+		fmt.Printf("   ✅ %d total nodes in cluster\n", len(nodes))
+		fmt.Printf("   ✅ %d nodes eligible for Weka deployment\n", len(allEligibleNodes))
+		fmt.Printf("   ✅ Role-based node allocation configured\n")
+		fmt.Printf("   ✅ All required drives are available\n")
+		fmt.Printf("   ✅ Network configuration is consistent\n")
+		fmt.Printf("   ✅ Sufficient resources available per role\n")
+	}
 
 	return nil
 }
@@ -1055,7 +1089,7 @@ func validateDrivesDetailed(hostChecksMap HostChecksMap, nodes []corev1.Node, dr
 
 	// Print warnings if any unsigned drives were found
 	if len(warnings) > 0 {
-		fmt.Println("\n⚠️  Drive Warnings:")
+		fmt.Println("\n⚠️ Drive Warnings:")
 		for _, warning := range warnings {
 			fmt.Println(warning)
 		}
@@ -1227,7 +1261,7 @@ func validateNetworkConfiguration(network *wekaapi.Network) error {
 
 	// Check for UDP mode warning
 	if network.UdpMode {
-		fmt.Println("⚠️  WARNING: UDP mode is enabled for cluster. This is not recommended for fast-performance production environments")
+		fmt.Println("⚠️ WARNING: UDP mode is enabled for cluster. This is not recommended for fast-performance production environments")
 	}
 
 	return nil

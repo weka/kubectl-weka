@@ -111,7 +111,7 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 
 	// If nodes are not available, skip allocation simulation
 	if nodes == nil || len(nodes) == 0 {
-		fmt.Println("\n⚠️  Cluster nodes not available - skipping allocation simulation")
+		fmt.Println("\n⚠️ Cluster nodes not available - skipping allocation simulation")
 		return nil
 	}
 
@@ -134,11 +134,24 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 
 	// Find matching nodes
 	fmt.Println("\n=== Finding Matching Nodes ===")
-	matchingNodes := FilterNodesBySelector(nodes, client.Spec.NodeSelector)
+	allMatchingNodes := FilterNodesBySelector(nodes, client.Spec.NodeSelector)
+	matchingNodes := FilterReadyNodes(allMatchingNodes)
+	notReadyMatchingCount := len(allMatchingNodes) - len(matchingNodes)
+
 	fmt.Printf("Found %d nodes matching selector: %s\n", len(matchingNodes), formatSelector(client.Spec.NodeSelector))
 
+	// Warn about NotReady nodes
+	if notReadyMatchingCount > 0 {
+		fmt.Printf("\n⚠️ WARNING: Additional %d node(s) match the selector but are in NotReady state.\n", notReadyMatchingCount)
+		fmt.Println("   These nodes will not be checked for compliancy.")
+	}
+
 	if len(matchingNodes) == 0 {
-		fmt.Println("⚠️  WARNING: No nodes match the nodeSelector")
+		if notReadyMatchingCount > 0 {
+			fmt.Println("⚠️ WARNING: No ready nodes match the nodeSelector (all matching nodes are NotReady)")
+		} else {
+			fmt.Println("⚠️ WARNING: No nodes match the nodeSelector")
+		}
 		return nil
 	}
 
@@ -161,7 +174,16 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 	fmt.Println("\n=== Allocation Summary ===")
 	printClientAllocationFeasibility(allocations)
 
-	fmt.Println("\n✅ Plan complete!")
+	// Final summary with NotReady node warning if applicable
+	if notReadyMatchingCount > 0 {
+		fmt.Println("\n⚠️ WARNING: Plan completed with warnings")
+		fmt.Printf("   ⚠️ %d node(s) were not ready during planning and were skipped\n", notReadyMatchingCount)
+		fmt.Println("   Please notice that required validations were not performed on these nodes.")
+		fmt.Println("   Recommended to remediate the nodes and rerun plan.")
+	} else {
+		fmt.Println("\n✅ Plan complete!")
+	}
+
 	return nil
 }
 
@@ -210,7 +232,7 @@ func validateClientConfig(ctx context.Context, client *wekaapi.WekaClient) error
 		// TargetCluster is specified - validate it exists in Kubernetes
 		if err := validateTargetClusterExists(ctx, client); err != nil {
 			// Cluster doesn't exist - issue warning
-			fmt.Printf("⚠️  WARNING: Target cluster '%s/%s' does not exist in Kubernetes.\n",
+			fmt.Printf("⚠️ WARNING: Target cluster '%s/%s' does not exist in Kubernetes.\n",
 				getTargetClusterNamespace(client), client.Spec.TargetCluster.Name)
 			fmt.Println("   Are you sure? If you plan to deploy a cluster on same Kubernetes cluster,")
 			fmt.Println("   it is recommended to run 'kubectl weka plan converged' instead.")
@@ -225,7 +247,7 @@ func validateClientConfig(ctx context.Context, client *wekaapi.WekaClient) error
 			errors = append(errors, "❌ Client is not configured to connect to WEKA cluster: either targetCluster or joinIpPorts must be specified")
 		} else {
 			// JoinIps/JoinIpPorts specified - external cluster
-			fmt.Println("⚠️  WARNING: Client is configured to connect to external WEKA cluster")
+			fmt.Println("⚠️ WARNING: Client is configured to connect to external WEKA cluster")
 			if len(client.Spec.JoinIps) > 0 {
 				fmt.Printf("   joinIpPorts: %v\n", client.Spec.JoinIps)
 			}
@@ -500,7 +522,7 @@ func printClientAllocationFeasibility(allocations []ClientNodeAllocation) {
 	if failureCount == 0 {
 		fmt.Println("\n✅ All nodes can accommodate client containers")
 	} else if successCount > 0 {
-		fmt.Printf("\n⚠️  %d/%d nodes have insufficient resources\n", failureCount, totalNodes)
+		fmt.Printf("\n⚠️ %d/%d nodes have insufficient resources\n", failureCount, totalNodes)
 	} else {
 		fmt.Println("\n❌ No nodes can accommodate client containers - please review resource requirements")
 	}

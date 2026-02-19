@@ -131,7 +131,7 @@ func validateImageVersionCompatibility(cluster *v1alpha1.WekaCluster, client *v1
 	clusterVersion, err := parseWekaVersion(clusterImage)
 	if err != nil {
 		// If we can't parse, just warn about different images
-		fmt.Printf("⚠️  WARNING: Different images detected (cluster: %s, client: %s)\n", clusterImage, clientImage)
+		fmt.Printf("⚠️ WARNING: Different images detected (cluster: %s, client: %s)\n", clusterImage, clientImage)
 		fmt.Printf("    Unable to parse versions for compatibility check\n")
 		return nil
 	}
@@ -139,7 +139,7 @@ func validateImageVersionCompatibility(cluster *v1alpha1.WekaCluster, client *v1
 	clientVersion, err := parseWekaVersion(clientImage)
 	if err != nil {
 		// If we can't parse, just warn about different images
-		fmt.Printf("⚠️  WARNING: Different images detected (cluster: %s, client: %s)\n", clusterImage, clientImage)
+		fmt.Printf("⚠️ WARNING: Different images detected (cluster: %s, client: %s)\n", clusterImage, clientImage)
 		fmt.Printf("    Unable to parse versions for compatibility check\n")
 		return nil
 	}
@@ -175,7 +175,7 @@ func validateImageVersionCompatibility(cluster *v1alpha1.WekaCluster, client *v1
 	if clientVersion.Patch < clusterVersion.Patch ||
 		(clientVersion.Patch == clusterVersion.Patch && clientVersion.Build < clusterVersion.Build) {
 		// Client is older - this may work but warn
-		fmt.Printf("⚠️  WARNING: Client version is older than cluster version\n")
+		fmt.Printf("⚠️ WARNING: Client version is older than cluster version\n")
 		fmt.Printf("    Cluster: %s (version %s)\n", clusterImage, clusterVersion.String())
 		fmt.Printf("    Client:  %s (version %s)\n", clientImage, clientVersion.String())
 		fmt.Printf("    This may work but is not recommended. Consider upgrading client to match cluster version.\n")
