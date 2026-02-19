@@ -139,7 +139,7 @@ func (m *WekaDirModule) ErrorTemplate() string {
 }
 
 func (m *WekaDirModule) SuggestedResolutionTemplate() string {
-	return "On node {{.NodeName}}, ensure /opt/k8s-weka has at least 300GB free space: {{.Command}}"
+	return "Ensure {{.Path}} has at least {{.MinGB}}GB free space. Use: df -h {{.Path}}"
 }
 
 func (m *WekaDirModule) Validate(podOutput string) (interface{}, error) {
@@ -215,6 +215,7 @@ func (m *WekaDirModule) ValidateWithParams(podOutput string, params map[string]i
 		"AvailGB":    fmt.Sprintf("%.1f", float64(availGB)),
 		"MinFailGB":  minFailGB,
 		"MinWarnGB":  minWarnGB,
+		"MinGB":      minFailGB, // For template use
 	}, nil
 }
 
@@ -506,12 +507,12 @@ func (m *CPUModule) Validate(podOutput string) (interface{}, error) {
 
 	// Determine status based on CPU configuration
 	status := "success"
-	var warnings []string
+	var warningMsg string
 
 	// Check for dual-socket AMD - not recommended for WEKA
 	if hc.CPUSockets == 2 && strings.ToLower(hc.CPUFamily) == "amd" {
 		status = "warning"
-		warnings = append(warnings, "Dual-socket AMD architecture detected! This architecture does not provide best performance with WEKA")
+		warningMsg = "Dual-socket AMD architecture detected! This architecture does not provide best performance with WEKA"
 	}
 
 	// Format detail string with both physical cores and logical cores for clarity
@@ -536,10 +537,16 @@ func (m *CPUModule) Validate(podOutput string) (interface{}, error) {
 		detail += "]"
 	}
 
+	// Add warning message to detail if present
+	displayDetail := detail
+	if warningMsg != "" {
+		displayDetail = detail + "\n     " + warningMsg
+	}
+
 	return map[string]interface{}{
 		"Status":          status,
-		"Detail":          detail,
-		"Warnings":        warnings,
+		"Detail":          displayDetail,
+		"Warning":         warningMsg,
 		"HTEnabled":       hc.HTEnabled,
 		"PhysicalCores":   hc.PhysicalCores,
 		"LogicalCores":    hc.LogicalCores,

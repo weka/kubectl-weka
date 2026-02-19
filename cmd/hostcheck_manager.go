@@ -530,10 +530,12 @@ func (r *HostCheckRegistry) ValidateWithModules(
 				successTemplate := ""
 				warningTemplate := ""
 				errorTemplate := ""
+				suggestedResolutionTemplate := ""
 				if module != nil {
 					successTemplate = module.SuccessTemplate()
 					warningTemplate = module.WarningTemplate()
 					errorTemplate = module.ErrorTemplate()
+					suggestedResolutionTemplate = module.SuggestedResolutionTemplate()
 				}
 
 				// Extract status from the result data if provided
@@ -545,13 +547,14 @@ func (r *HostCheckRegistry) ValidateWithModules(
 				}
 
 				nodeResults[moduleName] = &HostCheckResult{
-					ModuleName:      moduleName,
-					Status:          resultStatus,
-					Data:            result,
-					SuccessTemplate: successTemplate,
-					WarningTemplate: warningTemplate,
-					ErrorTemplate:   errorTemplate,
-					Params:          map[string]interface{}{"NodeName": nodeName},
+					ModuleName:                  moduleName,
+					Status:                      resultStatus,
+					Data:                        result,
+					SuccessTemplate:             successTemplate,
+					WarningTemplate:             warningTemplate,
+					ErrorTemplate:               errorTemplate,
+					SuggestedResolutionTemplate: suggestedResolutionTemplate,
+					Params:                      map[string]interface{}{"NodeName": nodeName},
 				}
 			}
 		}

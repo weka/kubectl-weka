@@ -96,10 +96,10 @@ func (r *HostCheckResult) FormatSuccess(params map[string]interface{}) string {
 
 // FormatSuggestedFix formats the suggested resolution using the template
 func (r *HostCheckResult) FormatSuggestedFix(params map[string]interface{}) string {
-	if r.SuggestedFix == "" {
+	if r.SuggestedResolutionTemplate == "" {
 		return ""
 	}
-	return r.SuggestedFix
+	return interpolateTemplate(r.SuggestedResolutionTemplate, params)
 }
 
 // Summary returns a formatted string with status and relevant text

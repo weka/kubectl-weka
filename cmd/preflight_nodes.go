@@ -128,12 +128,26 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	// First, get hostchecks to collect OS/kernel info
 	hostChecksMap, _ := GlobalHostCheckRegistry.GetHostChecksForNodes(ctx, nodes)
 
-	// Collect suggested fixes for failures
+	// Collect warnings, errors, and suggested fixes for summary
 	type SuggestedFix struct {
 		NodeName string
 		Issues   []string
 	}
+	type NodeWarning struct {
+		NodeName string
+		Module   string
+		Message  string
+	}
+	type NodeError struct {
+		NodeName string
+		Module   string
+		Message  string
+		Fix      string
+	}
+
 	var suggestedFixes []SuggestedFix
+	var allWarnings []NodeWarning
+	var allErrors []NodeError
 
 	for nodeName, moduleResults := range nodeModuleResults {
 		// Determine overall status
@@ -144,11 +158,61 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		for moduleName, mr := range moduleResults {
 			if mr.Status == "error" {
 				hasError = true
+				errorMsg := ""
 				if mr.Error != "" {
+					errorMsg = mr.Error
 					issuesForNode = append(issuesForNode, fmt.Sprintf("%s: %s", moduleName, mr.Error))
+				} else if dataMap, ok := mr.Data.(map[string]interface{}); ok {
+					if issue, ok := dataMap["Issue"].(string); ok && issue != "" {
+						errorMsg = issue
+						issuesForNode = append(issuesForNode, fmt.Sprintf("%s: %s", moduleName, issue))
+					}
 				}
+
+				// Get suggested fix from module using template interpolation
+				suggestedFix := ""
+				if mr.SuggestedResolutionTemplate != "" {
+					// Build context params for interpolation
+					fixParams := map[string]interface{}{
+						"NodeName": nodeName,
+					}
+					// Add all data from the module result
+					if dataMap, ok := mr.Data.(map[string]interface{}); ok {
+						for k, v := range dataMap {
+							fixParams[k] = v
+						}
+					}
+					suggestedFix = mr.FormatSuggestedFix(fixParams)
+				}
+
+				allErrors = append(allErrors, NodeError{
+					NodeName: nodeName,
+					Module:   moduleName,
+					Message:  errorMsg,
+					Fix:      suggestedFix,
+				})
 			} else if mr.Status == "warning" {
 				hasWarning = true
+
+				// Extract warning message from module data
+				warningMsg := ""
+				if dataMap, ok := mr.Data.(map[string]interface{}); ok {
+					if warning, ok := dataMap["Warning"].(string); ok && warning != "" {
+						warningMsg = warning
+					} else if issue, ok := dataMap["Issue"].(string); ok && issue != "" {
+						warningMsg = issue
+					} else if detail, ok := dataMap["Detail"].(string); ok && detail != "" {
+						warningMsg = detail
+					}
+				}
+
+				if warningMsg != "" {
+					allWarnings = append(allWarnings, NodeWarning{
+						NodeName: nodeName,
+						Module:   moduleName,
+						Message:  warningMsg,
+					})
+				}
 			}
 		}
 
@@ -255,16 +319,43 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Warning: Multiple OSes detected: %s\n", strings.Join(mapKeysToList(oses), ", "))
 	}
 	if len(kernels) > 1 {
-		fmt.Printf("Warning: Multiple OSes detected: %s\n", strings.Join(mapKeysToList(kernels), ", "))
+		fmt.Printf("Warning: Multiple kernels detected: %s\n", strings.Join(mapKeysToList(kernels), ", "))
 	}
 
-	// Print suggested fixes for failed nodes
-	if len(suggestedFixes) > 0 {
-		fmt.Println("\n=== Suggested Fixes ===")
-		for _, fix := range suggestedFixes {
-			fmt.Printf("\n%s:\n", red(fix.NodeName))
-			for _, issue := range fix.Issues {
-				fmt.Printf("  • %s\n", issue)
+	// Print centralized warnings summary
+	if len(allWarnings) > 0 {
+		fmt.Println("\n" + yellow("=== Warnings Summary ==="))
+		// Group warnings by type
+		warningsByMessage := make(map[string][]string)
+		for _, w := range allWarnings {
+			warningsByMessage[w.Message] = append(warningsByMessage[w.Message], w.NodeName)
+		}
+
+		for msg, nodes := range warningsByMessage {
+			fmt.Printf("\n⚠️  %s\n", yellow(msg))
+			fmt.Printf("   Affected nodes (%d): %s\n", len(nodes), strings.Join(nodes, ", "))
+		}
+	}
+
+	// Print centralized errors summary
+	if len(allErrors) > 0 {
+		fmt.Println("\n" + red("=== Errors Summary ==="))
+		// Group errors by type
+		errorsByMessage := make(map[string][]string)
+		errorFixes := make(map[string]string)
+		for _, e := range allErrors {
+			key := fmt.Sprintf("%s: %s", e.Module, e.Message)
+			errorsByMessage[key] = append(errorsByMessage[key], e.NodeName)
+			if e.Fix != "" {
+				errorFixes[key] = e.Fix
+			}
+		}
+
+		for msg, nodes := range errorsByMessage {
+			fmt.Printf("\n❌ %s\n", red(msg))
+			fmt.Printf("   Affected nodes (%d): %s\n", len(nodes), strings.Join(nodes, ", "))
+			if fix, hasFix := errorFixes[msg]; hasFix {
+				fmt.Printf("   💡 Suggested fix: %s\n", fix)
 			}
 		}
 	}
