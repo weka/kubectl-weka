@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var (
@@ -82,12 +81,39 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 	fmt.Println("=== Client Specification ===")
 	printClientSpec(client)
 
-	// Validate client configuration
+	// Validate client configuration using modular validation system
 	fmt.Println("\n=== Validating Client Configuration ===")
-	if err := validateClientConfig(ctx, client); err != nil {
-		return err
+	validationCtx := &WekaConfigValidationContext{
+		Client: client,
 	}
-	fmt.Println("✅ Configuration valid")
+
+	results, err := GlobalWekaConfigValidationRegistry.ValidateAll(ctx, validationCtx)
+	if err != nil {
+		return fmt.Errorf("validation failed: %w", err)
+	}
+
+	// Print validation results
+	GlobalWekaConfigValidationRegistry.PrintValidationResults(results)
+
+	// Check for errors or warnings
+	hasErrors := false
+	hasWarnings := false
+	for _, result := range results {
+		if result.Status == "error" {
+			hasErrors = true
+		} else if result.Status == "warning" {
+			hasWarnings = true
+		}
+	}
+
+	if hasErrors {
+		fmt.Println("\n❌ Configuration validation failed")
+		return fmt.Errorf("client configuration has errors")
+	}
+
+	if !hasWarnings {
+		fmt.Println("\n✅ Configuration valid")
+	}
 
 	// Calculate container requirements
 	fmt.Println("\n=== Container Resource Requirements ===")
@@ -201,72 +227,6 @@ func printClientSpec(client *wekaapi.WekaClient) {
 
 	t.SetStyle(table.StyleLight)
 	t.Render()
-}
-
-func validateClientConfig(ctx context.Context, client *wekaapi.WekaClient) error {
-	var errors []string
-
-	// Validate coresNum is set
-	if client.Spec.CoresNumber <= 0 {
-		errors = append(errors, "❌ CoresNumber must be greater than 0")
-	}
-
-	// Validate image is set
-	if client.Spec.Image == "" {
-		errors = append(errors, "❌ Image must be specified")
-	}
-
-	// Validate cluster connection configuration
-	if client.Spec.TargetCluster.Name != "" {
-		// TargetCluster is specified - validate it exists in Kubernetes
-		if err := validateTargetClusterExists(ctx, client); err != nil {
-			// Cluster doesn't exist - issue warning
-			fmt.Printf("⚠️ WARNING: Target cluster '%s/%s' does not exist in Kubernetes.\n",
-				getTargetClusterNamespace(client), client.Spec.TargetCluster.Name)
-			fmt.Println("   Are you sure? If you plan to deploy a cluster on same Kubernetes cluster,")
-			fmt.Println("   it is recommended to run 'kubectl weka plan converged' instead.")
-		} else {
-			// Cluster exists - success
-			fmt.Printf("✅ Target cluster '%s/%s' found in Kubernetes\n",
-				getTargetClusterNamespace(client), client.Spec.TargetCluster.Name)
-		}
-	} else {
-		// TargetCluster is empty - validate joinIps/joinIpPorts is specified
-		if len(client.Spec.JoinIps) == 0 {
-			errors = append(errors, "❌ Client is not configured to connect to WEKA cluster: either targetCluster or joinIpPorts must be specified")
-		} else {
-			// JoinIps/JoinIpPorts specified - external cluster
-			fmt.Println("⚠️ WARNING: Client is configured to connect to external WEKA cluster")
-			if len(client.Spec.JoinIps) > 0 {
-				fmt.Printf("   joinIpPorts: %v\n", client.Spec.JoinIps)
-			}
-		}
-	}
-
-	if len(errors) > 0 {
-		return fmt.Errorf("client configuration validation failed:\n%s", strings.Join(errors, "\n"))
-	}
-
-	return nil
-}
-
-// validateTargetClusterExists checks if the target WekaCluster exists in Kubernetes
-func validateTargetClusterExists(ctx context.Context, client *wekaapi.WekaClient) error {
-	crClient := KubeClients.CRClient
-
-	targetNamespace := getTargetClusterNamespace(client)
-
-	var cluster wekaapi.WekaCluster
-	clusterKey := ctrlclient.ObjectKey{
-		Namespace: targetNamespace,
-		Name:      client.Spec.TargetCluster.Name,
-	}
-
-	if err := crClient.Get(ctx, clusterKey, &cluster); err != nil {
-		return err // Cluster doesn't exist
-	}
-
-	return nil // Cluster exists
 }
 
 // getClientInstanceCount returns the number of client instances that will be created
