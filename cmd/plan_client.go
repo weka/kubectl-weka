@@ -92,7 +92,22 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 	// Calculate container requirements
 	fmt.Println("\n=== Container Resource Requirements ===")
 	containerReqs := calculateClientContainerRequirements(client)
-	printClientContainerRequirements(containerReqs)
+	nodeCount := getClientInstanceCount(client, nodes)
+	printClientContainerRequirements(containerReqs, nodeCount)
+
+	// Calculate and print node requirements
+	clientContainers := []ContainerRequirements{
+		{
+			Type:      "client",
+			Count:     getClientInstanceCount(client, nodes),
+			Hugepages: containerReqs.Hugepages,
+			Cores:     containerReqs.Cores,
+			CoresNoHT: containerReqs.CoresNoHT,
+			Memory:    containerReqs.Memory / (1024 * 1024), // Convert bytes to MiB
+		},
+	}
+	clientNodeReqs := calculateNodeRequirements(nil, clientContainers)
+	printNodeRequirements(clientNodeReqs)
 
 	// If nodes are not available, skip allocation simulation
 	if nodes == nil || len(nodes) == 0 {
@@ -243,6 +258,16 @@ func validateTargetClusterExists(ctx context.Context, client *wekaapi.WekaClient
 	return nil // Cluster exists
 }
 
+// getClientInstanceCount returns the number of client instances that will be created
+// For clients, typically one instance per matching node
+func getClientInstanceCount(client *wekaapi.WekaClient, nodes []corev1.Node) int {
+	if nodes == nil {
+		return 0 // Unknown if nodes not available
+	}
+	matchingNodes := FilterNodesBySelector(nodes, client.Spec.NodeSelector)
+	return len(matchingNodes)
+}
+
 // getTargetClusterNamespace returns the namespace of the target cluster (defaults to client's namespace)
 func getTargetClusterNamespace(client *wekaapi.WekaClient) string {
 	if client.Spec.TargetCluster.Namespace != "" {
@@ -287,17 +312,40 @@ func calculateClientContainerRequirements(client *wekaapi.WekaClient) ClientCont
 	}
 }
 
-func printClientContainerRequirements(req ClientContainerRequirements) {
+func printClientContainerRequirements(req ClientContainerRequirements, nodeCount int) {
+	if flagNoHeaders {
+		memMiB := req.Memory / (1024 * 1024)
+		fmt.Printf("Client\t%d\t%d\t%d\t%d MiB\t%d MiB\t-\n",
+			nodeCount, req.Cores, req.CoresNoHT, req.Hugepages, memMiB)
+		return
+	}
+
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{"RESOURCE", "WITH HT", "WITHOUT HT", "VALUE"})
+	t.AppendHeader(table.Row{
+		"Container Type",
+		"Count",
+		"Cores (HT On)",
+		"Cores (HT Off)",
+		"Hugepages",
+		"Memory",
+		"Drives",
+	})
 
-	t.AppendRow(table.Row{"CPU Cores", req.Cores, req.CoresNoHT, "-"})
-	t.AppendRow(table.Row{"Hugepages", "-", "-", fmt.Sprintf("%d MiB", req.Hugepages)})
-	t.AppendRow(table.Row{"Memory", "-", "-", fmt.Sprintf("%.1f GiB", float64(req.Memory)/(1024*1024*1024))})
+	memMiB := req.Memory / (1024 * 1024)
+	t.AppendRow(table.Row{
+		"Client",
+		nodeCount,
+		req.Cores,
+		req.CoresNoHT,
+		fmt.Sprintf("%d MiB", req.Hugepages),
+		fmt.Sprintf("%d MiB", memMiB),
+		"-",
+	})
 
 	t.SetStyle(table.StyleLight)
 	t.Render()
+	fmt.Println()
 }
 
 func printClientNodesTable(nodes []corev1.Node, podsByNode map[string][]corev1.Pod) {

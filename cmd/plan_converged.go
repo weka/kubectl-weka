@@ -126,18 +126,22 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 	clusterContainers := buildClusterContainerList(cluster)
 	printClusterContainerRequirements(clusterContainers)
 
+	// Calculate and print node requirements for cluster
+	clusterNodeReqs := calculateNodeRequirements(cluster.Spec.Dynamic, clusterContainers)
+	printNodeRequirements(clusterNodeReqs)
+
 	// Calculate client container requirements
 	fmt.Println("\n=== Client Container Requirements ===")
 	clientReqs := calculateClientContainerRequirements(client)
-	printClientContainerRequirements(clientReqs)
+	clientNodes := FilterNodesBySelector(nodes, client.Spec.NodeSelector)
+	printClientContainerRequirements(clientReqs, len(clientNodes))
 
 	// Get node groupings for cluster
 	fmt.Println("\n=== Analyzing Node Selectors ===")
 	roleGrouping := buildRoleNodeGrouping(nodes, cluster.Spec.NodeSelector, &cluster.Spec.RoleNodeSelector)
 	printNodeSelectorSummary(roleGrouping, cluster.Spec.NodeSelector)
 
-	// Filter client nodes
-	clientNodes := FilterNodesBySelector(nodes, client.Spec.NodeSelector)
+	// Show client node selector info
 	fmt.Printf("Client NodeSelector (%s): %d nodes\n", formatSelector(client.Spec.NodeSelector), len(clientNodes))
 
 	// Get all eligible nodes for drive validation

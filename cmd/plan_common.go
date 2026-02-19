@@ -504,6 +504,41 @@ func calculateNodeRequirements(_ *wekaapi.WekaConfig, containers []ContainerRequ
 		})
 	}
 
+	// Handle client containers
+	clientCount := 0
+	var clientReq ContainerRequirements
+
+	for _, c := range containers {
+		if c.Type == "client" {
+			clientCount = c.Count
+			clientReq = c
+		}
+	}
+
+	if clientCount > 0 {
+		// Clients deploy one instance per node
+		totalCores := clientReq.Cores
+		totalCoresNoHT := clientReq.CoresNoHT
+		totalHugepages := clientReq.Hugepages
+		totalMemory := clientReq.Memory
+
+		// Add 10% spare
+		totalCores = int(float64(totalCores) * 1.1)
+		totalCoresNoHT = int(float64(totalCoresNoHT) * 1.1)
+		totalHugepages = int64(float64(totalHugepages) * 1.1)
+		totalMemory = int64(float64(totalMemory) * 1.1)
+
+		nodeReqs = append(nodeReqs, NodeRequirements{
+			Purpose:          "Client",
+			MinNodes:         clientCount,
+			CoresPerNode:     totalCores,
+			CoresPerNodeNoHT: totalCoresNoHT,
+			HugepagesPerNode: totalHugepages,
+			MemoryPerNode:    totalMemory,
+			Description:      fmt.Sprintf("To accommodate %d client container(s)", clientCount),
+		})
+	}
+
 	return nodeReqs
 }
 

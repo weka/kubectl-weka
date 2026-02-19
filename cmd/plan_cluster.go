@@ -248,7 +248,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 	roleGrouping := buildRoleNodeGrouping(nodes, cluster.Spec.NodeSelector, &cluster.Spec.RoleNodeSelector)
 
 	// Print role-based allocation
-	printRoleNodeGrouping(roleGrouping)
+	printRoleNodeGrouping(cluster, roleGrouping)
 
 	// Get all eligible nodes for validation
 	allEligibleNodes := getAllEligibleNodes(roleGrouping)
@@ -1333,9 +1333,10 @@ func matchesSelector(node corev1.Node, selector map[string]string) bool {
 }
 
 // printRoleNodeGrouping prints the role-based node grouping
-func printRoleNodeGrouping(grouping RoleNodeGrouping) {
+func printRoleNodeGrouping(cluster *wekaapi.WekaCluster, grouping RoleNodeGrouping) {
 	if len(grouping.Global) > 0 {
 		fmt.Printf("Global NodeSelector matches: %d nodes\n", len(grouping.Global))
+		fmt.Printf("  Selector: %s\n", formatSelector(cluster.Spec.NodeSelector))
 		if len(grouping.Global) > 0 {
 			nodeNames := make([]string, 0, len(grouping.Global))
 			for _, node := range grouping.Global {
@@ -1349,9 +1350,8 @@ func printRoleNodeGrouping(grouping RoleNodeGrouping) {
 
 	for _, role := range []string{"compute", "drive", "s3", "nfs"} {
 		if roleGroup, exists := grouping.ByRole[role]; exists {
-			fmt.Printf("%s role:\n", capitalizeFirst(role))
+			fmt.Printf("%s role NodeSelector matches: %d nodes\n", capitalizeFirst(role), len(roleGroup.Nodes))
 			fmt.Printf("  Selector: %s\n", formatSelector(roleGroup.Selector))
-			fmt.Printf("  Target nodes: %d\n", len(roleGroup.Nodes))
 			if len(roleGroup.Nodes) > 0 {
 				nodeNames := make([]string, len(roleGroup.Nodes))
 				for i, n := range roleGroup.Nodes {
