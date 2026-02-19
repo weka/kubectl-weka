@@ -562,7 +562,7 @@ func printNodeRequirements(nodeReqs []NodeRequirements) {
 	fmt.Println("\n=== Node Requirements (with 10% spare) ===")
 	t.Render()
 
-	if len(nodeReqs) > 0 {
+	if len(nodeReqs) > 0 && t.Length() > 1 { // this is not a client-only deployment
 		fmt.Printf("\n💡 Recommendation: At least 1 more node of the required capacity is recommended to provide fault tolerance.\n")
 	}
 }
