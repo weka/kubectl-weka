@@ -145,6 +145,13 @@ func (r *WekaConfigValidationRegistry) PrintValidationResults(results map[string
 			continue
 		}
 
+		// Check if this validation should be skipped (not printed)
+		if dataMap, ok := result.Data.(map[string]interface{}); ok {
+			if skip, exists := dataMap["Skip"].(bool); exists && skip {
+				continue // Skip printing this validation
+			}
+		}
+
 		// Build context params for interpolation
 		contextParams := map[string]interface{}{
 			"FriendlyName": module.FriendlyName(),

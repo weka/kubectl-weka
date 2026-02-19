@@ -76,17 +76,36 @@ func runPlanConverged(_ *cobra.Command, args []string) error {
 
 	// Validate YAML-only compatibility (before connecting to Kubernetes)
 	fmt.Println("\n=== Validating Client-Cluster Compatibility ===")
-	if err := validateClientClusterMatch(cluster, client); err != nil {
-		fmt.Printf("client-cluster compatibility validation failed: %v", err)
-		return err
-	}
-	fmt.Printf("✅ Client targetCluster matches WekaCluster\n")
 
-	// Validate image version compatibility
-	if err := validateImageVersionCompatibility(cluster, client); err != nil {
-		fmt.Println("❌ image version validation failed")
-		return err
+	// Create validation context with both cluster and client
+	validationCtx := &WekaConfigValidationContext{
+		Cluster: cluster,
+		Client:  client,
 	}
+
+	// Run all applicable validations
+	results, err := GlobalWekaConfigValidationRegistry.ValidateAll(ctx, validationCtx)
+	if err != nil {
+		return fmt.Errorf("validation failed: %w", err)
+	}
+
+	// Print validation results
+	GlobalWekaConfigValidationRegistry.PrintValidationResults(results)
+
+	// Check for errors
+	hasErrors := false
+	for _, result := range results {
+		if result.Status == "error" {
+			hasErrors = true
+			break
+		}
+	}
+
+	if hasErrors {
+		return fmt.Errorf("client-cluster compatibility validation failed")
+	}
+
+	fmt.Println("✅ Client-cluster compatibility validation passed")
 
 	// Get cluster nodes
 	fmt.Println("\n=== Connecting to Kubernetes Cluster ===")

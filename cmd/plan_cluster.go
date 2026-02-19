@@ -207,34 +207,41 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 
 	printNodeRequirements(nodeReqs)
 
-	fmt.Println("\n=== Cluster Definition Sanity Checks ===")
+	// Validate cluster configuration using modular validation system
+	fmt.Println("\n=== Validating Cluster Configuration ===")
+	validationCtx := &WekaConfigValidationContext{
+		Cluster: cluster,
+	}
 
-	// Sanity check 1: Validate hot spare recommendation
-	if cluster.Spec.HotSpare == 0 {
-		fmt.Println("⚠️ WARNING: Hot spare is set to 0. At least 1 hot spare is recommended for production clusters to handle drive failures")
-		// This is a warning, not a failure
+	results, err := GlobalWekaConfigValidationRegistry.ValidateAll(ctx, validationCtx)
+	if err != nil {
+		return fmt.Errorf("validation failed: %w", err)
+	}
+
+	// Print validation results
+	GlobalWekaConfigValidationRegistry.PrintValidationResults(results)
+
+	// Check for errors or warnings
+	hasErrors := false
+	hasWarnings := false
+	for _, result := range results {
+		if result.Status == "error" {
+			hasErrors = true
+		} else if result.Status == "warning" {
+			hasWarnings = true
+		}
+	}
+
+	if hasErrors {
+		fmt.Println("\n❌ Configuration validation failed")
+		return fmt.Errorf("cluster configuration has errors")
+	}
+
+	if !hasWarnings {
+		fmt.Println("\n✅ Cluster definition validation passed")
 	} else {
-		fmt.Printf("✅ Hot spare configured: %d\n", cluster.Spec.HotSpare)
+		fmt.Println("\n⚠️  Cluster definition validation passed with warnings")
 	}
-
-	// Sanity check 2: Validate drivers distribution service
-	if cluster.Spec.DriversDistService != "" {
-		if err := validateDriversDistService(cluster.Spec.DriversDistService); err != nil {
-			fmt.Printf("⚠️ WARNING: %v\n", err)
-		} else {
-			fmt.Printf("✅ DriversDistService configured: %s\n", cluster.Spec.DriversDistService)
-		}
-	}
-
-	// Sanity check 3: Validate network configuration
-	if cluster.Spec.Network.EthDevice != "" {
-		if err := validateNetworkConfiguration(&cluster.Spec.Network); err != nil {
-			fmt.Printf("❌ Network configuration validation failed: %v\n", err)
-			return fmt.Errorf("network configuration validation failed: %w", err)
-		}
-	}
-
-	fmt.Println("\n✅ Cluster definition validation passed")
 
 	// If nodes were provided, continue with cluster validation and placement
 	if nodes == nil || len(nodes) == 0 {
@@ -1225,49 +1232,6 @@ func printContainerRequirements(containers []ContainerRequirements) {
 	fmt.Println("\n=== Container Resource Requirements ===")
 	t.Render()
 	fmt.Println()
-}
-
-// validateNetworkConfiguration validates the network configuration
-func validateNetworkConfiguration(network *wekaapi.Network) error {
-	if network.EthDevice == "" {
-		return fmt.Errorf("network.ethDevice is not specified")
-	}
-
-	// Validate ethDevice name format
-	// Allow alphanumerics, hyphens, and dots (for VLAN interfaces like bond0.100)
-	// Forbid colons
-	if strings.Contains(network.EthDevice, ":") {
-		return fmt.Errorf("ethDevice '%s' contains invalid character ':' (colons not allowed)", network.EthDevice)
-	}
-
-	// Check for valid characters
-	for _, ch := range network.EthDevice {
-		if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '.' || ch == '_') {
-			return fmt.Errorf("ethDevice '%s' contains invalid character '%c'", network.EthDevice, ch)
-		}
-	}
-
-	fmt.Printf("✅ Network interface '%s' is valid\n", network.EthDevice)
-
-	// Check for UDP mode warning
-	if network.UdpMode {
-		fmt.Println("⚠️ WARNING: UDP mode is enabled for cluster. This is not recommended for fast-performance production environments")
-	}
-
-	return nil
-}
-
-// validateDriversDistService validates the drivers distribution service URL
-func validateDriversDistService(url string) error {
-	if !strings.Contains(url, "cluster.local") {
-		return nil // Not a Kubernetes service URL, skip validation
-	}
-
-	// TODO: Implement validation of Kubernetes service
-	// Parse service name and namespace from URL
-	// Check if service exists in the cluster
-
-	return nil
 }
 
 // RoleNodeGrouping represents nodes grouped by role and global selection

@@ -514,3 +514,378 @@ func (m *TargetClusterExistsValidationModule) Validate(ctx context.Context, conf
 		"Exists":           exists,
 	}, nil
 }
+
+// DriversDistServiceValidationModule validates drivers distribution service configuration
+// This module validates cluster OR client individually (not cross-validation)
+type DriversDistServiceValidationModule struct{}
+
+func init() {
+	GlobalWekaConfigValidationRegistry.Register(&DriversDistServiceValidationModule{})
+}
+
+func (m *DriversDistServiceValidationModule) Name() string {
+	return "drivers_dist_service_validation"
+}
+
+func (m *DriversDistServiceValidationModule) FriendlyName() string {
+	return "Drivers Distribution Service"
+}
+
+func (m *DriversDistServiceValidationModule) Description() string {
+	return "Validates drivers distribution service configuration"
+}
+
+func (m *DriversDistServiceValidationModule) SuccessTemplate() string {
+	return "✅ OK:  {{.FriendlyName}}: {{.Detail}}"
+}
+
+func (m *DriversDistServiceValidationModule) WarningTemplate() string {
+	return "⚠️ WARN: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *DriversDistServiceValidationModule) ErrorTemplate() string {
+	return "❌ ERROR: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *DriversDistServiceValidationModule) SuggestedResolutionTemplate() string {
+	return "Ensure driversDistService is configured correctly. For external services, use full URL (e.g., https://10.240.200.5:14000). For Kubernetes services, ensure the service exists"
+}
+
+func (m *DriversDistServiceValidationModule) AppliesTo() []WekaConfigObjectType {
+	return []WekaConfigObjectType{WekaConfigTypeCluster, WekaConfigTypeClient}
+}
+
+func (m *DriversDistServiceValidationModule) Validate(ctx context.Context, config *WekaConfigValidationContext) (interface{}, error) {
+	var driversDistService string
+
+	// Get service from whichever object is being validated
+	if config.Cluster != nil {
+		driversDistService = config.Cluster.Spec.DriversDistService
+	} else if config.Client != nil {
+		driversDistService = config.Client.Spec.DriversDistService
+	}
+
+	// If not configured, skip silently (it's optional)
+	if driversDistService == "" {
+		return map[string]interface{}{
+			"Status": "success",
+			"Skip":   true,
+		}, nil
+	}
+
+	status := "success"
+	issue := ""
+	detail := ""
+
+	// Validate the service URL/path
+	if !(strings.Contains(driversDistService, "http://") || strings.Contains(driversDistService, "https://")) {
+		// External URL
+		status = "error"
+		issue = fmt.Sprintf("driversDistService '%s' does not appear to be a valid URL (missing http:// or https://)", driversDistService)
+		detail = issue
+		goto ERROR
+	}
+	if strings.Contains(driversDistService, "cluster.local") {
+		// Kubernetes service
+		detail = fmt.Sprintf("Kubernetes service configured: %s", driversDistService)
+	} else if driversDistService == "https://drivers.weka.io" {
+		detail = "Using default public drivers distribution service (https://drivers.weka.io)"
+	} else {
+		// Invalid format
+		detail = fmt.Sprintf("Custom external service configured: %s", driversDistService)
+	}
+ERROR:
+	return map[string]interface{}{
+		"Status":             status,
+		"Issue":              issue,
+		"Detail":             detail,
+		"DriversDistService": driversDistService,
+	}, nil
+}
+
+// DriversDistServiceConsistencyModule validates consistency between cluster and client driversDistService
+// This module only applies when BOTH cluster and client are present (e.g., in plan converged)
+type DriversDistServiceConsistencyModule struct{}
+
+func init() {
+	GlobalWekaConfigValidationRegistry.Register(&DriversDistServiceConsistencyModule{})
+}
+
+func (m *DriversDistServiceConsistencyModule) Name() string {
+	return "drivers_dist_service_consistency"
+}
+
+func (m *DriversDistServiceConsistencyModule) FriendlyName() string {
+	return "Drivers Distribution Service Consistency"
+}
+
+func (m *DriversDistServiceConsistencyModule) Description() string {
+	return "Validates that driversDistService is consistent between cluster and client"
+}
+
+func (m *DriversDistServiceConsistencyModule) SuccessTemplate() string {
+	return "✅ OK:  {{.FriendlyName}}: Both cluster and client use same service: {{.Service}}"
+}
+
+func (m *DriversDistServiceConsistencyModule) WarningTemplate() string {
+	return "⚠️ WARN: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *DriversDistServiceConsistencyModule) ErrorTemplate() string {
+	return "❌ ERROR: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *DriversDistServiceConsistencyModule) SuggestedResolutionTemplate() string {
+	return "Ensure driversDistService is set to the same value in both WekaCluster and WekaClient configurations"
+}
+
+func (m *DriversDistServiceConsistencyModule) AppliesTo() []WekaConfigObjectType {
+	// This module only makes sense when both cluster AND client are present
+	return []WekaConfigObjectType{WekaConfigTypeCluster, WekaConfigTypeClient}
+}
+
+func (m *DriversDistServiceConsistencyModule) Validate(ctx context.Context, config *WekaConfigValidationContext) (interface{}, error) {
+	// Only validate if BOTH cluster and client are present
+	if config.Cluster == nil || config.Client == nil {
+		return map[string]interface{}{
+			"Status": "success",
+			"Skip":   true,
+		}, nil
+	}
+
+	clusterService := config.Cluster.Spec.DriversDistService
+	clientService := config.Client.Spec.DriversDistService
+
+	status := "success"
+	issue := ""
+	service := ""
+
+	// If both are empty, that's fine (both use default)
+	if clusterService == "" && clientService == "" {
+		return map[string]interface{}{
+			"Status": "success",
+			"Skip":   true,
+		}, nil
+	}
+
+	// If only one is configured, that might be intentional (one uses default)
+	if clusterService == "" && clientService != "" {
+		status = "warning"
+		issue = fmt.Sprintf("Client has driversDistService configured (%s) but cluster does not (using default)", clientService)
+	} else if clusterService != "" && clientService == "" {
+		status = "warning"
+		issue = fmt.Sprintf("Cluster has driversDistService configured (%s) but client does not (using default)", clusterService)
+	} else if clusterService != clientService {
+		// Both configured but different - this is a problem
+		status = "warning"
+		issue = fmt.Sprintf("Mismatch between cluster and client: cluster uses '%s', client uses '%s'", clusterService, clientService)
+	} else {
+		// Both configured and match - perfect!
+		service = clusterService
+	}
+
+	return map[string]interface{}{
+		"Status":         status,
+		"Issue":          issue,
+		"Service":        service,
+		"ClusterService": clusterService,
+		"ClientService":  clientService,
+	}, nil
+}
+
+// ClusterClientCompatibilityModule validates that cluster and client are compatible
+// This includes: targetCluster match (name and namespace), image version compatibility
+type ClusterClientCompatibilityModule struct{}
+
+func init() {
+	GlobalWekaConfigValidationRegistry.Register(&ClusterClientCompatibilityModule{})
+}
+
+func (m *ClusterClientCompatibilityModule) Name() string {
+	return "cluster_client_compatibility"
+}
+
+func (m *ClusterClientCompatibilityModule) FriendlyName() string {
+	return "Cluster-Client Compatibility"
+}
+
+func (m *ClusterClientCompatibilityModule) Description() string {
+	return "Validates that cluster and client are compatible (targetCluster match and image versions)"
+}
+
+func (m *ClusterClientCompatibilityModule) SuccessTemplate() string {
+	return "✅ OK:  {{.FriendlyName}}: {{.Detail}}"
+}
+
+func (m *ClusterClientCompatibilityModule) WarningTemplate() string {
+	return "⚠️ WARN: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *ClusterClientCompatibilityModule) ErrorTemplate() string {
+	return "❌ ERROR: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *ClusterClientCompatibilityModule) SuggestedResolutionTemplate() string {
+	return "Ensure client's targetCluster matches the WekaCluster and image versions are compatible"
+}
+
+func (m *ClusterClientCompatibilityModule) AppliesTo() []WekaConfigObjectType {
+	return []WekaConfigObjectType{WekaConfigTypeCluster, WekaConfigTypeClient}
+}
+
+func (m *ClusterClientCompatibilityModule) Validate(ctx context.Context, config *WekaConfigValidationContext) (interface{}, error) {
+	// Only validate if BOTH cluster and client are present
+	if config.Cluster == nil || config.Client == nil {
+		return map[string]interface{}{
+			"Status": "success",
+			"Skip":   true,
+		}, nil
+	}
+
+	client := config.Client
+	cluster := config.Cluster
+
+	// First, validate targetCluster match (if specified)
+	if client.Spec.TargetCluster.Name != "" {
+		// Validate namespace match
+		targetNamespace := client.Spec.TargetCluster.Namespace
+		if targetNamespace == "" {
+			targetNamespace = client.Namespace
+		}
+
+		if targetNamespace != cluster.Namespace {
+			return map[string]interface{}{
+				"Status": "error",
+				"Issue": fmt.Sprintf(
+					"Client targetCluster namespace mismatch:\n"+
+						"    Client '%s/%s' targets namespace: %s\n"+
+						"    But WekaCluster is in namespace: %s",
+					client.Namespace, client.Name,
+					targetNamespace,
+					cluster.Namespace),
+			}, nil
+		}
+
+		// Validate name match
+		if client.Spec.TargetCluster.Name != cluster.Name {
+			return map[string]interface{}{
+				"Status": "error",
+				"Issue": fmt.Sprintf(
+					"Client targetCluster name mismatch:\n"+
+						"    Client '%s/%s' targets cluster: %s\n"+
+						"    But WekaCluster name is: %s",
+					client.Namespace, client.Name,
+					client.Spec.TargetCluster.Name,
+					cluster.Name),
+			}, nil
+		}
+	}
+
+	// Now validate image version compatibility
+	clusterImage := cluster.Spec.Image
+	clientImage := client.Spec.Image
+
+	// If images are identical, full compatibility
+	if clusterImage == clientImage {
+		targetRef := fmt.Sprintf("%s/%s", cluster.Namespace, cluster.Name)
+		return map[string]interface{}{
+			"Status": "success",
+			"Detail": fmt.Sprintf("Client and cluster compatible: targeting %s with matching image %s",
+				targetRef, clusterImage),
+		}, nil
+	}
+
+	// Parse versions from images
+	clusterVersion, err := parseWekaVersion(clusterImage)
+	if err != nil {
+		return map[string]interface{}{
+			"Status": "warning",
+			"Issue": fmt.Sprintf(
+				"Different images detected (cluster: %s, client: %s) - unable to parse versions for compatibility check",
+				clusterImage, clientImage),
+		}, nil
+	}
+
+	clientVersion, err := parseWekaVersion(clientImage)
+	if err != nil {
+		return map[string]interface{}{
+			"Status": "warning",
+			"Issue": fmt.Sprintf(
+				"Different images detected (cluster: %s, client: %s) - unable to parse versions for compatibility check",
+				clusterImage, clientImage),
+		}, nil
+	}
+
+	// Compare major version
+	if clusterVersion.Major != clientVersion.Major {
+		return map[string]interface{}{
+			"Status": "error",
+			"Issue": fmt.Sprintf(
+				"Major version mismatch detected (%d vs %d):\n"+
+					"    Cluster image: %s (version %s)\n"+
+					"    Client image:  %s (version %s)\n"+
+					"    Client and cluster must use the same major version",
+				clusterVersion.Major, clientVersion.Major,
+				clusterImage, clusterVersion.String(),
+				clientImage, clientVersion.String()),
+		}, nil
+	}
+
+	// Compare minor version
+	if clusterVersion.Minor != clientVersion.Minor {
+		return map[string]interface{}{
+			"Status": "error",
+			"Issue": fmt.Sprintf(
+				"Minor version mismatch detected (%d.%d vs %d.%d):\n"+
+					"    Cluster image: %s (version %s)\n"+
+					"    Client image:  %s (version %s)\n"+
+					"    Client and cluster must use the same minor version",
+				clusterVersion.Major, clusterVersion.Minor,
+				clientVersion.Major, clientVersion.Minor,
+				clusterImage, clusterVersion.String(),
+				clientImage, clientVersion.String()),
+		}, nil
+	}
+
+	// Same major.minor but different patch or build
+	// Client version must be equal to or older than cluster version
+	status := "success"
+	detail := fmt.Sprintf("Client and cluster versions compatible: %s", clusterVersion.String())
+	issue := ""
+
+	if clientVersion.Patch < clusterVersion.Patch ||
+		(clientVersion.Patch == clusterVersion.Patch && clientVersion.Build < clusterVersion.Build) {
+		// Client is older - this may work but warn
+		status = "warning"
+		issue = fmt.Sprintf(
+			"Client version is older than cluster version (not recommended):\n"+
+				"    Cluster: %s (version %s)\n"+
+				"    Client:  %s (version %s)\n"+
+				"    Consider upgrading client to match cluster version",
+			clusterImage, clusterVersion.String(),
+			clientImage, clientVersion.String())
+	} else if clientVersion.Patch > clusterVersion.Patch ||
+		(clientVersion.Patch == clusterVersion.Patch && clientVersion.Build > clusterVersion.Build) {
+		// Client is newer - not allowed
+		status = "error"
+		issue = fmt.Sprintf(
+			"Client version is newer than cluster version (not allowed):\n"+
+				"    Cluster image: %s (version %s)\n"+
+				"    Client image:  %s (version %s)\n"+
+				"    Client version must be equal to or older than cluster version.\n"+
+				"    Please downgrade client to %s or upgrade cluster to match client version",
+			clusterImage, clusterVersion.String(),
+			clientImage, clientVersion.String(),
+			clusterVersion.String())
+	}
+
+	return map[string]interface{}{
+		"Status":         status,
+		"Issue":          issue,
+		"Detail":         detail,
+		"ClusterImage":   clusterImage,
+		"ClusterVersion": clusterVersion.String(),
+		"ClientImage":    clientImage,
+		"ClientVersion":  clientVersion.String(),
+	}, nil
+}

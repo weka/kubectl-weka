@@ -26,6 +26,7 @@ var planClientCmd = &cobra.Command{
 func init() {
 	planCmd.AddCommand(planClientCmd)
 	planClientCmd.Flags().BoolVar(&planClientFailFast, "fail-fast", false, "Stop validation on first error (default: collect all errors)")
+	planClientCmd.SilenceUsage = true
 }
 
 type ClientContainerRequirements struct {
