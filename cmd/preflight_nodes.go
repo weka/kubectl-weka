@@ -340,22 +340,56 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	// Print centralized errors summary
 	if len(allErrors) > 0 {
 		fmt.Println("\n" + red("=== Errors Summary ==="))
-		// Group errors by type
-		errorsByMessage := make(map[string][]string)
-		errorFixes := make(map[string]string)
+
+		// Group errors by module (not by exact message)
+		type ErrorGroup struct {
+			Module       string
+			Nodes        []string
+			Messages     []string
+			SuggestedFix string
+		}
+		errorGroups := make(map[string]*ErrorGroup)
+
 		for _, e := range allErrors {
-			key := fmt.Sprintf("%s: %s", e.Module, e.Message)
-			errorsByMessage[key] = append(errorsByMessage[key], e.NodeName)
-			if e.Fix != "" {
-				errorFixes[key] = e.Fix
+			// Use module name as the grouping key
+			key := e.Module
+
+			if group, exists := errorGroups[key]; exists {
+				group.Nodes = append(group.Nodes, e.NodeName)
+				group.Messages = append(group.Messages, e.Message)
+			} else {
+				errorGroups[key] = &ErrorGroup{
+					Module:       e.Module,
+					Nodes:        []string{e.NodeName},
+					Messages:     []string{e.Message},
+					SuggestedFix: e.Fix,
+				}
 			}
 		}
 
-		for msg, nodes := range errorsByMessage {
-			fmt.Printf("\n❌ %s\n", red(msg))
-			fmt.Printf("   Affected nodes (%d): %s\n", len(nodes), strings.Join(nodes, ", "))
-			if fix, hasFix := errorFixes[msg]; hasFix {
-				fmt.Printf("   💡 Suggested fix: %s\n", fix)
+		for _, group := range errorGroups {
+			// Check if all messages are identical
+			allSame := true
+			firstMsg := group.Messages[0]
+			for _, msg := range group.Messages {
+				if msg != firstMsg {
+					allSame = false
+					break
+				}
+			}
+
+			// Display the error with appropriate context
+			if allSame {
+				// All errors are identical - show the exact error
+				fmt.Printf("\n❌ %s: %s\n", red(group.Module), firstMsg)
+			} else {
+				// Errors differ - show it's a common issue with varying details
+				fmt.Printf("\n❌ %s: %s (values vary by node)\n", red(group.Module), firstMsg)
+			}
+
+			fmt.Printf("   Affected nodes (%d): %s\n", len(group.Nodes), strings.Join(group.Nodes, ", "))
+			if group.SuggestedFix != "" {
+				fmt.Printf("   💡 Suggested fix: %s\n", group.SuggestedFix)
 			}
 		}
 	}
