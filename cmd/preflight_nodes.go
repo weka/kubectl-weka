@@ -72,7 +72,7 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	}()
 
 	crClient := KubeClients.CRClient
-	nodes, err := resolveNodes(ctx, crClient, args, preflightNodeSelector)
+	nodes, err := resolveNodes(ctx, args, preflightNodeSelector)
 	if err != nil {
 		return err
 	}

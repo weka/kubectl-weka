@@ -19,33 +19,25 @@ import (
 // Shared selection flag (used by both preflight subcommands)
 var preflightNodeSelector string
 
-func resolveNodes(ctx context.Context, client crclient.Client, names []string, selector string) ([]corev1.Node, error) {
-	if len(names) > 0 {
-		out := make([]corev1.Node, 0, len(names))
-		for _, n := range names {
-			n = strings.TrimSpace(n)
-			if n == "" {
-				continue
-			}
-			var node corev1.Node
-			if err := client.Get(ctx, crclient.ObjectKey{Name: n}, &node); err != nil {
-				return nil, err
-			}
-			out = append(out, node)
-		}
-		return out, nil
-	}
-
-	var nodeList corev1.NodeList
-	opts := []crclient.ListOption{}
-	if selector != "" {
-		opts = append(opts, crclient.MatchingLabels(parseSelector(selector)))
-	}
-
-	if err := client.List(ctx, &nodeList, opts...); err != nil {
+func resolveNodes(ctx context.Context, names []string, selector string) ([]corev1.Node, error) {
+	// Always get all cluster nodes using the shared function
+	allNodes, err := GetClusterNodes(ctx)
+	if err != nil {
 		return nil, err
 	}
-	return nodeList.Items, nil
+
+	// Filter by specific node names if provided
+	if len(names) > 0 {
+		return FilterNodesByNames(allNodes, names), nil
+	}
+
+	// Apply selector filtering if provided
+	if selector != "" {
+		selectorMap := parseSelector(selector)
+		return FilterNodesBySelector(allNodes, selectorMap), nil
+	}
+
+	return allNodes, nil
 }
 
 // parseSelector converts a label selector string to a map for crclient.MatchingLabels
