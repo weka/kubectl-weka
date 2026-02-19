@@ -29,6 +29,16 @@ type HostCheckModule interface {
 	// Description returns a human-readable description of what this module checks
 	Description() string
 
+	// SuccessTemplate returns a message template for success reporting
+	// Can include placeholders like {{.NodeName}}, {{.FriendlyName}}, etc.
+	// Optional: return empty string if not applicable
+	SuccessTemplate() string
+
+	// WarningTemplate returns a message template for warning reporting
+	// Can include placeholders like {{.NodeName}}, {{.FriendlyName}}, etc.
+	// Optional: return empty string if not applicable
+	WarningTemplate() string
+
 	// ErrorTemplate returns a message template for error reporting
 	// Can include placeholders like {{.NodeName}}, {{.Issue}}, etc.
 	// Optional: return empty string if not applicable
@@ -338,7 +348,7 @@ func (m *HostCheckModuleStub) SuggestedResolutionTemplate() string {
 func (m *HostCheckModuleStub) Validate(podOutput string) (interface{}, error) {
 	// Placeholder: return success
 	return map[string]interface{}{
-		"status": "ok",
+		"status": "success",
 		"module": m.name,
 	}, nil
 }

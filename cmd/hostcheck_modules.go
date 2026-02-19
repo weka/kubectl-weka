@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // ============================================================================
@@ -46,10 +47,62 @@ func (m *OSModule) Validate(podOutput string) (interface{}, error) {
 		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
 	}
 
+	// Parse OSRelease to extract NAME and VERSION_ID
+	// The OSRelease is a concatenated string from /etc/os-release with newlines converted to spaces
+	// e.g., "PRETTY_NAME=\"Ubuntu 22.04.5 LTS\" NAME=\"Ubuntu\" VERSION_ID=\"22.04\" ..."
+
+	name := ""
+	versionID := ""
+	prettyName := ""
+
+	// Split by space to get individual key=value pairs
+	// But we need to be careful with quoted values that might contain spaces
+	parts := strings.Fields(hc.OSRelease)
+	for _, part := range parts {
+		// Each part looks like KEY=VALUE or KEY="VALUE"
+		if strings.Contains(part, "=") {
+			kv := strings.SplitN(part, "=", 2)
+			if len(kv) == 2 {
+				key := kv[0]
+				value := kv[1]
+
+				// Remove surrounding quotes
+				value = strings.Trim(value, `"`)
+
+				switch key {
+				case "NAME":
+					name = value
+				case "VERSION_ID":
+					versionID = value
+				case "PRETTY_NAME":
+					prettyName = value
+				}
+			}
+		}
+	}
+
+	// Build osDisplay with fallback chain
+	osDisplay := ""
+	if name != "" && versionID != "" {
+		osDisplay = fmt.Sprintf("%s %s", name, versionID)
+	} else if name != "" {
+		osDisplay = name
+	} else if prettyName != "" {
+		// Extract just the OS name from PRETTY_NAME (e.g., "Ubuntu 22.04.5 LTS" -> best effort)
+		// Remove the distribution name in parentheses if present
+		if idx := strings.Index(prettyName, "("); idx > 0 {
+			osDisplay = strings.TrimSpace(prettyName[:idx])
+		} else {
+			osDisplay = prettyName
+		}
+	} else {
+		osDisplay = "Unknown OS"
+	}
+
 	return map[string]interface{}{
-		"is_rhcos":   hc.IsRHCOS,
-		"os_release": hc.OSRelease,
-		"status":     "ok",
+		"IsRHCOS":   hc.IsRHCOS,
+		"OSRelease": osDisplay,
+		"Status":    "success",
 	}, nil
 }
 
@@ -78,11 +131,11 @@ func (m *WekaDirModule) SuccessTemplate() string {
 }
 
 func (m *WekaDirModule) WarningTemplate() string {
-	return "⚠️ WARN: {{.FriendlyName}}: {{.Path}} has {{.AvailGB}}GB available (recommended: 300GB)"
+	return "⚠️ WARN: {{.FriendlyName}}: {{.Issue}}"
 }
 
 func (m *WekaDirModule) ErrorTemplate() string {
-	return "❌ ERROR: {{.FriendlyName}} check failed: {{.Issue}}"
+	return "❌ ERROR: {{.FriendlyName}}: {{.Issue}}"
 }
 
 func (m *WekaDirModule) SuggestedResolutionTemplate() string {
@@ -95,23 +148,74 @@ func (m *WekaDirModule) Validate(podOutput string) (interface{}, error) {
 		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
 	}
 
-	status := "ok"
+	status := "success"
 	if !hc.WekaDirOK {
 		status = "error"
 	}
 
+	availGB := float64(hc.WekaDirAvailBytes) / (1024 * 1024 * 1024)
+
 	return map[string]interface{}{
-		"status":      status,
-		"ok":          hc.WekaDirOK,
-		"path":        hc.WekaDirPath,
-		"detail":      hc.WekaDirDetail,
-		"avail_bytes": hc.WekaDirAvailBytes,
+		"Status":     status,
+		"OK":         hc.WekaDirOK,
+		"Path":       hc.WekaDirPath,
+		"Detail":     hc.WekaDirDetail,
+		"AvailBytes": hc.WekaDirAvailBytes,
+		"AvailGB":    fmt.Sprintf("%.1f", availGB),
 	}, nil
 }
 
-// ValidateWithParams implements HostCheckModule - params not used for Weka directory validation
+// ValidateWithParams implements HostCheckModule with min GB parameter support
+// Params: {"wekaDirMinFailGB": 800} to set minimum GB requirement for failure
 func (m *WekaDirModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
-	return m.Validate(podOutput)
+	var hc HostChecksResult
+	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
+		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
+	}
+
+	// Get minimum GB requirement from params
+	minFailGB := int64(100) // default
+	minWarnGB := int64(300) // default
+
+	if val, ok := params["wekaDirMinFailGB"].(float64); ok {
+		minFailGB = int64(val)
+	} else if val, ok := params["wekaDirMinFailGB"].(int64); ok {
+		minFailGB = val
+	} else if val, ok := params["wekaDirMinFailGB"].(int); ok {
+		minFailGB = int64(val)
+	}
+
+	if val, ok := params["wekaDirMinWarnGB"].(float64); ok {
+		minWarnGB = int64(val)
+	} else if val, ok := params["wekaDirMinWarnGB"].(int64); ok {
+		minWarnGB = val
+	} else if val, ok := params["wekaDirMinWarnGB"].(int); ok {
+		minWarnGB = int64(val)
+	}
+
+	availGB := hc.WekaDirAvailBytes / (1024 * 1024 * 1024)
+
+	status := "success"
+	issue := ""
+
+	if availGB < minFailGB {
+		status = "error"
+		issue = fmt.Sprintf("Only %.1f GB available, need at least %d GB", float64(availGB), minFailGB)
+	} else if availGB < minWarnGB {
+		status = "warning"
+		issue = fmt.Sprintf("Only %.1f GB available, recommended at least %d GB", float64(availGB), minWarnGB)
+	}
+
+	return map[string]interface{}{
+		"Status":     status,
+		"OK":         status == "success",
+		"Path":       hc.WekaDirPath,
+		"Issue":      issue,
+		"AvailBytes": hc.WekaDirAvailBytes,
+		"AvailGB":    fmt.Sprintf("%.1f", float64(availGB)),
+		"MinFailGB":  minFailGB,
+		"MinWarnGB":  minWarnGB,
+	}, nil
 }
 
 // XFSModule validates XFS tools installation
@@ -151,15 +255,17 @@ func (m *XFSModule) Validate(podOutput string) (interface{}, error) {
 		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
 	}
 
-	status := "ok"
+	status := "success"
+	detail := "found"
 	if !hc.XFSInstalled {
 		status = "error"
+		detail = "not found"
 	}
 
 	return map[string]interface{}{
-		"status":    status,
-		"installed": hc.XFSInstalled,
-		"detail":    hc.XFSDetail,
+		"Status":    status,
+		"Installed": hc.XFSInstalled,
+		"Detail":    detail,
 	}, nil
 }
 
@@ -205,15 +311,15 @@ func (m *WekaClientModule) Validate(podOutput string) (interface{}, error) {
 		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
 	}
 
-	status := "ok"
+	status := "success"
 	if !hc.WekaClientClean {
 		status = "warning"
 	}
 
 	return map[string]interface{}{
-		"status": status,
-		"clean":  hc.WekaClientClean,
-		"detail": hc.WekaClientDetail,
+		"Status": status,
+		"Clean":  hc.WekaClientClean,
+		"Detail": hc.WekaClientDetail,
 	}, nil
 }
 
@@ -259,22 +365,42 @@ func (m *NetworkModule) Validate(podOutput string) (interface{}, error) {
 		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
 	}
 
-	status := "ok"
-	if !hc.Mellanox {
+	// Check if there are actual valid interfaces (not just the Mellanox flag)
+	validIfaces := 0
+	for _, iface := range hc.MlxIfaces {
+		if iface.Name != "" {
+			validIfaces++
+		}
+	}
+
+	status := "success"
+	if validIfaces == 0 {
 		status = "warning"
 	}
-	if !hc.BondLACPOk {
+	if !hc.BondLACPOk && validIfaces > 0 {
 		status = "warning"
 	}
 
+	// Build detail string for output
+	detail := ""
+	if validIfaces > 0 {
+		detail = fmt.Sprintf("%d Mellanox interface(s)", validIfaces)
+		if len(hc.MlxBonds) > 0 {
+			detail += fmt.Sprintf(", %d bond(s)", len(hc.MlxBonds))
+		}
+	} else {
+		detail = "No Mellanox interfaces detected"
+	}
+
 	return map[string]interface{}{
-		"status":           status,
-		"mellanox":         hc.Mellanox,
-		"mellanox_detail":  hc.MellanoxDetail,
-		"mlx_ifaces":       hc.MlxIfaces,
-		"mlx_bonds":        hc.MlxBonds,
-		"bond_lacp_ok":     hc.BondLACPOk,
-		"bond_lacp_detail": hc.BondLACPDetail,
+		"Status":         status,
+		"Detail":         detail,
+		"Mellanox":       validIfaces > 0,
+		"MellanoxDetail": hc.MellanoxDetail,
+		"MlxIfaces":      hc.MlxIfaces,
+		"MlxBonds":       hc.MlxBonds,
+		"BondLACPOk":     hc.BondLACPOk,
+		"BondLACPDetail": hc.BondLACPDetail,
 	}, nil
 }
 
@@ -293,7 +419,7 @@ func (m *NetworkModule) ValidateWithParams(podOutput string, params map[string]i
 	}
 
 	// Validate specific ethDevice
-	status := "ok"
+	status := "success"
 	found := false
 	hasLACP := false
 	var issues []string
@@ -361,7 +487,7 @@ func (m *CPUModule) SuccessTemplate() string {
 }
 
 func (m *CPUModule) WarningTemplate() string {
-	return "" // No warning state for CPU module
+	return "⚠️ WARN: {{.FriendlyName}}: {{.Detail}}"
 }
 
 func (m *CPUModule) ErrorTemplate() string {
@@ -378,15 +504,52 @@ func (m *CPUModule) Validate(podOutput string) (interface{}, error) {
 		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
 	}
 
+	// Determine status based on CPU configuration
+	status := "success"
+	var warnings []string
+
+	// Check for dual-socket AMD - not recommended for WEKA
+	if hc.CPUSockets == 2 && strings.ToLower(hc.CPUFamily) == "amd" {
+		status = "warning"
+		warnings = append(warnings, "Dual-socket AMD architecture detected! This architecture does not provide best performance with WEKA")
+	}
+
+	// Format detail string with both physical cores and logical cores for clarity
+	var detail string
+	if hc.PhysicalCores == hc.LogicalCores {
+		// HT is off or single-threaded
+		detail = fmt.Sprintf("%d cores, %.0f GB RAM", hc.PhysicalCores, float64(hc.MemoryBytes)/(1024*1024*1024))
+	} else {
+		// HT is on - show physical cores and threads
+		detail = fmt.Sprintf("%d cores (%d threads), %.0f GB RAM", hc.PhysicalCores, hc.LogicalCores, float64(hc.MemoryBytes)/(1024*1024*1024))
+	}
+
+	// Add CPU family and socket info
+	if hc.CPUFamily != "" {
+		detail += fmt.Sprintf(" [%s", hc.CPUFamily)
+		if hc.CPUSockets > 0 {
+			detail += fmt.Sprintf(" %d-socket", hc.CPUSockets)
+		}
+		if hc.CPUArch != "" {
+			detail += fmt.Sprintf(" %s", hc.CPUArch)
+		}
+		detail += "]"
+	}
+
 	return map[string]interface{}{
-		"status":            "ok",
-		"ht_enabled":        hc.HTEnabled,
-		"physical_cores":    hc.PhysicalCores,
-		"logical_cores":     hc.LogicalCores,
-		"memory_bytes":      hc.MemoryBytes,
-		"free_memory_bytes": hc.FreeMemoryBytes,
-		"hugepages_free":    hc.HugepagesFree,
-		"cpu_model":         hc.CPUModel,
+		"Status":          status,
+		"Detail":          detail,
+		"Warnings":        warnings,
+		"HTEnabled":       hc.HTEnabled,
+		"PhysicalCores":   hc.PhysicalCores,
+		"LogicalCores":    hc.LogicalCores,
+		"MemoryBytes":     hc.MemoryBytes,
+		"FreeMemoryBytes": hc.FreeMemoryBytes,
+		"HugepagesFree":   hc.HugepagesFree,
+		"CPUModel":        hc.CPUModel,
+		"CPUFamily":       hc.CPUFamily,
+		"CPUArch":         hc.CPUArch,
+		"CPUSockets":      hc.CPUSockets,
 	}, nil
 }
 
@@ -431,14 +594,14 @@ func (m *KernelModule) Validate(podOutput string) (interface{}, error) {
 		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
 	}
 
-	status := "ok"
+	status := "success"
 	if hc.KernelVersion <= "5.10" {
 		status = "warning"
 	}
 
 	return map[string]interface{}{
-		"status":         status,
-		"kernel_version": hc.KernelVersion,
+		"Status":        status,
+		"KernelVersion": hc.KernelVersion,
 	}, nil
 }
 
@@ -484,12 +647,29 @@ func (m *NVMeDrivesModule) Validate(podOutput string) (interface{}, error) {
 		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
 	}
 
+	// Build detail string
+	// Count only valid NVMe drives with serial numbers (exclude partitions and drives without serial)
+	validDrives := 0
+	for _, drive := range hc.NVMeDrives {
+		// Only count drives with serial numbers (not empty), and exclude partitions (device names like nvme0n1p1)
+		if drive.SerialNumber != "" && !strings.Contains(drive.DeviceName, "p") {
+			validDrives++
+		}
+	}
+
+	detail := ""
+	if validDrives == 0 {
+		detail = "No NVMe drives detected"
+	} else {
+		detail = fmt.Sprintf("%d drive(s) available", validDrives)
+	}
+
 	return map[string]interface{}{
-		"status":       "ok",
-		"drives":       hc.NVMeDrives,
-		"drive_count":  hc.NVMeDriveCount,
-		"drive_detail": hc.NVMeDriveDetail,
-		"detail":       hc.NVMeDriveDetail,
+		"Status":      "success",
+		"Detail":      detail,
+		"Drives":      hc.NVMeDrives,
+		"DriveCount":  validDrives,
+		"DriveDetail": hc.NVMeDriveDetail,
 	}, nil
 }
 

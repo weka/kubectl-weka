@@ -266,6 +266,9 @@ MEMORY_BYTES=0
 FREE_MEMORY_BYTES=0
 HUGEPAGES_FREE_BYTES=0
 CPU_MODEL=""
+CPU_FAMILY=""
+CPU_ARCH=""
+CPU_SOCKETS=0
 
 # Get logical cores (number of processors)
 LOGICAL_CORES="$(grep -c '^processor' /host/proc/cpuinfo 2>/dev/null || echo 1)"
@@ -273,6 +276,33 @@ LOGICAL_CORES="$(grep -c '^processor' /host/proc/cpuinfo 2>/dev/null || echo 1)"
 if [ -f /host/proc/cpuinfo ]; then
   # Get CPU model
   CPU_MODEL="$(grep '^model name' /host/proc/cpuinfo 2>/dev/null | head -n1 | cut -d: -f2 | sed 's/^ //')"
+  
+  # Get CPU vendor (Intel, AMD, ARM, etc.)
+  VENDOR_ID="$(grep '^vendor_id' /host/proc/cpuinfo 2>/dev/null | head -n1 | cut -d: -f2 | sed 's/^ //')"
+  case "$VENDOR_ID" in
+    GenuineIntel) CPU_FAMILY="Intel" ;;
+    AuthenticAMD) CPU_FAMILY="AMD" ;;
+    *)
+      # For other CPUs, extract from model name
+      if echo "$CPU_MODEL" | grep -qi 'intel'; then
+        CPU_FAMILY="Intel"
+      elif echo "$CPU_MODEL" | grep -qi 'amd'; then
+        CPU_FAMILY="AMD"
+      elif echo "$CPU_MODEL" | grep -qi 'grace'; then
+        CPU_FAMILY="Grace"
+      elif echo "$CPU_MODEL" | grep -qi 'arm'; then
+        CPU_FAMILY="ARM"
+      fi
+      ;;
+  esac
+  
+  # Get architecture from uname
+  ARCH="$(uname -m 2>/dev/null || echo 'unknown')"
+  case "$ARCH" in
+    x86_64|amd64) CPU_ARCH="x86_64" ;;
+    aarch64|arm64) CPU_ARCH="aarch64" ;;
+    *) CPU_ARCH="$ARCH" ;;
+  esac
   
   # Get physical cores from "cpu cores" field (most reliable method)
   CPU_CORES="$(grep '^cpu cores' /host/proc/cpuinfo 2>/dev/null | head -n1 | awk '{print $NF}')"
@@ -282,11 +312,11 @@ if [ -f /host/proc/cpuinfo ]; then
     if [ -z "$SIBLINGS" ] || [ "$SIBLINGS" -eq 0 ]; then
       SIBLINGS="$CPU_CORES"
     fi
-    SOCKETS="$((LOGICAL_CORES / SIBLINGS))"
-    if [ "$SOCKETS" -eq 0 ]; then
-      SOCKETS=1
+    CPU_SOCKETS=$((LOGICAL_CORES / SIBLINGS))
+    if [ "$CPU_SOCKETS" -eq 0 ]; then
+      CPU_SOCKETS=1
     fi
-    PHYSICAL_CORES=$((CPU_CORES * SOCKETS))
+    PHYSICAL_CORES=$((CPU_CORES * CPU_SOCKETS))
   else
     # Fallback: assume physical_id field exists and count unique ones
     PHYSICAL_CORES="$(grep 'physical id' /host/proc/cpuinfo 2>/dev/null | sort -u | wc -l)"
@@ -295,9 +325,14 @@ if [ -f /host/proc/cpuinfo ]; then
       SIBLINGS="$(grep '^siblings' /host/proc/cpuinfo 2>/dev/null | head -n1 | awk '{print $NF}')"
       if [ -n "$SIBLINGS" ] && [ "$SIBLINGS" -gt 0 ]; then
         PHYSICAL_CORES=$((LOGICAL_CORES / SIBLINGS))
+        CPU_SOCKETS=$((LOGICAL_CORES / SIBLINGS))
       else
         PHYSICAL_CORES="$LOGICAL_CORES"
+        CPU_SOCKETS=1
       fi
+    else
+      # Count actual sockets from physical_id
+      CPU_SOCKETS="$(grep 'physical id' /host/proc/cpuinfo 2>/dev/null | sort -u | wc -l)"
     fi
   fi
 fi
@@ -305,6 +340,9 @@ fi
 # Ensure we have at least something
 if [ "$PHYSICAL_CORES" -eq 0 ]; then
   PHYSICAL_CORES="$LOGICAL_CORES"
+fi
+if [ "$CPU_SOCKETS" -eq 0 ]; then
+  CPU_SOCKETS=1
 fi
 
 # Check if HT is enabled (logical cores > physical cores)
@@ -478,6 +516,9 @@ printf '"free_memory_bytes":%d,' "$FREE_MEMORY_BYTES"
 printf '"hugepages_free_bytes":%d,' "$HUGEPAGES_FREE_BYTES"
 printf '"kernel_version":"%s",' "$(json_escape "$KERNEL_VERSION")"
 printf '"cpu_model":"%s",' "$(json_escape "$CPU_MODEL")"
+printf '"cpu_family":"%s",' "$(json_escape "$CPU_FAMILY")"
+printf '"cpu_arch":"%s",' "$(json_escape "$CPU_ARCH")"
+printf '"cpu_sockets":%d,' "$CPU_SOCKETS"
 printf '"nvme_drives":[%s],' "$NVME_DRIVES_JSON"
 printf '"nvme_drive_count":%d,' "$NVME_DRIVES_COUNT"
 printf '"nvme_drive_detail":"%s"' "$(json_escape "$NVME_DETAIL")"

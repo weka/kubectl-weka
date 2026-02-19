@@ -161,17 +161,17 @@ func printCheckResult(title string, pass bool, details string) {
 	// one-line output: "<title> PASS" or "<title> FAIL [..]"
 	if pass {
 		if details != "" {
-			fmt.Printf("%s %s [%s]\n", title, green("PASS"), details)
+			fmt.Printf("✅ %s [%s]\n", title, details)
 		} else {
-			fmt.Printf("%s %s\n", title, green("PASS"))
+			fmt.Printf("✅ %s\n", title)
 		}
 		return
 	}
 
 	if details != "" {
-		fmt.Printf("%s %s [%s]\n", title, red("FAIL"), details)
+		fmt.Printf("❌ %s [%s]\n", title, details)
 	} else {
-		fmt.Printf("%s %s\n", title, red("FAIL"))
+		fmt.Printf("❌ %s\n", title)
 	}
 }
 
@@ -632,11 +632,23 @@ func sanitizeName(s string) string {
 	return s
 }
 
-func readPodLogs(ctx context.Context, clientset *kubernetes.Clientset, ns, pod, container string) (string, error) {
-	req := clientset.CoreV1().Pods(ns).GetLogs(pod, &corev1.PodLogOptions{Container: container})
-	b, err := req.Do(ctx).Raw()
-	if err != nil {
-		return "", err
+func GetPodsMapByNode(ctx context.Context, crClient crclient.Client) map[string][]corev1.Pod {
+	podsByNode := make(map[string][]corev1.Pod)
+	{
+		var allPods corev1.PodList
+		if err := crClient.List(ctx, &allPods); err != nil {
+			fmt.Printf("Warning: failed to list pods: %v\n", err)
+		} else {
+			// Build a map of nodeName -> pods on that node
+			for i := range allPods.Items {
+				pod := &allPods.Items[i]
+				if pod.Spec.NodeName == "" {
+					continue
+				}
+				podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], *pod)
+			}
+			fmt.Printf("Fetched %d pods across %d nodes\n", len(allPods.Items), len(podsByNode))
+		}
 	}
-	return string(b), nil
+	return podsByNode
 }

@@ -273,17 +273,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 	fmt.Println("\n=== Fetching Cluster Resource Information ===")
 
 	// Collect pod data from cluster
-	podsByNode := make(map[string][]corev1.Pod)
-	client := KubeClients.CRClient
-	var podList corev1.PodList
-	if err := client.List(ctx, &podList); err == nil {
-		// Group pods by node
-		for _, pod := range podList.Items {
-			if pod.Spec.NodeName != "" {
-				podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], pod)
-			}
-		}
-	}
+	podsByNode := GetPodsMapByNode(ctx, KubeClients.CRClient)
 
 	fmt.Printf("✅ Collected pod data from cluster\n")
 

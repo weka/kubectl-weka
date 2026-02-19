@@ -360,6 +360,7 @@ func (hcm HostChecksMap) FormatSummary() string {
 // This method is smart about caching:
 // - If nodes are already checked, returns cached results immediately
 // - If new nodes are requested, runs hostchecks only on new nodes
+// - Filters out NotReady nodes (they can't run pods)
 // - Thread-safe for concurrent access
 func (r *HostCheckRegistry) GetHostChecksForNodes(
 	ctx context.Context,
@@ -369,14 +370,26 @@ func (r *HostCheckRegistry) GetHostChecksForNodes(
 		return make(HostChecksMap), nil
 	}
 
+	// Filter to only Ready nodes - NotReady nodes can't run hostcheck pods
+	readyNodes := FilterReadyNodes(nodes)
+	skippedCount := len(nodes) - len(readyNodes)
+
+	if skippedCount > 0 {
+		fmt.Printf("ℹ️  Skipping %d NotReady node(s) - they cannot run hostcheck pods\n", skippedCount)
+	}
+
+	if len(readyNodes) == 0 {
+		return make(HostChecksMap), nil
+	}
+
 	// Check cache first (read lock)
 	r.cache.mu.RLock()
 	cacheHit := true
 	var uncachedNodes []corev1.Node
 
-	// Build set of requested node names
+	// Build set of requested node names (only ready nodes)
 	requestedNodeNames := make(map[string]bool)
-	for _, node := range nodes {
+	for _, node := range readyNodes {
 		requestedNodeNames[node.Name] = true
 
 		// Check if this node is in cache
@@ -497,18 +510,48 @@ func (r *HostCheckRegistry) ValidateWithModules(
 			}
 
 			if err != nil {
+				// Get the module to extract its error template
+				module, _ := r.Get(moduleName)
+				errorTemplate := ""
+				if module != nil {
+					errorTemplate = module.ErrorTemplate()
+				}
+
 				nodeResults[moduleName] = &HostCheckResult{
-					ModuleName: moduleName,
-					Status:     "error",
-					Error:      fmt.Sprintf("Validation error: %v", err),
-					Params:     map[string]interface{}{"NodeName": nodeName},
+					ModuleName:    moduleName,
+					Status:        "error",
+					Error:         fmt.Sprintf("Validation error: %v", err),
+					ErrorTemplate: errorTemplate,
+					Params:        map[string]interface{}{"NodeName": nodeName},
 				}
 			} else {
+				// Get the module to extract its templates
+				module, _ := r.Get(moduleName)
+				successTemplate := ""
+				warningTemplate := ""
+				errorTemplate := ""
+				if module != nil {
+					successTemplate = module.SuccessTemplate()
+					warningTemplate = module.WarningTemplate()
+					errorTemplate = module.ErrorTemplate()
+				}
+
+				// Extract status from the result data if provided
+				resultStatus := "success"
+				if resultMap, ok := result.(map[string]interface{}); ok {
+					if statusVal, ok := resultMap["Status"].(string); ok {
+						resultStatus = statusVal
+					}
+				}
+
 				nodeResults[moduleName] = &HostCheckResult{
-					ModuleName: moduleName,
-					Status:     "success",
-					Data:       result,
-					Params:     map[string]interface{}{"NodeName": nodeName},
+					ModuleName:      moduleName,
+					Status:          resultStatus,
+					Data:            result,
+					SuccessTemplate: successTemplate,
+					WarningTemplate: warningTemplate,
+					ErrorTemplate:   errorTemplate,
+					Params:          map[string]interface{}{"NodeName": nodeName},
 				}
 			}
 		}
@@ -540,4 +583,98 @@ func (r *HostCheckRegistry) ValidateAll(
 
 	// Validate using registered modules with params
 	return r.ValidateWithModules(commandName, hostChecksMap, params)
+}
+
+// PrintNodeValidationResults prints the validation results for a single node
+// Returns the overall status: "success", "partial", or "failure"
+func (r *HostCheckRegistry) PrintNodeValidationResults(
+	nodeName string,
+	commandName string,
+	moduleResults map[string]*HostCheckResult,
+) string {
+	// Determine overall status from module results
+	overallStatus := "success"
+	hasWarning := false
+	hasError := false
+
+	for _, mr := range moduleResults {
+		if mr.Status == "error" {
+			hasError = true
+		} else if mr.Status == "warning" {
+			hasWarning = true
+		}
+	}
+
+	if hasError {
+		overallStatus = "failure"
+	} else if hasWarning {
+		overallStatus = "partial"
+	}
+
+	// Print each module result using Summary()
+	config, _ := r.GetCommand(commandName)
+	var checkOrder []string
+	if config != nil {
+		checkOrder = config.ModuleNames
+	}
+
+	for _, moduleName := range checkOrder {
+		moduleResult, exists := moduleResults[moduleName]
+		if !exists {
+			continue
+		}
+
+		// Map module name to friendly name
+		friendlyName := moduleName
+		switch moduleName {
+		case "os":
+			friendlyName = "Operating System"
+		case "kernel":
+			friendlyName = "Kernel"
+		case "cpu_memory":
+			friendlyName = "CPU & Memory"
+		case "weka_dir":
+			friendlyName = "Weka Directory"
+		case "xfs":
+			friendlyName = "XFS Tools"
+		case "weka_client":
+			friendlyName = "Weka Client"
+		case "network":
+			friendlyName = "Network Configuration"
+		case "nvme_drives":
+			friendlyName = "NVMe Drives"
+		}
+
+		// Create context params for Summary()
+		contextParams := map[string]interface{}{
+			"FriendlyName": friendlyName,
+			"NodeName":     nodeName,
+		}
+
+		// Add any additional data from the module result
+		if moduleResult.Data != nil {
+			if dataMap, ok := moduleResult.Data.(map[string]interface{}); ok {
+				for k, v := range dataMap {
+					contextParams[k] = v
+				}
+			}
+		}
+
+		// Use Summary() to format the output
+		displayText := moduleResult.Summary(contextParams)
+
+		// Handle multiline details (like network configuration)
+		if strings.Contains(displayText, "\n") {
+			lines := strings.Split(displayText, "\n")
+			fmt.Printf("     %s\n", lines[0])
+			indent := "               "
+			for i := 1; i < len(lines); i++ {
+				fmt.Printf("%s%s\n", indent, lines[i])
+			}
+		} else {
+			fmt.Printf("     %s\n", displayText)
+		}
+	}
+
+	return overallStatus
 }

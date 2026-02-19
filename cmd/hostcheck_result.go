@@ -57,6 +57,9 @@ type HostChecksResult struct {
 	FreeMemoryBytes int64  `json:"free_memory_bytes"`
 	HugepagesFree   int64  `json:"hugepages_free_bytes"`
 	CPUModel        string `json:"cpu_model"`
+	CPUFamily       string `json:"cpu_family"`  // e.g., "Intel", "AMD", "ARM"
+	CPUArch         string `json:"cpu_arch"`    // e.g., "x86_64", "aarch64"
+	CPUSockets      int    `json:"cpu_sockets"` // Number of CPU sockets
 
 	// NVMe drive detection
 	NVMeDrives      []NVMeDriveInfo `json:"nvme_drives"`

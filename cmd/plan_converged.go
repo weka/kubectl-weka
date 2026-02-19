@@ -108,17 +108,8 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 
 	// Collect pod data
 	fmt.Println("\n=== Fetching Current Resource Usage ===")
-	podsByNode := make(map[string][]corev1.Pod)
-	crClient := KubeClients.CRClient
+	podsByNode := GetPodsMapByNode(ctx, KubeClients.CRClient)
 
-	var podList corev1.PodList
-	if err := crClient.List(ctx, &podList); err == nil {
-		for _, pod := range podList.Items {
-			if pod.Spec.NodeName != "" {
-				podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], pod)
-			}
-		}
-	}
 	fmt.Printf("✅ Collected pod data from cluster\n")
 
 	// Calculate cluster container requirements
