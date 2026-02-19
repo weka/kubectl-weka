@@ -140,11 +140,5 @@ func (r *ClusterCheckRegistry) PrintCheckResults(results map[string]*ClusterChec
 	}
 }
 
-// GlobalClusterCheckRegistry is the global instance
-var GlobalClusterCheckRegistry *ClusterCheckRegistry
-
-func init() {
-	GlobalClusterCheckRegistry = NewClusterCheckRegistry()
-	// Modules self-register via their own init() functions
-	// No manual registration needed - just create the module and it will be automatically registered
-}
+// GlobalClusterCheckRegistry is the global instance - initialized immediately to avoid nil during module init
+var GlobalClusterCheckRegistry = NewClusterCheckRegistry()
