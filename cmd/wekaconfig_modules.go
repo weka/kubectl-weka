@@ -889,3 +889,392 @@ func (m *ClusterClientCompatibilityModule) Validate(ctx context.Context, config 
 		"ClientVersion":  clientVersion.String(),
 	}, nil
 }
+
+// NodeSelectorConflictModule validates that different roles don't have conflicting nodeSelectors
+// This is WekaCluster-only validation
+type NodeSelectorConflictModule struct{}
+
+func init() {
+	GlobalWekaConfigValidationRegistry.Register(&NodeSelectorConflictModule{})
+}
+
+func (m *NodeSelectorConflictModule) Name() string {
+	return "node_selector_conflict"
+}
+
+func (m *NodeSelectorConflictModule) FriendlyName() string {
+	return "Role Node Selector Conflicts"
+}
+
+func (m *NodeSelectorConflictModule) Description() string {
+	return "Validates that different roles don't have conflicting nodeSelectors"
+}
+
+func (m *NodeSelectorConflictModule) SuccessTemplate() string {
+	return "✅ OK:  {{.FriendlyName}}: No conflicting nodeSelectors detected"
+}
+
+func (m *NodeSelectorConflictModule) WarningTemplate() string {
+	return "⚠️ WARN: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *NodeSelectorConflictModule) ErrorTemplate() string {
+	return "❌ ERROR: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *NodeSelectorConflictModule) SuggestedResolutionTemplate() string {
+	return "Ensure that NFS and S3 roles have different nodeSelectors to prevent conflicts. Use 'roleNodeSelector' to specify different selectors per role"
+}
+
+func (m *NodeSelectorConflictModule) AppliesTo() []WekaConfigObjectType {
+	return []WekaConfigObjectType{WekaConfigTypeCluster}
+}
+
+func (m *NodeSelectorConflictModule) Validate(ctx context.Context, config *WekaConfigValidationContext) (interface{}, error) {
+	if config.Cluster == nil {
+		return nil, fmt.Errorf("node selector conflict validation requires WekaCluster")
+	}
+
+	cluster := config.Cluster
+	globalSelector := cluster.Spec.NodeSelector
+	roleSelectors := cluster.Spec.RoleNodeSelector
+
+	status := "success"
+	issue := ""
+
+	// Helper function to check if two selectors are identical
+	selectorsEqual := func(a, b map[string]string) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for k, v := range a {
+			if b[k] != v {
+				return false
+			}
+		}
+		return true
+	}
+
+	// Check for conflicts between different roles
+	conflictingRoles := []string{}
+
+	// Get all role selectors - convert pointers to values
+	nfsSelector := globalSelector
+	if roleSelectors.Nfs != nil {
+		nfsSelector = *roleSelectors.Nfs
+	}
+
+	s3Selector := globalSelector
+	if roleSelectors.S3 != nil {
+		s3Selector = *roleSelectors.S3
+	}
+
+	computeSelector := globalSelector
+	if roleSelectors.Compute != nil {
+		computeSelector = *roleSelectors.Compute
+	}
+
+	driveSelector := globalSelector
+	if roleSelectors.Drive != nil {
+		driveSelector = *roleSelectors.Drive
+	}
+
+	// NFS and S3 conflict is CRITICAL
+	if selectorsEqual(nfsSelector, s3Selector) {
+		status = "error"
+		issue = "NFS and S3 roles have the same nodeSelector. This is not allowed as clients and protocol services cannot be on the same node"
+		return map[string]interface{}{
+			"Status": status,
+			"Issue":  issue,
+		}, nil
+	}
+
+	// Check for other role conflicts (warning level)
+	if selectorsEqual(computeSelector, driveSelector) &&
+		!selectorsEqual(computeSelector, globalSelector) {
+		conflictingRoles = append(conflictingRoles, "compute and drive")
+	}
+
+	if selectorsEqual(computeSelector, nfsSelector) &&
+		!selectorsEqual(computeSelector, globalSelector) {
+		conflictingRoles = append(conflictingRoles, "compute and nfs")
+	}
+
+	if selectorsEqual(computeSelector, s3Selector) &&
+		!selectorsEqual(computeSelector, globalSelector) {
+		conflictingRoles = append(conflictingRoles, "compute and s3")
+	}
+
+	if selectorsEqual(driveSelector, nfsSelector) &&
+		!selectorsEqual(driveSelector, globalSelector) {
+		conflictingRoles = append(conflictingRoles, "drive and nfs")
+	}
+
+	if selectorsEqual(driveSelector, s3Selector) &&
+		!selectorsEqual(driveSelector, globalSelector) {
+		conflictingRoles = append(conflictingRoles, "drive and s3")
+	}
+
+	if len(conflictingRoles) > 0 {
+		status = "warning"
+		issue = fmt.Sprintf("Multiple roles have the same nodeSelector: %s. While this is allowed, ensure this is intentional",
+			strings.Join(conflictingRoles, ", "))
+	}
+
+	return map[string]interface{}{
+		"Status":           status,
+		"Issue":            issue,
+		"ConflictingRoles": conflictingRoles,
+	}, nil
+}
+
+// ClusterClientNodeConflictModule validates that client doesn't share nodes with NFS or S3
+// This is converged-level validation
+type ClusterClientNodeConflictModule struct{}
+
+func init() {
+	GlobalWekaConfigValidationRegistry.Register(&ClusterClientNodeConflictModule{})
+}
+
+func (m *ClusterClientNodeConflictModule) Name() string {
+	return "cluster_client_node_conflict"
+}
+
+func (m *ClusterClientNodeConflictModule) FriendlyName() string {
+	return "Client-NFS-S3 Node Conflict"
+}
+
+func (m *ClusterClientNodeConflictModule) Description() string {
+	return "Validates that client doesn't share nodes with NFS or S3 protocols in converged deployment"
+}
+
+func (m *ClusterClientNodeConflictModule) SuccessTemplate() string {
+	return "✅ OK:  {{.FriendlyName}}: Client nodeSelector is separate from NFS and S3"
+}
+
+func (m *ClusterClientNodeConflictModule) WarningTemplate() string {
+	return "⚠️ WARN: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *ClusterClientNodeConflictModule) ErrorTemplate() string {
+	return "❌ ERROR: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *ClusterClientNodeConflictModule) SuggestedResolutionTemplate() string {
+	return "Ensure client nodeSelector is different from both NFS and S3 roleNodeSelectors. Clients and protocol services cannot run on the same nodes"
+}
+
+func (m *ClusterClientNodeConflictModule) AppliesTo() []WekaConfigObjectType {
+	return []WekaConfigObjectType{WekaConfigTypeCluster, WekaConfigTypeClient}
+}
+
+func (m *ClusterClientNodeConflictModule) Validate(ctx context.Context, config *WekaConfigValidationContext) (interface{}, error) {
+	// Only validate if BOTH cluster and client are present
+	if config.Cluster == nil || config.Client == nil {
+		return map[string]interface{}{
+			"Status": "success",
+			"Skip":   true,
+		}, nil
+	}
+
+	cluster := config.Cluster
+	client := config.Client
+
+	clientSelector := client.Spec.NodeSelector
+	globalClusterSelector := cluster.Spec.NodeSelector
+	roleSelectors := cluster.Spec.RoleNodeSelector
+
+	nfsSelector := globalClusterSelector
+	if roleSelectors.Nfs != nil {
+		nfsSelector = *roleSelectors.Nfs
+	}
+
+	s3Selector := globalClusterSelector
+	if roleSelectors.S3 != nil {
+		s3Selector = *roleSelectors.S3
+	}
+
+	// Helper to check if selectors are equal
+	selectorsEqual := func(a, b map[string]string) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for k, v := range a {
+			if b[k] != v {
+				return false
+			}
+		}
+		return true
+	}
+
+	// Check for conflicts
+	clientConflictsWithNFS := selectorsEqual(clientSelector, nfsSelector)
+	clientConflictsWithS3 := selectorsEqual(clientSelector, s3Selector)
+
+	status := "success"
+	issue := ""
+
+	if clientConflictsWithNFS && clientConflictsWithS3 {
+		status = "error"
+		issue = "Client nodeSelector matches both NFS and S3 nodeSelectors. Clients cannot share nodes with protocol services"
+	} else if clientConflictsWithNFS {
+		status = "error"
+		issue = "Client nodeSelector matches NFS roleNodeSelector. Clients and NFS services cannot run on the same nodes"
+	} else if clientConflictsWithS3 {
+		status = "error"
+		issue = "Client nodeSelector matches S3 roleNodeSelector. Clients and S3 services cannot run on the same nodes"
+	}
+
+	return map[string]interface{}{
+		"Status":                 status,
+		"Issue":                  issue,
+		"ClientConflictsWithNFS": clientConflictsWithNFS,
+		"ClientConflictsWithS3":  clientConflictsWithS3,
+	}, nil
+}
+
+// ActualNodeConflictModule validates that actual matched nodes don't conflict
+// This checks if different selectors match the same actual nodes in the cluster
+type ActualNodeConflictModule struct{}
+
+func init() {
+	GlobalWekaConfigValidationRegistry.Register(&ActualNodeConflictModule{})
+}
+
+func (m *ActualNodeConflictModule) Name() string {
+	return "actual_node_conflict"
+}
+
+func (m *ActualNodeConflictModule) FriendlyName() string {
+	return "Actual Node Conflicts"
+}
+
+func (m *ActualNodeConflictModule) Description() string {
+	return "Validates that actual nodes matched by selectors don't conflict (client/nfs/s3)"
+}
+
+func (m *ActualNodeConflictModule) SuccessTemplate() string {
+	return "✅ OK:  {{.FriendlyName}}: No actual node conflicts detected"
+}
+
+func (m *ActualNodeConflictModule) WarningTemplate() string {
+	return "⚠️ WARN: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *ActualNodeConflictModule) ErrorTemplate() string {
+	return "❌ ERROR: {{.FriendlyName}}: {{.Issue}}"
+}
+
+func (m *ActualNodeConflictModule) SuggestedResolutionTemplate() string {
+	return "Verify that your nodeSelectors are exclusive between client, NFS, and S3 roles. The actual nodes matched by these selectors must not overlap"
+}
+
+func (m *ActualNodeConflictModule) AppliesTo() []WekaConfigObjectType {
+	return []WekaConfigObjectType{WekaConfigTypeCluster, WekaConfigTypeClient}
+}
+
+func (m *ActualNodeConflictModule) Validate(ctx context.Context, config *WekaConfigValidationContext) (interface{}, error) {
+	// Only validate if BOTH cluster and client are present
+	if config.Cluster == nil || config.Client == nil {
+		return map[string]interface{}{
+			"Status": "success",
+			"Skip":   true,
+		}, nil
+	}
+
+	cluster := config.Cluster
+	client := config.Client
+
+	// Get all nodes from the cluster to match against selectors
+	nodes, err := GetClusterNodes(ctx)
+	if err != nil {
+		// If we can't get nodes, we can't validate - skip this check
+		return map[string]interface{}{
+			"Status": "success",
+			"Skip":   true,
+		}, nil
+	}
+
+	clientSelector := client.Spec.NodeSelector
+	globalClusterSelector := cluster.Spec.NodeSelector
+	roleSelectors := cluster.Spec.RoleNodeSelector
+
+	nfsSelector := globalClusterSelector
+	if roleSelectors.Nfs != nil {
+		nfsSelector = *roleSelectors.Nfs
+	}
+
+	s3Selector := globalClusterSelector
+	if roleSelectors.S3 != nil {
+		s3Selector = *roleSelectors.S3
+	}
+
+	// Helper to get nodes matching a selector
+	getMatchingNodes := func(selector map[string]string) map[string]bool {
+		matching := make(map[string]bool)
+		for _, node := range nodes {
+			if MatchesSelector(node, selector) {
+				matching[node.Name] = true
+			}
+		}
+		return matching
+	}
+
+	clientNodes := getMatchingNodes(clientSelector)
+	nfsNodes := getMatchingNodes(nfsSelector)
+	s3Nodes := getMatchingNodes(s3Selector)
+
+	status := "success"
+	issue := ""
+	var conflictingNodes []string
+
+	// Check for overlaps
+	checkOverlap := func(nodes1, nodes2 map[string]bool) (bool, []string) {
+		conflicts := []string{}
+		for node := range nodes1 {
+			if nodes2[node] {
+				conflicts = append(conflicts, node)
+			}
+		}
+		if len(conflicts) > 0 {
+			return true, conflicts
+		}
+		return false, nil
+	}
+
+	// Check all combinations that should NOT overlap
+	clientNFSOverlap, clientNFSNodes := checkOverlap(clientNodes, nfsNodes)
+	clientS3Overlap, clientS3Nodes := checkOverlap(clientNodes, s3Nodes)
+	nfsS3Overlap, nfsS3Nodes := checkOverlap(nfsNodes, s3Nodes)
+
+	if clientNFSOverlap && clientS3Overlap {
+		status = "error"
+		conflictingNodes = append(clientNFSNodes, clientS3Nodes...)
+		issue = fmt.Sprintf("Client nodes overlap with both NFS and S3 nodes: %s",
+			strings.Join(conflictingNodes, ", "))
+	} else if nfsS3Overlap {
+		status = "error"
+		conflictingNodes = nfsS3Nodes
+		issue = fmt.Sprintf("NFS and S3 nodes overlap: %s. These services cannot run on the same nodes",
+			strings.Join(conflictingNodes, ", "))
+	} else if clientNFSOverlap {
+		status = "error"
+		conflictingNodes = clientNFSNodes
+		issue = fmt.Sprintf("Client nodes overlap with NFS nodes: %s",
+			strings.Join(conflictingNodes, ", "))
+	} else if clientS3Overlap {
+		status = "error"
+		conflictingNodes = clientS3Nodes
+		issue = fmt.Sprintf("Client nodes overlap with S3 nodes: %s",
+			strings.Join(conflictingNodes, ", "))
+	}
+
+	return map[string]interface{}{
+		"Status":           status,
+		"Issue":            issue,
+		"ConflictingNodes": conflictingNodes,
+		"ClientNFSOverlap": clientNFSOverlap,
+		"ClientS3Overlap":  clientS3Overlap,
+		"NFSS3Overlap":     nfsS3Overlap,
+	}, nil
+}
