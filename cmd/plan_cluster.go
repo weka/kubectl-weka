@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -652,7 +653,7 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 					errorMsg += "insufficient nodes or resources"
 				}
 
-				return nil, fmt.Errorf(errorMsg)
+				return nil, errors.New(errorMsg)
 			}
 		}
 
@@ -1081,7 +1082,7 @@ func validateDrivesDetailed(hostChecksMap HostChecksMap, nodes []corev1.Node, dr
 			}
 		}
 
-		return fmt.Errorf(msg)
+		return errors.New(msg)
 	}
 
 	// Print warnings if any unsigned drives were found
