@@ -11,8 +11,6 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
@@ -42,22 +40,18 @@ func init() {
 	preflightNodesCmd.Flags().Int64Var(&preflightWekaDirFailGB, "weka-dir-min-fail", 100, "Minimum GB for weka directory (FAIL if below, default 100)")
 	preflightNodesCmd.Flags().Int64Var(&preflightWekaDirWarnGB, "weka-dir-min-warn", 300, "Minimum GB for weka directory (WARN if below, default 300)")
 	preflightNodesCmd.SilenceUsage = true
+
 }
 
+// checkStatus represents the overall status of node checks
 type checkStatus string
 
 const (
-	statusPass    checkStatus = "PASS"
-	statusWarn    checkStatus = "WARN"
-	statusFail    checkStatus = "FAIL"
-	statusSkipped checkStatus = "SKIPPED"
+	statusPass    checkStatus = "✅ OK"
+	statusWarn    checkStatus = "⚠️ WARNING"
+	statusFail    checkStatus = "❌ FAILED"
+	statusSkipped checkStatus = "⏭️ SKIPPED (Node not ready)"
 )
-
-type nodeCheck struct {
-	title  string
-	status checkStatus
-	detail string // printed in [..]
-}
 
 func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
@@ -74,35 +68,11 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		sig := <-sigChan
 		fmt.Printf("\n\nReceived signal %v, cleaning up pods...\n", sig)
 		cancel() // Cancel context to stop operations
-		// Don't exit here - let defer cleanup run
+		// ...existing code...
 	}()
 
-	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(),
-		&clientcmd.ConfigOverrides{},
-	)
-
-	restCfg, err := kubeCfg.ClientConfig()
-	if err != nil {
-		return err
-	}
-
-	// Use standard kubernetes.Clientset for host checks via pods
-	clientset, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		return err
-	}
-
-	// Use cached client for node reads
-	cachedClient, err := newWekaCRClient(ctx, restCfg)
-	if err != nil {
-		return err
-	}
-	defer cachedClient.Stop()
-
-	crClient := cachedClient.Client
-
-	nodes, err := resolveNodes(ctx, crClient, args, preflightNodeSelector)
+	crClient := KubeClients.CRClient
+	nodes, err := resolveNodes(ctx, args, preflightNodeSelector)
 	if err != nil {
 		return err
 	}
@@ -113,68 +83,27 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	// FIRST: Fetch pod statistics BEFORE creating host-check pods
 	// (so host-check pods don't pollute the pod resource statistics)
 	fmt.Println("Fetching pod resource usage...")
-	var podsByNode map[string][]corev1.Pod
-	{
-		var allPods corev1.PodList
-		if err := crClient.List(ctx, &allPods); err != nil {
-			fmt.Printf("Warning: failed to list pods: %v\n", err)
-			podsByNode = make(map[string][]corev1.Pod)
-		} else {
-			// Build a map of nodeName -> pods on that node
-			podsByNode = make(map[string][]corev1.Pod)
-			for i := range allPods.Items {
-				pod := &allPods.Items[i]
-				if pod.Spec.NodeName == "" {
-					continue
-				}
-				podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], *pod)
-			}
-			fmt.Printf("Fetched %d pods across %d nodes\n", len(allPods.Items), len(podsByNode))
-		}
+	podsByNode := GetPodsMapByNode(ctx, crClient)
+
+	// SECOND: Run validation using the registry
+	fmt.Println("Performing validation...")
+
+	// Set up validation parameters
+	validationParams := map[string]interface{}{
+		"minFreeMem":       minFreeMem,
+		"minFreeHP":        minFreeHP,
+		"wekaDirMinFailGB": preflightWekaDirFailGB,
+		"wekaDirMinWarnGB": preflightWekaDirWarnGB,
+		"podsByNode":       podsByNode,
 	}
 
-	// SECOND: Run host checks via per-node pods (PCI, /etc/os-release, filesystem, processes, systemd units)
-	resultChan, cleanupWg := scanHostChecksByPod(ctx, clientset, nodes)
-
-	// Ensure cleanup completes before exiting (even on SIGTERM/Ctrl+C)
-	defer func() {
-		fmt.Println("Waiting for pod cleanup to complete...")
-		cleanupWg.Wait()
-		fmt.Println("Cleanup complete.")
-	}()
-
-	fmt.Println("Checking host checks...")
-
-	// Collect results as they stream in - just store them, don't process yet
-	hostFacts := make(map[string]HostChecksResult, len(nodes))
-	var scanErrs []hostScanError
-
-	// Build a map for quick node lookup
-	nodeMap := make(map[string]*corev1.Node, len(nodes))
-	for i := range nodes {
-		nodeMap[nodes[i].Name] = &nodes[i]
+	// Run validation for all nodes - handles caching and execution
+	nodeModuleResults, err := GlobalHostCheckRegistry.ValidateAll(ctx, "preflight_nodes", nodes, validationParams)
+	if err != nil {
+		return fmt.Errorf("failed to validate nodes: %w", err)
 	}
 
-	fmt.Println("Collecting results...")
-	receivedCount := 0
-	for nodeResult := range resultChan {
-		receivedCount++
-		hostFacts[nodeResult.nodeName] = nodeResult.result
-		if nodeResult.err != nil {
-			scanErrs = append(scanErrs, hostScanError{node: nodeResult.nodeName, err: nodeResult.err})
-		}
-		if receivedCount%10 == 0 || receivedCount == len(nodes) {
-			fmt.Printf("Received %d/%d results...\n", receivedCount, len(nodes))
-		}
-	}
-	fmt.Printf("All %d results collected!\n", receivedCount)
-
-	if len(scanErrs) > 0 {
-		fmt.Printf("\nNote: host checks encountered %d issues\n", len(scanErrs))
-	}
-
-	// Process all nodes while pod fetch happens in background
-	checked := 0
+	// Track results
 	passCnt := 0
 	warnCnt := 0
 	failCnt := 0
@@ -186,71 +115,184 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	kernels := make(map[string]struct{})
 	oses := make(map[string]struct{})
 
-	// Process all nodes (podsByNode already available from upfront fetch)
+	// First, mark NotReady nodes as skipped and collect info
 	for i := range nodes {
-		n := &nodes[i]
-		hf, ok := hostFacts[n.Name]
-		if !ok {
-			continue // node result wasn't received
+		node := &nodes[i]
+		if !isNodeReady(node) {
+			skippedCnt++
+			skippedNodes = append(skippedNodes, node.Name)
+		}
+	}
+
+	// Then process the validation results from ready nodes
+	// First, get hostchecks to collect OS/kernel info
+	hostChecksMap, _ := GlobalHostCheckRegistry.GetHostChecksForNodes(ctx, nodes)
+
+	// Collect warnings, errors, and suggested fixes for summary
+	type SuggestedFix struct {
+		NodeName string
+		Issues   []string
+	}
+	type NodeWarning struct {
+		NodeName string
+		Module   string
+		Message  string
+	}
+	type NodeError struct {
+		NodeName string
+		Module   string
+		Message  string
+		Fix      string
+	}
+
+	var suggestedFixes []SuggestedFix
+	var allWarnings []NodeWarning
+	var allErrors []NodeError
+
+	for nodeName, moduleResults := range nodeModuleResults {
+		// Determine overall status
+		hasWarning := false
+		hasError := false
+		var issuesForNode []string
+
+		for moduleName, mr := range moduleResults {
+			if mr.Status == "error" {
+				hasError = true
+				errorMsg := ""
+				if mr.Error != "" {
+					errorMsg = mr.Error
+					issuesForNode = append(issuesForNode, fmt.Sprintf("%s: %s", moduleName, mr.Error))
+				} else if dataMap, ok := mr.Data.(map[string]interface{}); ok {
+					if issue, ok := dataMap["Issue"].(string); ok && issue != "" {
+						errorMsg = issue
+						issuesForNode = append(issuesForNode, fmt.Sprintf("%s: %s", moduleName, issue))
+					}
+				}
+
+				// Get suggested fix from module using template interpolation
+				suggestedFix := ""
+				if mr.SuggestedResolutionTemplate != "" {
+					// Build context params for interpolation
+					fixParams := map[string]interface{}{
+						"NodeName": nodeName,
+					}
+					// Add all data from the module result
+					if dataMap, ok := mr.Data.(map[string]interface{}); ok {
+						for k, v := range dataMap {
+							fixParams[k] = v
+						}
+					}
+					suggestedFix = mr.FormatSuggestedFix(fixParams)
+				}
+
+				allErrors = append(allErrors, NodeError{
+					NodeName: nodeName,
+					Module:   moduleName,
+					Message:  errorMsg,
+					Fix:      suggestedFix,
+				})
+			} else if mr.Status == "warning" {
+				hasWarning = true
+
+				// Extract warning message from module data
+				warningMsg := ""
+				if dataMap, ok := mr.Data.(map[string]interface{}); ok {
+					if warning, ok := dataMap["Warning"].(string); ok && warning != "" {
+						warningMsg = warning
+					} else if issue, ok := dataMap["Issue"].(string); ok && issue != "" {
+						warningMsg = issue
+					} else if detail, ok := dataMap["Detail"].(string); ok && detail != "" {
+						warningMsg = detail
+					}
+				}
+
+				if warningMsg != "" {
+					allWarnings = append(allWarnings, NodeWarning{
+						NodeName: nodeName,
+						Module:   moduleName,
+						Message:  warningMsg,
+					})
+				}
+			}
 		}
 
-		checked++
-		var checks []nodeCheck
+		var overallStatus string
 		var nodeStatus checkStatus
-
-		if !isNodeReady(n) {
-			nodeStatus = statusSkipped
+		if hasError {
+			overallStatus = "failure"
+			nodeStatus = statusFail
+		} else if hasWarning {
+			overallStatus = "partial"
+			nodeStatus = statusWarn
 		} else {
-			var err error
-			checks, err = buildNodeChecks(ctx, n, hf, podsByNode[n.Name])
-			if err != nil {
-				checks = append(checks, nodeCheck{
-					title:  "node_checks",
-					status: statusFail,
-					detail: fmt.Sprintf("error: %v", err),
-				})
+			overallStatus = "success"
+			nodeStatus = statusPass
+		}
+
+		// Track suggested fixes for failed nodes
+		if hasError && len(issuesForNode) > 0 {
+			suggestedFixes = append(suggestedFixes, SuggestedFix{
+				NodeName: nodeName,
+				Issues:   issuesForNode,
+			})
+		}
+
+		// Determine what to print based on flags and status
+		shouldPrintHeader := false
+		shouldPrintDetails := false
+
+		if preflightSummaryOnly {
+			// In summary-only mode, print only failed nodes (header and details)
+			shouldPrintHeader = hasError
+			shouldPrintDetails = hasError
+		} else if preflightFailedOnly {
+			// In failed-only mode, print failed nodes with details, skip passed nodes
+			if hasError {
+				shouldPrintHeader = true
+				shouldPrintDetails = true
 			}
-			nodeStatus = aggregateNodeStatus(checks)
-			kernels[n.Status.NodeInfo.KernelVersion] = struct{}{}
+		} else {
+			// Default: print all nodes with all their validation results
+			shouldPrintHeader = true
+			shouldPrintDetails = true
+		}
+
+		if shouldPrintHeader {
+			// Print node header with status
+			fmt.Printf("  %s: %s\n", nodeName, nodeStatus)
+		}
+
+		if shouldPrintDetails {
+			// Print all validation results for this node
+			GlobalHostCheckRegistry.PrintNodeValidationResults(nodeName, "preflight_nodes", moduleResults)
+			fmt.Println()
+		}
+
+		// Update counters
+		switch overallStatus {
+		case "success":
+			passCnt++
+		case "partial":
+			warnCnt++
+			warnedNodes = append(warnedNodes, nodeName)
+		case "failure":
+			failCnt++
+			failedNodes = append(failedNodes, nodeName)
+		}
+
+		// Collect OS/kernel info
+		if hf, exists := hostChecksMap[nodeName]; exists {
+			kernels[hf.KernelVersion] = struct{}{}
 			oses[hf.OSRelease] = struct{}{}
 		}
 
-		switch nodeStatus {
-		case statusPass:
-			passCnt++
-		case statusWarn:
-			warnCnt++
-			warnedNodes = append(warnedNodes, n.Name)
-		case statusSkipped:
-			skippedCnt++
-			skippedNodes = append(skippedNodes, n.Name)
-		default:
-			failCnt++
-			failedNodes = append(failedNodes, n.Name)
-		}
-
-		// Skip printing completely PASS nodes if --failed-only is set
-		if preflightFailedOnly && nodeStatus == statusPass {
-			continue
-		}
-
-		printNodeHeader(n.Name, nodeStatus)
-		// Only print non-PASS checks
-		for _, c := range checks {
-			if !preflightSummaryOnly || c.status != statusPass {
-				printNodeSubcheck(c)
-			}
-		}
-		fmt.Println()
-
-		if preflightFailFast && nodeStatus == statusFail {
+		if preflightFailFast && overallStatus == "failure" {
 			break
 		}
 	}
 
-	if len(scanErrs) > 0 && !preflightSummaryOnly {
-		fmt.Printf("\nNote: host checks encountered %d issues\n", len(scanErrs))
-	}
+	// Count checked nodes (not skipped)
+	checked := passCnt + warnCnt + failCnt
 
 	// Summary
 	fmt.Println("Summary:")
@@ -277,13 +319,86 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Warning: Multiple OSes detected: %s\n", strings.Join(mapKeysToList(oses), ", "))
 	}
 	if len(kernels) > 1 {
-		fmt.Printf("Warning: Multiple OSes detected: %s\n", strings.Join(mapKeysToList(kernels), ", "))
+		fmt.Printf("Warning: Multiple kernels detected: %s\n", strings.Join(mapKeysToList(kernels), ", "))
+	}
+
+	// Print centralized warnings summary
+	if len(allWarnings) > 0 {
+		fmt.Println("\n" + yellow("=== Warnings Summary ==="))
+		// Group warnings by type
+		warningsByMessage := make(map[string][]string)
+		for _, w := range allWarnings {
+			warningsByMessage[w.Message] = append(warningsByMessage[w.Message], w.NodeName)
+		}
+
+		for msg, nodes := range warningsByMessage {
+			fmt.Printf("\n⚠️  %s\n", yellow(msg))
+			fmt.Printf("   Affected nodes (%d): %s\n", len(nodes), strings.Join(nodes, ", "))
+		}
+	}
+
+	// Print centralized errors summary
+	if len(allErrors) > 0 {
+		fmt.Println("\n" + red("=== Errors Summary ==="))
+
+		// Group errors by module (not by exact message)
+		type ErrorGroup struct {
+			Module       string
+			Nodes        []string
+			Messages     []string
+			SuggestedFix string
+		}
+		errorGroups := make(map[string]*ErrorGroup)
+
+		for _, e := range allErrors {
+			// Use module name as the grouping key
+			key := e.Module
+
+			if group, exists := errorGroups[key]; exists {
+				group.Nodes = append(group.Nodes, e.NodeName)
+				group.Messages = append(group.Messages, e.Message)
+			} else {
+				errorGroups[key] = &ErrorGroup{
+					Module:       e.Module,
+					Nodes:        []string{e.NodeName},
+					Messages:     []string{e.Message},
+					SuggestedFix: e.Fix,
+				}
+			}
+		}
+
+		for _, group := range errorGroups {
+			// Check if all messages are identical
+			allSame := true
+			firstMsg := group.Messages[0]
+			for _, msg := range group.Messages {
+				if msg != firstMsg {
+					allSame = false
+					break
+				}
+			}
+
+			// Display the error with appropriate context
+			if allSame {
+				// All errors are identical - show the exact error
+				fmt.Printf("\n❌ %s: %s\n", red(group.Module), firstMsg)
+			} else {
+				// Errors differ - show it's a common issue with varying details
+				fmt.Printf("\n❌ %s: %s (values vary by node)\n", red(group.Module), firstMsg)
+			}
+
+			fmt.Printf("   Affected nodes (%d): %s\n", len(group.Nodes), strings.Join(group.Nodes, ", "))
+			if group.SuggestedFix != "" {
+				fmt.Printf("   💡 Suggested fix: %s\n", group.SuggestedFix)
+			}
+		}
 	}
 
 	// WARN does not fail preflight, FAIL does.
 	if failCnt > 0 {
 		return fmt.Errorf("preflight nodes failed")
 	}
+
 	return nil
 }
 
@@ -295,265 +410,10 @@ func mapKeysToList(m map[string]struct{}) []string {
 	return keys
 }
 
-func buildNodeChecks(
-	ctx context.Context,
-	n *corev1.Node,
-	hf HostChecksResult,
-	podsOnNode []corev1.Pod,
-) ([]nodeCheck, error) {
-	var out []nodeCheck
-
-	// 1) OS must be Ubuntu (from kube nodeInfo)
-	osImage := n.Status.NodeInfo.OSImage
-	osOK := strings.Contains(strings.ToLower(osImage), "ubuntu")
-	out = append(out, nodeCheck{
-		title:  "os",
-		status: passOrFail(osOK),
-		detail: chooseDetail(osOK, osImage, fmt.Sprintf("OS is %q, expected Ubuntu", osImage)),
-	})
-	// print out kernel version
-	out = append(out, nodeCheck{
-		title:  "kernel",
-		status: statusPass,
-		detail: n.Status.NodeInfo.KernelVersion,
-	})
-
-	// 2) hugepages configured (from node status)
-	hpSet := quantityOrZero(n.Status.Capacity, "hugepages-2Mi")
-	hpAlloc := quantityOrZero(n.Status.Allocatable, "hugepages-2Mi")
-	hpOK := !(hpSet.IsZero() && hpAlloc.IsZero())
-
-	out = append(out, nodeCheck{
-		title:  "hugepages",
-		status: passOrFail(hpOK),
-		detail: chooseDetail(
-			hpOK,
-			fmt.Sprintf("set=%s allocatable=%s", hpSet.String(), hpAlloc.String()),
-			"No hugepages configured on node",
-		),
-	})
-
-	// 3/4) free resources (allocatable - sum(pod requests))
-	// Use pre-fetched pods instead of making API calls
-	memFree, hpFree, warn := computeFreeFromPods(n, hpAlloc, podsOnNode)
-
-	memOK := memFree.Cmp(minFreeMem) >= 0
-	out = append(out, nodeCheck{
-		title:  "mem_free",
-		status: passOrFail(memOK),
-		detail: fmt.Sprintf("%s free (min %s)%s", memFree.String(), minFreeMem.String(), warnSuffix(warn)),
-	})
-
-	hpFreeOK := hpFree.Cmp(minFreeHP) >= 0
-	out = append(out, nodeCheck{
-		title:  "hugepages_free",
-		status: passOrFail(hpFreeOK),
-		detail: fmt.Sprintf("%s free (min %s)%s", hpFree.String(), minFreeHP.String(), warnSuffix(warn)),
-	})
-
-	// --- Host-based checks (via per-node host-check pod) ---
-
-	// 5) Weka directory exists and has >= 300GB available
-	// For RHCOS: /root/k8s-weka ; otherwise: /opt/k8s-weka (handled by pod script)
-	// FAIL: < preflightWekaDirFailGB, WARN: < preflightWekaDirWarnGB, PASS: >= preflightWekaDirWarnGB
-	minFailWeka := preflightWekaDirFailGB * 1000 * 1000 * 1000 // Convert GB to bytes
-	minWarnWeka := preflightWekaDirWarnGB * 1000 * 1000 * 1000 // Convert GB to bytes
-
-	wakaDirStatus := statusPass
-	wakaDirDetail := ""
-
-	if hf.WekaDirDetail == "directory does not exist" {
-		wakaDirStatus = statusFail
-		wakaDirDetail = "directory does not exist"
-	} else if hf.WekaDirAvailBytes < minFailWeka {
-		wakaDirStatus = statusFail
-		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
-		wakaDirDetail = fmt.Sprintf("%.1fGB available (min: %dGB)", availGB, preflightWekaDirFailGB)
-	} else if hf.WekaDirAvailBytes < minWarnWeka {
-		wakaDirStatus = statusWarn
-		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
-		wakaDirDetail = fmt.Sprintf("%.1fGB available (min: %dGB)", availGB, preflightWekaDirWarnGB)
-	} else {
-		wakaDirStatus = statusPass
-		availGB := float64(hf.WekaDirAvailBytes) / (1000 * 1000 * 1000)
-		wakaDirDetail = fmt.Sprintf("%.1fGB available", availGB)
-	}
-
-	out = append(out, nodeCheck{
-		title:  "weka_dir",
-		status: wakaDirStatus,
-		detail: fmt.Sprintf("%s: %s", nonEmpty(hf.WekaDirPath, "(unknown)"), wakaDirDetail),
-	})
-
-	// 6) XFS installed (mkfs.xfs exists on host)
-	out = append(out, nodeCheck{
-		title:  "xfs",
-		status: passOrFail(hf.XFSInstalled),
-		detail: nonEmpty(hf.XFSDetail, "no details"),
-	})
-
-	// 7) Node is not running WEKA client
-	// - no wekanode processes
-	// - weka-agent service does not exist
-	out = append(out, nodeCheck{
-		title:  "weka_client",
-		status: passOrFail(hf.WekaClientClean),
-		detail: nonEmpty(hf.WekaClientDetail, "no details"),
-	})
-
-	out = append(out, formatMellanoxBlock(hf))
-	out = append(out, formatBondLACPCheck(hf))
-
-	return out, nil
-}
-
-func formatMellanoxBlock(hf HostChecksResult) nodeCheck {
-	if len(hf.MlxIfaces) == 0 {
-		return nodeCheck{
-			title:  "mellanox_nic",
-			status: statusWarn,
-			detail: "No Mellanox NIC detected; only UDP mode is supported",
-		}
-	}
-
-	var lines []string
-
-	for _, nic := range hf.MlxIfaces {
-		spd := nic.Speed
-		if strings.TrimSpace(spd) == "" {
-			spd = "unknown"
-		}
-
-		if nic.Bond != "" {
-			lines = append(lines, fmt.Sprintf("%s [*%s] %s %s", nic.Name, nic.Bond, spd, nic.Model))
-		} else {
-			ip := nic.IP
-			if strings.TrimSpace(ip) == "" {
-				ip = "-"
-			} else {
-				lines = append(lines, fmt.Sprintf("%s [%s] %s %s", nic.Name, ip, spd, nic.Model))
-			}
-		}
-	}
-
-	for _, b := range hf.MlxBonds {
-		ip := b.IP
-		if strings.TrimSpace(ip) == "" {
-			ip = "-"
-		}
-		spd := b.Speed
-		if strings.TrimSpace(spd) == "" {
-			spd = "unknown"
-		}
-		lines = append(lines, fmt.Sprintf("%s [%s] %s (%s)", b.Name, ip, spd, strings.Join(b.Slaves, ", ")))
-	}
-
-	return nodeCheck{
-		title:  "mellanox_nic",
-		status: statusPass,
-		detail: strings.Join(lines, "\n"),
-	}
-}
-
-func formatBondLACPCheck(hf HostChecksResult) nodeCheck {
-	return nodeCheck{
-		title:  "bond_lacp",
-		status: passOrFail(hf.BondLACPOk),
-		detail: nonEmpty(hf.BondLACPDetail, "no details"),
-	}
-}
-
-func aggregateNodeStatus(checks []nodeCheck) checkStatus {
-	hasWarn := false
-	for _, c := range checks {
-		if c.status == statusFail {
-			return statusFail
-		}
-		if c.status == statusWarn {
-			hasWarn = true
-		}
-	}
-	if hasWarn {
-		return statusWarn
-	}
-	return statusPass
-}
-
-func passOrFail(ok bool) checkStatus {
-	if ok {
-		return statusPass
-	}
-	return statusFail
-}
-
-func chooseDetail(ok bool, okDetail, failDetail string) string {
-	if ok {
-		return okDetail
-	}
-	return failDetail
-}
-
-func warnSuffix(w string) string {
-	w = strings.TrimSpace(w)
-	if w == "" {
-		return ""
-	}
-	return "; warn=" + w
-}
-
-func nonEmpty(a, b string) string {
-	if strings.TrimSpace(a) != "" {
-		return a
-	}
-	return b
-}
-
-func statusString(s checkStatus) string {
-	switch s {
-	case statusPass:
-		return green("PASS")
-	case statusWarn:
-		return yellow("WARN")
-	case statusSkipped:
-		return cyan("SKIPPED")
-	default:
-		return red("FAIL")
-	}
-}
-
-func printNodeHeader(name string, st checkStatus) {
-	fmt.Printf("  %s: %s\n", name, statusString(st))
-}
-
-func printNodeSubcheck(c nodeCheck) {
-	statusStr := statusString(c.status)
-
-	// Base prefix up to '['
-	prefix := fmt.Sprintf("     %s: %s [", c.title, statusStr)
-
-	// If single-line, keep old behavior
-	if !strings.Contains(c.detail, "\n") {
-		fmt.Printf("%s%s]\n", prefix, c.detail)
-		return
-	}
-
-	// Multiline: first line after '[' then subsequent lines aligned
-	parts := strings.Split(c.detail, "\n")
-	fmt.Printf("%s\n", prefix)
-
-	// indent to align under the first detail char (same length as prefix)
-	indent := strings.Repeat(" ", len(prefix)-9)
-	for i := 0; i < len(parts); i++ {
-		fmt.Printf("%s%s\n", indent, parts[i])
-	}
-	// close bracket on last line
-	fmt.Printf("%s]\n", strings.Repeat(" ", len(prefix)-10))
-}
-
-func isNodeReady(n *corev1.Node) bool {
-	for _, c := range n.Status.Conditions {
-		if c.Type == corev1.NodeReady {
-			return c.Status == corev1.ConditionTrue
+func isNodeReady(node *corev1.Node) bool {
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == corev1.NodeReady {
+			return condition.Status == corev1.ConditionTrue
 		}
 	}
 	return false

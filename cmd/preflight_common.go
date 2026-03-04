@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"k8s.io/apimachinery/pkg/util/version"
 	"strings"
+	"time"
 
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -18,33 +19,25 @@ import (
 // Shared selection flag (used by both preflight subcommands)
 var preflightNodeSelector string
 
-func resolveNodes(ctx context.Context, client crclient.Client, names []string, selector string) ([]corev1.Node, error) {
-	if len(names) > 0 {
-		out := make([]corev1.Node, 0, len(names))
-		for _, n := range names {
-			n = strings.TrimSpace(n)
-			if n == "" {
-				continue
-			}
-			var node corev1.Node
-			if err := client.Get(ctx, crclient.ObjectKey{Name: n}, &node); err != nil {
-				return nil, err
-			}
-			out = append(out, node)
-		}
-		return out, nil
-	}
-
-	var nodeList corev1.NodeList
-	opts := []crclient.ListOption{}
-	if selector != "" {
-		opts = append(opts, crclient.MatchingLabels(parseSelector(selector)))
-	}
-
-	if err := client.List(ctx, &nodeList, opts...); err != nil {
+func resolveNodes(ctx context.Context, names []string, selector string) ([]corev1.Node, error) {
+	// Always get all cluster nodes using the shared function
+	allNodes, err := GetClusterNodes(ctx)
+	if err != nil {
 		return nil, err
 	}
-	return nodeList.Items, nil
+
+	// Filter by specific node names if provided
+	if len(names) > 0 {
+		return FilterNodesByNames(allNodes, names), nil
+	}
+
+	// Apply selector filtering if provided
+	if selector != "" {
+		selectorMap := parseSelector(selector)
+		return FilterNodesBySelector(allNodes, selectorMap), nil
+	}
+
+	return allNodes, nil
 }
 
 // parseSelector converts a label selector string to a map for crclient.MatchingLabels
@@ -86,69 +79,92 @@ func quantityOrZero(rl corev1.ResourceList, key corev1.ResourceName) resource.Qu
 // kubelet configz via apiserver proxy:
 // GET /api/v1/nodes/<node>/proxy/configz
 func getCPUManagerPolicyViaConfigz(ctx context.Context, clientset *kubernetes.Clientset, nodeName string) (string, error) {
-	raw, err := clientset.CoreV1().
-		RESTClient().
-		Get().
-		AbsPath("/api/v1/nodes", nodeName, "proxy", "configz").
-		Do(ctx).
-		Raw()
-	if err != nil {
-		return "", err
-	}
+	// Retry logic with exponential backoff for transient errors (503, timeouts, etc.)
+	var lastErr error
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		raw, err := clientset.CoreV1().
+			RESTClient().
+			Get().
+			AbsPath("/api/v1/nodes", nodeName, "proxy", "configz").
+			Do(ctx).
+			Raw()
+		if err == nil {
+			// Success - parse the response
+			var top map[string]any
+			if err := json.Unmarshal(raw, &top); err != nil {
+				return "", err
+			}
 
-	var top map[string]any
-	if err := json.Unmarshal(raw, &top); err != nil {
-		return "", err
-	}
+			if kc, ok := top["kubeletconfig"].(map[string]any); ok {
+				if v, ok := kc["cpuManagerPolicy"].(string); ok && v != "" {
+					return v, nil
+				}
+			}
 
-	if kc, ok := top["kubeletconfig"].(map[string]any); ok {
-		if v, ok := kc["cpuManagerPolicy"].(string); ok && v != "" {
-			return v, nil
+			for _, v := range top {
+				m, ok := v.(map[string]any)
+				if !ok {
+					continue
+				}
+				if pol, ok := m["cpuManagerPolicy"].(string); ok && pol != "" {
+					return pol, nil
+				}
+			}
+
+			return "", fmt.Errorf("cpuManagerPolicy not found in configz")
+		}
+
+		lastErr = err
+		errStr := err.Error()
+
+		// Check if this is a transient error worth retrying
+		// Transient: 503 Service Unavailable, timeout, temporary network issue
+		isTransient := strings.Contains(errStr, "503") ||
+			strings.Contains(errStr, "temporarily unable") ||
+			strings.Contains(errStr, "currently unable to handle") ||
+			strings.Contains(errStr, "timeout") ||
+			strings.Contains(errStr, "connection refused") ||
+			strings.Contains(errStr, "temporary failure")
+
+		if !isTransient {
+			// Permanent error - don't retry
+			return "", err
+		}
+
+		// This is a transient error; retry with backoff
+		if attempt < maxRetries-1 {
+			// Exponential backoff: 100ms, 200ms, 400ms
+			waitTime := time.Duration(100*(1<<uint(attempt))) * time.Millisecond
+			select {
+			case <-time.After(waitTime):
+				// Continue to next attempt
+			case <-ctx.Done():
+				// Context cancelled
+				return "", ctx.Err()
+			}
 		}
 	}
 
-	for _, v := range top {
-		m, ok := v.(map[string]any)
-		if !ok {
-			continue
-		}
-		if pol, ok := m["cpuManagerPolicy"].(string); ok && pol != "" {
-			return pol, nil
-		}
-	}
-
-	return "", fmt.Errorf("cpuManagerPolicy not found in configz")
+	return "", fmt.Errorf("failed to get CPU manager policy after %d retries: %w", maxRetries, lastErr)
 }
 
 func printCheckResult(title string, pass bool, details string) {
 	// one-line output: "<title> PASS" or "<title> FAIL [..]"
 	if pass {
 		if details != "" {
-			fmt.Printf("%s %s [%s]\n", title, green("PASS"), details)
+			fmt.Printf("✅ %s [%s]\n", title, details)
 		} else {
-			fmt.Printf("%s %s\n", title, green("PASS"))
+			fmt.Printf("✅ %s\n", title)
 		}
 		return
 	}
 
 	if details != "" {
-		fmt.Printf("%s %s [%s]\n", title, red("FAIL"), details)
+		fmt.Printf("❌ %s [%s]\n", title, details)
 	} else {
-		fmt.Printf("%s %s\n", title, red("FAIL"))
+		fmt.Printf("❌ %s\n", title)
 	}
-}
-
-func buildCPUDetails(notStatic []string, unknown []string) string {
-	parts := make([]string, 0, 2)
-
-	if len(notStatic) > 0 {
-		parts = append(parts, fmt.Sprintf("%d nodes not static: %s", len(notStatic), joinLimited(notStatic, 5)))
-	}
-	if len(unknown) > 0 {
-		parts = append(parts, fmt.Sprintf("%d nodes unknown: %s", len(unknown), joinLimited(unknown, 3)))
-	}
-
-	return strings.Join(parts, "; ")
 }
 
 func joinLimited(items []string, max int) string {
@@ -353,7 +369,79 @@ func getNodeConditionStatus(n *corev1.Node, t corev1.NodeConditionType) corev1.C
 	return ""
 }
 
+func detectK3s(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
+	// K3s detection strategies:
+	// 1. Check for k3s nodes via labels (node.kubernetes.io/instance-type=k3s or provider contains k3s)
+	// 2. Check for k3s-server service in kube-system
+	// 3. Check for k3s components (coredns with k3s labels, etc.)
+
+	// Strategy 1: Check nodes for k3s labels or provider ID
+	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, "", err
+	}
+
+	for _, node := range nodes.Items {
+		// Check labels
+		if val, ok := node.Labels["node.kubernetes.io/instance-type"]; ok {
+			if strings.Contains(strings.ToLower(val), "k3s") {
+				return true, fmt.Sprintf("detected via node %s label", node.Name), nil
+			}
+		}
+
+		// Check providerID (e.g., "k3s://hostname")
+		if strings.HasPrefix(strings.ToLower(node.Spec.ProviderID), "k3s://") {
+			return true, fmt.Sprintf("detected via node %s providerID", node.Name), nil
+		}
+
+		// Check node info (some k3s setups put k3s in the container runtime version or OS image)
+		if strings.Contains(strings.ToLower(node.Status.NodeInfo.ContainerRuntimeVersion), "k3s") {
+			return true, fmt.Sprintf("detected via node %s runtime version", node.Name), nil
+		}
+		if strings.Contains(strings.ToLower(node.Status.NodeInfo.OSImage), "k3s") {
+			return true, fmt.Sprintf("detected via node %s OS image", node.Name), nil
+		}
+	}
+
+	// Strategy 2: Check for k3s services in kube-system
+	svcs, err := clientset.CoreV1().Services("kube-system").List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, svc := range svcs.Items {
+			if svc.Name == "k3s" || svc.Name == "k3s-server" || strings.HasPrefix(svc.Name, "k3s-") {
+				return true, fmt.Sprintf("detected via service kube-system/%s", svc.Name), nil
+			}
+		}
+	}
+
+	// Strategy 3: Check for k3s-specific deployments or pods
+	deploys, err := clientset.AppsV1().Deployments("kube-system").List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, deploy := range deploys.Items {
+			// K3s typically runs coredns with specific labels
+			if deploy.Name == "coredns" {
+				if val, ok := deploy.Labels["k3s-app"]; ok && val == "kube-dns" {
+					return true, "detected via coredns k3s-app label", nil
+				}
+			}
+			if strings.Contains(strings.ToLower(deploy.Name), "k3s") {
+				return true, fmt.Sprintf("detected via deployment kube-system/%s", deploy.Name), nil
+			}
+		}
+	}
+
+	return false, "", nil
+}
+
 func detectKnownCNIDaemonSet(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
+	// Check for K3s built-in CNI (Flannel is integrated into k3s-agent, not a separate daemonset)
+	isK3s, k3sHint, err := detectK3s(ctx, clientset)
+	if err != nil {
+		return false, "", err
+	}
+	if isK3s {
+		return true, fmt.Sprintf("k3s built-in CNI (flannel) %s", k3sHint), nil
+	}
+
 	// Check typical namespaces where CNI runs
 	namespaces := []string{"kube-system", "kube-flannel"}
 
@@ -441,9 +529,16 @@ func hasAnyLabelValue(labels map[string]string, keys []string, values []string) 
 func checkCPUManagerPolicyStatic(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node) (bool, string) {
 	var notStatic []string
 	var unknown []string
+	var skipped []string
 
 	for i := range nodes {
 		n := &nodes[i]
+
+		// Skip nodes that are not ready
+		if !isNodeReady(n) {
+			skipped = append(skipped, n.Name)
+			continue
+		}
 
 		pol, err := getCPUManagerPolicyViaConfigz(ctx, clientset, n.Name)
 		if err != nil {
@@ -456,18 +551,34 @@ func checkCPUManagerPolicyStatic(ctx context.Context, clientset *kubernetes.Clie
 		}
 	}
 
+	// Success only if all ready nodes are static AND no unknown errors
 	if len(notStatic) == 0 && len(unknown) == 0 {
-		return true, ""
+		if len(skipped) == 0 {
+			return true, ""
+		}
+		// All ready nodes ok, but some skipped - still PASS with note
+		return true, fmt.Sprintf("%d nodes skipped (NotReady)", len(skipped))
 	}
 
-	parts := make([]string, 0, 2)
+	// FAIL if there are non-static nodes or unknown errors
+	parts := make([]string, 0, 3)
+	readyCount := len(nodes) - len(skipped)
+	passCount := readyCount - len(notStatic) - len(unknown)
+
+	if passCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d nodes ok", passCount))
+	}
 	if len(notStatic) > 0 {
-		parts = append(parts, fmt.Sprintf("%d nodes not static: %s", len(notStatic), joinLimited(notStatic, 5)))
+		parts = append(parts, fmt.Sprintf("%d nodes not static: %s", len(notStatic), joinLimited(notStatic, 3)))
 	}
 	if len(unknown) > 0 {
 		parts = append(parts, fmt.Sprintf("%d nodes unknown: %s", len(unknown), joinLimited(unknown, 3)))
 	}
-	return false, strings.Join(parts, "; ")
+	if len(skipped) > 0 {
+		parts = append(parts, fmt.Sprintf("%d nodes skipped (NotReady)", len(skipped)))
+	}
+
+	return false, strings.Join(parts, ", ")
 }
 
 func nodeHasMellanoxNIC(n *corev1.Node) (bool, string) {
@@ -513,11 +624,23 @@ func sanitizeName(s string) string {
 	return s
 }
 
-func readPodLogs(ctx context.Context, clientset *kubernetes.Clientset, ns, pod, container string) (string, error) {
-	req := clientset.CoreV1().Pods(ns).GetLogs(pod, &corev1.PodLogOptions{Container: container})
-	b, err := req.Do(ctx).Raw()
-	if err != nil {
-		return "", err
+func GetPodsMapByNode(ctx context.Context, crClient crclient.Client) map[string][]corev1.Pod {
+	podsByNode := make(map[string][]corev1.Pod)
+	{
+		var allPods corev1.PodList
+		if err := crClient.List(ctx, &allPods); err != nil {
+			fmt.Printf("Warning: failed to list pods: %v\n", err)
+		} else {
+			// Build a map of nodeName -> pods on that node
+			for i := range allPods.Items {
+				pod := &allPods.Items[i]
+				if pod.Spec.NodeName == "" {
+					continue
+				}
+				podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], *pod)
+			}
+			fmt.Printf("Fetched %d pods across %d nodes\n", len(allPods.Items), len(podsByNode))
+		}
 	}
-	return string(b), nil
+	return podsByNode
 }

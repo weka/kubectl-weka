@@ -14,8 +14,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
@@ -53,39 +51,16 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 		includeNamespaceColumn = true
 	}
 
-	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(),
-		&clientcmd.ConfigOverrides{},
-	)
-
-	restCfg, err := kubeCfg.ClientConfig()
+	currentNS, err := GetKubeNamespace()
 	if err != nil {
 		return err
-	}
-
-	currentNS, _, err := kubeCfg.Namespace()
-	if err != nil {
-		return err
-	}
-	if currentNS == "" {
-		currentNS = "default"
 	}
 	if getClusterInstancesNamespace != "" {
 		currentNS = getClusterInstancesNamespace
 	}
 
-	k8s, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		return err
-	}
-
-	cachedClient, err := newWekaCRClient(ctx, restCfg)
-	if err != nil {
-		return err
-	}
-	defer cachedClient.Stop()
-
-	crClient := cachedClient.Client
+	k8s := KubeClients.Clientset
+	crClient := KubeClients.CRClient
 
 	var targetCluster string
 	if len(args) == 1 {
@@ -115,9 +90,9 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 	if !getClusterInstancesNoHeaders {
 		if includeNamespaceColumn {
 			if getClusterInstancesWide {
-				fmt.Fprintln(w, "WEKACLUSTER\tNAMESPACE\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID\tAGE\tCPU_UTIL")
+				fmt.Fprintln(w, "NAMESPACE\tWEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID\tAGE\tCPU_UTIL")
 			} else {
-				fmt.Fprintln(w, "WEKACLUSTER\tNAMESPACE\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID")
+				fmt.Fprintln(w, "NAMESPACE\tWEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID")
 			}
 		} else {
 			if getClusterInstancesWide {
@@ -226,7 +201,7 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 				}
 				if includeNamespaceColumn {
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						clusterName, ns, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil)
+						ns, clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil)
 				} else {
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 						clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil)
@@ -234,7 +209,7 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 			} else {
 				if includeNamespaceColumn {
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						clusterName, ns, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID)
+						ns, clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID)
 				} else {
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 						clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID)
