@@ -127,7 +127,7 @@ func validateAndPlanConverged(ctx context.Context, cluster *wekaapi.WekaCluster,
 
 	// Collect pod data
 	fmt.Println("\n=== Fetching Current Resource Usage ===")
-	podsByNode := GetPodsMapByNode(ctx, KubeClients.CRClient)
+	podsByNode := GetPodsMapByNode(ctx, KubeClients.CRClient, nil)
 
 	fmt.Printf("✅ Collected pod data from cluster\n")
 

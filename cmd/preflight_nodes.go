@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -71,36 +70,80 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		// ...existing code...
 	}()
 
-	crClient := KubeClients.CRClient
-	nodes, err := resolveNodes(ctx, args, preflightNodeSelector)
-	if err != nil {
-		return err
+	// Create output that writes to stdout in real-time
+	output := NewPreflightOutput(os.Stdout)
+	defer output.Close()
+
+	// Run the preflight checks
+	result := generatePreflightNodesOutput(
+		ctx,
+		args,
+		preflightNodeSelector,
+		preflightFailFast,
+		preflightSummaryOnly,
+		preflightFailedOnly,
+		preflightWekaDirFailGB,
+		preflightWekaDirWarnGB,
+		output,
+	)
+
+	if result.Error != nil {
+		return result.Error
 	}
 
-	fmt.Println("Performing preflight verification for Kubernetes nodes to host WEKA")
-	printCheckResult("Checking total number of eligible nodes...", true, fmt.Sprintf("%d", len(nodes)))
+	if !result.Success {
+		return fmt.Errorf("preflight nodes failed")
+	}
+
+	return nil
+}
+
+// generatePreflightNodesOutput performs preflight checks and streams output
+func generatePreflightNodesOutput(
+	ctx context.Context,
+	nodeArgs []string,
+	nodeSelector string,
+	failFast bool,
+	summaryOnly bool,
+	failedOnly bool,
+	wekaDirFailGB int64,
+	wekaDirWarnGB int64,
+	output *PreflightOutput,
+) *PreflightNodesResult {
+	result := &PreflightNodesResult{}
+
+	crClient := KubeClients.CRClient
+	nodes, err := resolveNodes(ctx, nodeArgs, nodeSelector)
+	if err != nil {
+		result.Error = err
+		return result
+	}
+
+	output.Println("Performing preflight verification for Kubernetes nodes to host WEKA")
+	printCheckResultToOutput(output, "Checking total number of eligible nodes...", true, fmt.Sprintf("%d", len(nodes)))
 
 	// FIRST: Fetch pod statistics BEFORE creating host-check pods
 	// (so host-check pods don't pollute the pod resource statistics)
-	fmt.Println("Fetching pod resource usage...")
-	podsByNode := GetPodsMapByNode(ctx, crClient)
+	output.Println("Fetching pod resource usage...")
+	podsByNode := GetPodsMapByNode(ctx, crClient, output)
 
 	// SECOND: Run validation using the registry
-	fmt.Println("Performing validation...")
+	output.Println("Performing validation...")
 
 	// Set up validation parameters
 	validationParams := map[string]interface{}{
 		"minFreeMem":       minFreeMem,
 		"minFreeHP":        minFreeHP,
-		"wekaDirMinFailGB": preflightWekaDirFailGB,
-		"wekaDirMinWarnGB": preflightWekaDirWarnGB,
+		"wekaDirMinFailGB": wekaDirFailGB,
+		"wekaDirMinWarnGB": wekaDirWarnGB,
 		"podsByNode":       podsByNode,
 	}
 
 	// Run validation for all nodes - handles caching and execution
 	nodeModuleResults, err := GlobalHostCheckRegistry.ValidateAll(ctx, "preflight_nodes", nodes, validationParams)
 	if err != nil {
-		return fmt.Errorf("failed to validate nodes: %w", err)
+		result.Error = fmt.Errorf("failed to validate nodes: %w", err)
+		return result
 	}
 
 	// Track results
@@ -118,7 +161,7 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	// First, mark NotReady nodes as skipped and collect info
 	for i := range nodes {
 		node := &nodes[i]
-		if !isNodeReady(node) {
+		if !IsNodeReady(*node) {
 			skippedCnt++
 			skippedNodes = append(skippedNodes, node.Name)
 		}
@@ -241,11 +284,11 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		shouldPrintHeader := false
 		shouldPrintDetails := false
 
-		if preflightSummaryOnly {
+		if summaryOnly {
 			// In summary-only mode, print only failed nodes (header and details)
 			shouldPrintHeader = hasError
 			shouldPrintDetails = hasError
-		} else if preflightFailedOnly {
+		} else if failedOnly {
 			// In failed-only mode, print failed nodes with details, skip passed nodes
 			if hasError {
 				shouldPrintHeader = true
@@ -259,13 +302,13 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 
 		if shouldPrintHeader {
 			// Print node header with status
-			fmt.Printf("  %s: %s\n", nodeName, nodeStatus)
+			output.Printf("  %s: %s\n", nodeName, nodeStatus)
 		}
 
 		if shouldPrintDetails {
 			// Print all validation results for this node
-			GlobalHostCheckRegistry.PrintNodeValidationResults(nodeName, "preflight_nodes", moduleResults)
-			fmt.Println()
+			printNodeValidationToOutput(output, nodeName, "preflight_nodes", moduleResults)
+			output.Println("")
 		}
 
 		// Update counters
@@ -286,7 +329,7 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 			oses[hf.OSRelease] = struct{}{}
 		}
 
-		if preflightFailFast && overallStatus == "failure" {
+		if failFast && overallStatus == "failure" {
 			break
 		}
 	}
@@ -295,36 +338,36 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 	checked := passCnt + warnCnt + failCnt
 
 	// Summary
-	fmt.Println("Summary:")
-	fmt.Printf("  Eligible nodes:      %d\n", len(nodes))
-	fmt.Printf("  Nodes skipped:       %s\n", cyan(fmt.Sprintf("%d", skippedCnt)))
-	fmt.Printf("  Nodes checked:       %d\n", checked)
-	fmt.Printf("  Nodes passed:        %s\n", green(fmt.Sprintf("%d", passCnt)))
-	fmt.Printf("  Nodes warned:        %s\n", yellow(fmt.Sprintf("%d", warnCnt)))
-	fmt.Printf("  Nodes failed:        %s\n", red(fmt.Sprintf("%d", failCnt)))
+	output.Println("Summary:")
+	output.Printf("  Eligible nodes:      %d\n", len(nodes))
+	output.Printf("  Nodes skipped:       %s\n", cyan(fmt.Sprintf("%d", skippedCnt)))
+	output.Printf("  Nodes checked:       %d\n", checked)
+	output.Printf("  Nodes passed:        %s\n", green(fmt.Sprintf("%d", passCnt)))
+	output.Printf("  Nodes warned:        %s\n", yellow(fmt.Sprintf("%d", warnCnt)))
+	output.Printf("  Nodes failed:        %s\n", red(fmt.Sprintf("%d", failCnt)))
 
 	if skippedCnt > 0 {
-		fmt.Printf("  Skipped nodes:       %s\n", strings.Join(skippedNodes, ", "))
+		output.Printf("  Skipped nodes:       %s\n", strings.Join(skippedNodes, ", "))
 	}
 	if warnCnt > 0 {
-		fmt.Printf("  Warned nodes:        %s\n", strings.Join(warnedNodes, ", "))
+		output.Printf("  Warned nodes:        %s\n", strings.Join(warnedNodes, ", "))
 	}
 	if failCnt > 0 {
-		fmt.Printf("  Failed nodes:        %s\n", strings.Join(failedNodes, ", "))
+		output.Printf("  Failed nodes:        %s\n", strings.Join(failedNodes, ", "))
 	}
-	fmt.Printf("  Unique OSes:         %d\n", len(oses))
-	fmt.Printf("  Unique Kernels:      %d\n", len(kernels))
+	output.Printf("  Unique OSes:         %d\n", len(oses))
+	output.Printf("  Unique Kernels:      %d\n", len(kernels))
 
 	if len(oses) > 1 {
-		fmt.Printf("Warning: Multiple OSes detected: %s\n", strings.Join(mapKeysToList(oses), ", "))
+		output.Printf("Warning: Multiple OSes detected: %s\n", strings.Join(mapKeysToList(oses), ", "))
 	}
 	if len(kernels) > 1 {
-		fmt.Printf("Warning: Multiple kernels detected: %s\n", strings.Join(mapKeysToList(kernels), ", "))
+		output.Printf("Warning: Multiple kernels detected: %s\n", strings.Join(mapKeysToList(kernels), ", "))
 	}
 
 	// Print centralized warnings summary
 	if len(allWarnings) > 0 {
-		fmt.Println("\n" + yellow("=== Warnings Summary ==="))
+		output.Println("\n" + yellow("=== Warnings Summary ==="))
 		// Group warnings by type
 		warningsByMessage := make(map[string][]string)
 		for _, w := range allWarnings {
@@ -332,14 +375,14 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		}
 
 		for msg, nodes := range warningsByMessage {
-			fmt.Printf("\n⚠️  %s\n", yellow(msg))
-			fmt.Printf("   Affected nodes (%d): %s\n", len(nodes), strings.Join(nodes, ", "))
+			output.Printf("\n⚠️  %s\n", yellow(msg))
+			output.Printf("   Affected nodes (%d): %s\n", len(nodes), strings.Join(nodes, ", "))
 		}
 	}
 
 	// Print centralized errors summary
 	if len(allErrors) > 0 {
-		fmt.Println("\n" + red("=== Errors Summary ==="))
+		output.Println("\n" + red("=== Errors Summary ==="))
 
 		// Group errors by module (not by exact message)
 		type ErrorGroup struct {
@@ -381,40 +424,47 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 			// Display the error with appropriate context
 			if allSame {
 				// All errors are identical - show the exact error
-				fmt.Printf("\n❌ %s: %s\n", red(group.Module), firstMsg)
+				output.Printf("\n❌ %s: %s\n", red(group.Module), firstMsg)
 			} else {
 				// Errors differ - show it's a common issue with varying details
-				fmt.Printf("\n❌ %s: %s (values vary by node)\n", red(group.Module), firstMsg)
+				output.Printf("\n❌ %s: %s (values vary by node)\n", red(group.Module), firstMsg)
 			}
 
-			fmt.Printf("   Affected nodes (%d): %s\n", len(group.Nodes), strings.Join(group.Nodes, ", "))
+			output.Printf("   Affected nodes (%d): %s\n", len(group.Nodes), strings.Join(group.Nodes, ", "))
 			if group.SuggestedFix != "" {
-				fmt.Printf("   💡 Suggested fix: %s\n", group.SuggestedFix)
+				output.Printf("   💡 Suggested fix: %s\n", group.SuggestedFix)
 			}
 		}
 	}
 
-	// WARN does not fail preflight, FAIL does.
-	if failCnt > 0 {
-		return fmt.Errorf("preflight nodes failed")
-	}
+	// Set result values
+	result.PassedCount = passCnt
+	result.WarningCount = warnCnt
+	result.FailedCount = failCnt
+	result.SkippedCount = skippedCnt
+	result.Success = failCnt == 0
+	result.Output = output.GetFullOutput()
 
-	return nil
+	return result
 }
 
-func mapKeysToList(m map[string]struct{}) []string {
-	var keys []string
-	for k := range m {
-		keys = append(keys, k)
+// printCheckResultToOutput is a helper to print check results to PreflightOutput
+func printCheckResultToOutput(output *PreflightOutput, msg string, ok bool, detail string) {
+	status := "✅"
+	if !ok {
+		status = "❌"
 	}
-	return keys
+	if detail != "" {
+		output.Printf("%s %s (%s)\n", status, msg, detail)
+	} else {
+		output.Printf("%s %s\n", status, msg)
+	}
 }
 
-func isNodeReady(node *corev1.Node) bool {
-	for _, condition := range node.Status.Conditions {
-		if condition.Type == corev1.NodeReady {
-			return condition.Status == corev1.ConditionTrue
-		}
-	}
-	return false
+// printNodeValidationToOutput prints validation results to PreflightOutput
+func printNodeValidationToOutput(output *PreflightOutput, nodeName, category string, moduleResults map[string]*HostCheckResult) {
+	// Use the registry's FormatNodeValidationResults to get formatted output as string
+	formattedOutput, _ := GlobalHostCheckRegistry.FormatNodeValidationResults(nodeName, category, moduleResults)
+	// Write to our output instead of stdout
+	output.Println(formattedOutput)
 }

@@ -40,23 +40,6 @@ func resolveNodes(ctx context.Context, names []string, selector string) ([]corev
 	return allNodes, nil
 }
 
-// parseSelector converts a label selector string to a map for crclient.MatchingLabels
-func parseSelector(selector string) map[string]string {
-	result := make(map[string]string)
-	if selector == "" {
-		return result
-	}
-
-	pairs := strings.Split(selector, ",")
-	for _, pair := range pairs {
-		kv := strings.Split(strings.TrimSpace(pair), "=")
-		if len(kv) == 2 {
-			result[kv[0]] = kv[1]
-		}
-	}
-	return result
-}
-
 func firstInternalIP(n *corev1.Node) string {
 	for _, a := range n.Status.Addresses {
 		if a.Type == corev1.NodeInternalIP {
@@ -148,48 +131,6 @@ func getCPUManagerPolicyViaConfigz(ctx context.Context, clientset *kubernetes.Cl
 
 	return "", fmt.Errorf("failed to get CPU manager policy after %d retries: %w", maxRetries, lastErr)
 }
-
-func printCheckResult(title string, pass bool, details string) {
-	// one-line output: "<title> PASS" or "<title> FAIL [..]"
-	if pass {
-		if details != "" {
-			fmt.Printf("✅ %s [%s]\n", title, details)
-		} else {
-			fmt.Printf("✅ %s\n", title)
-		}
-		return
-	}
-
-	if details != "" {
-		fmt.Printf("❌ %s [%s]\n", title, details)
-	} else {
-		fmt.Printf("❌ %s\n", title)
-	}
-}
-
-func joinLimited(items []string, max int) string {
-	if len(items) <= max {
-		return strings.Join(items, ", ")
-	}
-	return strings.Join(items[:max], ", ") + fmt.Sprintf(", ...(+%d)", len(items)-max)
-}
-
-func shortErr(err error) string {
-	// Keep it readable inside brackets
-	s := err.Error()
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.TrimSpace(s)
-	//if len(s) > 60 {
-	//	return s[:57] + "..."
-	//}
-	return s
-}
-
-// Simple ANSI colors. If you want, we can auto-disable color when not a TTY / NO_COLOR.
-func green(s string) string  { return "\033[32m" + s + "\033[0m" }
-func red(s string) string    { return "\033[31m" + s + "\033[0m" }
-func yellow(s string) string { return "\033[33m" + s + "\033[0m" }
-func cyan(s string) string   { return "\033[36m" + s + "\033[0m" }
 
 func checkK8sVersion124Plus(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
 	sv, err := clientset.Discovery().ServerVersion()
@@ -322,42 +263,6 @@ func ssarAllowed(ctx context.Context, clientset *kubernetes.Clientset, verb, gro
 		return false, err
 	}
 	return out.Status.Allowed, nil
-}
-
-func checkCNIConfigured(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node) (bool, string, error) {
-	// A) Node condition check
-	var badNodes []string
-	for i := range nodes {
-		n := &nodes[i]
-		nu := getNodeConditionStatus(n, corev1.NodeNetworkUnavailable)
-		// If condition missing, treat as unknown (not immediate fail), but note later.
-		if nu == corev1.ConditionTrue {
-			badNodes = append(badNodes, n.Name)
-		}
-	}
-
-	// B) Known CNI daemonset presence (kube-system)
-	hasKnownCNI, cniName, err := detectKnownCNIDaemonSet(ctx, clientset)
-	if err != nil {
-		return false, "", err
-	}
-
-	if len(badNodes) == 0 && hasKnownCNI {
-		return true, "", nil
-	}
-
-	parts := make([]string, 0, 2)
-	if !hasKnownCNI {
-		parts = append(parts, "no known CNI daemonset found in kube-system")
-	} else {
-		parts = append(parts, fmt.Sprintf("detected CNI: %s", cniName))
-	}
-	if len(badNodes) > 0 {
-		parts = append(parts, fmt.Sprintf("%d nodes NetworkUnavailable=true: %s", len(badNodes), joinLimited(badNodes, 5)))
-	}
-
-	// If we detected a known CNI but a few nodes are bad, still FAIL (this is preflight).
-	return false, strings.Join(parts, "; "), nil
 }
 
 func getNodeConditionStatus(n *corev1.Node, t corev1.NodeConditionType) corev1.ConditionStatus {
@@ -513,19 +418,6 @@ func detectKnownCNIDaemonSet(ctx context.Context, clientset *kubernetes.Clientse
 	return false, "", nil
 }
 
-func hasAnyLabelValue(labels map[string]string, keys []string, values []string) bool {
-	for _, k := range keys {
-		if v, ok := labels[k]; ok {
-			for _, want := range values {
-				if v == want {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
 func checkCPUManagerPolicyStatic(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node) (bool, string) {
 	var notStatic []string
 	var unknown []string
@@ -535,7 +427,7 @@ func checkCPUManagerPolicyStatic(ctx context.Context, clientset *kubernetes.Clie
 		n := &nodes[i]
 
 		// Skip nodes that are not ready
-		if !isNodeReady(n) {
+		if !IsNodeReady(*n) {
 			skipped = append(skipped, n.Name)
 			continue
 		}
@@ -581,39 +473,6 @@ func checkCPUManagerPolicyStatic(ctx context.Context, clientset *kubernetes.Clie
 	return false, strings.Join(parts, ", ")
 }
 
-func nodeHasMellanoxNIC(n *corev1.Node) (bool, string) {
-	// Best-effort detection via Node labels (common with NFD / Mellanox operator / SR-IOV).
-	// Mellanox PCI vendor ID is 15b3.
-	for k, v := range n.Labels {
-		kl := strings.ToLower(k)
-		vl := strings.ToLower(v)
-
-		// Node Feature Discovery style:
-		// feature.node.kubernetes.io/pci-15b3.present=true
-		if strings.Contains(kl, "pci-15b3") && (vl == "true" || vl == "1" || vl == "present") {
-			return true, k + "=" + v
-		}
-
-		// Some environments label explicit vendor/model
-		if strings.Contains(kl, "mellanox") || strings.Contains(vl, "mellanox") {
-			return true, k + "=" + v
-		}
-
-		// NVIDIA acquired Mellanox; sometimes labels say nvidia + mlx
-		if (strings.Contains(kl, "nvidia") || strings.Contains(vl, "nvidia")) &&
-			(strings.Contains(kl, "mlx") || strings.Contains(vl, "mlx") || strings.Contains(vl, "connectx") || strings.Contains(vl, "cx")) {
-			return true, k + "=" + v
-		}
-
-		// SR-IOV / RDMA hints (less strict; still useful)
-		if strings.Contains(kl, "rdma") && (vl == "true" || vl == "enabled") {
-			return true, k + "=" + v
-		}
-	}
-
-	return false, ""
-}
-
 func hostPathTypePtr(t corev1.HostPathType) *corev1.HostPathType { return &t }
 
 func sanitizeName(s string) string {
@@ -624,12 +483,16 @@ func sanitizeName(s string) string {
 	return s
 }
 
-func GetPodsMapByNode(ctx context.Context, crClient crclient.Client) map[string][]corev1.Pod {
+func GetPodsMapByNode(ctx context.Context, crClient crclient.Client, output *PreflightOutput) map[string][]corev1.Pod {
 	podsByNode := make(map[string][]corev1.Pod)
 	{
 		var allPods corev1.PodList
 		if err := crClient.List(ctx, &allPods); err != nil {
-			fmt.Printf("Warning: failed to list pods: %v\n", err)
+			if output != nil {
+				output.Printf("Warning: failed to list pods: %v\n", err)
+			} else {
+				fmt.Printf("Warning: failed to list pods: %v\n", err)
+			}
 		} else {
 			// Build a map of nodeName -> pods on that node
 			for i := range allPods.Items {
@@ -639,7 +502,11 @@ func GetPodsMapByNode(ctx context.Context, crClient crclient.Client) map[string]
 				}
 				podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], *pod)
 			}
-			fmt.Printf("Fetched %d pods across %d nodes\n", len(allPods.Items), len(podsByNode))
+			if output != nil {
+				output.Printf("Fetched %d pods across %d nodes\n", len(allPods.Items), len(podsByNode))
+			} else {
+				fmt.Printf("Fetched %d pods across %d nodes\n", len(allPods.Items), len(podsByNode))
+			}
 		}
 	}
 	return podsByNode

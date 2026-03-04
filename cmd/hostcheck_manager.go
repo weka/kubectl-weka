@@ -307,21 +307,6 @@ func (hcm HostChecksMap) SaveToFile(filename string) error {
 	return nil
 }
 
-// LoadFromFile loads hostcheck results from a JSON file
-func LoadHostChecksMapFromFile(filename string) (HostChecksMap, error) {
-	data, err := readFile(filename)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read hostcheck results file: %w", err)
-	}
-
-	var hcm HostChecksMap
-	if err := json.Unmarshal([]byte(data), &hcm); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal hostcheck results: %w", err)
-	}
-
-	return hcm, nil
-}
-
 // FormatSummary returns a formatted summary of hostcheck results
 func (hcm HostChecksMap) FormatSummary() string {
 	if len(hcm) == 0 {
@@ -588,13 +573,15 @@ func (r *HostCheckRegistry) ValidateAll(
 	return r.ValidateWithModules(commandName, hostChecksMap, params)
 }
 
-// PrintNodeValidationResults prints the validation results for a single node
-// Returns the overall status: "success", "partial", or "failure"
-func (r *HostCheckRegistry) PrintNodeValidationResults(
+// FormatNodeValidationResults formats the validation results for a single node as a string
+// Returns the formatted output and overall status: "success", "partial", or "failure"
+func (r *HostCheckRegistry) FormatNodeValidationResults(
 	nodeName string,
 	commandName string,
 	moduleResults map[string]*HostCheckResult,
-) string {
+) (string, string) {
+	var output strings.Builder
+
 	// Determine overall status from module results
 	overallStatus := "success"
 	hasWarning := false
@@ -614,7 +601,7 @@ func (r *HostCheckRegistry) PrintNodeValidationResults(
 		overallStatus = "partial"
 	}
 
-	// Print each module result using Summary()
+	// Format each module result using Summary()
 	config, _ := r.GetCommand(commandName)
 	var checkOrder []string
 	if config != nil {
@@ -669,15 +656,27 @@ func (r *HostCheckRegistry) PrintNodeValidationResults(
 		// Handle multiline details (like network configuration)
 		if strings.Contains(displayText, "\n") {
 			lines := strings.Split(displayText, "\n")
-			fmt.Printf("     %s\n", lines[0])
+			output.WriteString(fmt.Sprintf("     %s\n", lines[0]))
 			indent := "               "
 			for i := 1; i < len(lines); i++ {
-				fmt.Printf("%s%s\n", indent, lines[i])
+				output.WriteString(fmt.Sprintf("%s%s\n", indent, lines[i]))
 			}
 		} else {
-			fmt.Printf("     %s\n", displayText)
+			output.WriteString(fmt.Sprintf("     %s\n", displayText))
 		}
 	}
 
-	return overallStatus
+	return output.String(), overallStatus
+}
+
+// PrintNodeValidationResults prints the validation results for a single node
+// Returns the overall status: "success", "partial", or "failure"
+func (r *HostCheckRegistry) PrintNodeValidationResults(
+	nodeName string,
+	commandName string,
+	moduleResults map[string]*HostCheckResult,
+) string {
+	output, status := r.FormatNodeValidationResults(nodeName, commandName, moduleResults)
+	fmt.Print(output)
+	return status
 }

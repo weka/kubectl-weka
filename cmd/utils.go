@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"math/rand"
 	"os"
 	"sort"
@@ -184,3 +185,111 @@ func getPodLogs(ctx context.Context, namespace, podName, containerName string) (
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func joinLimited(items []string, max int) string {
+	if len(items) <= max {
+		return strings.Join(items, ", ")
+	}
+	return strings.Join(items[:max], ", ") + fmt.Sprintf(", ...(+%d)", len(items)-max)
+}
+
+func shortErr(err error) string {
+	// Keep it readable inside brackets
+	s := err.Error()
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.TrimSpace(s)
+	//if len(s) > 60 {
+	//	return s[:57] + "..."
+	//}
+	return s
+}
+
+// Simple ANSI colors. If you want, we can auto-disable color when not a TTY / NO_COLOR.
+func green(s string) string  { return "\033[32m" + s + "\033[0m" }
+func red(s string) string    { return "\033[31m" + s + "\033[0m" }
+func yellow(s string) string { return "\033[33m" + s + "\033[0m" }
+func cyan(s string) string   { return "\033[36m" + s + "\033[0m" }
+
+func hasAnyLabelValue(labels map[string]string, keys []string, values []string) bool {
+	for _, k := range keys {
+		if v, ok := labels[k]; ok {
+			for _, want := range values {
+				if v == want {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// colorizeContainerType returns a colored version of the container type name
+func colorizeContainerType(containerType string) string {
+
+	switch containerType {
+	case "compute":
+		return colorCompute + "Compute" + colorReset
+	case "drive":
+		return colorDrive + "Drive" + colorReset
+	case "s3":
+		return colorS3 + "S3" + colorReset
+	case "nfs":
+		return colorNFS + "NFS" + colorReset
+	case "envoy":
+		return colorEnvoy + "Envoy" + colorReset
+	case "client":
+		return colorClient + "Client" + colorReset // Reuse cyan color for client
+	default:
+		return containerType
+	}
+}
+
+// tryParseInt tries to parse a string as an integer
+// Returns the integer value and whether parsing was successful
+func tryParseInt(s string) (int, bool) {
+	num, err := strconv.Atoi(s)
+	return num, err == nil
+}
+
+// parseSelector converts a label selector string to a map for crclient.MatchingLabels
+func parseSelector(selector string) map[string]string {
+	result := make(map[string]string)
+	if selector == "" {
+		return result
+	}
+
+	pairs := strings.Split(selector, ",")
+	for _, pair := range pairs {
+		kv := strings.Split(strings.TrimSpace(pair), "=")
+		if len(kv) == 2 {
+			result[kv[0]] = kv[1]
+		}
+	}
+	return result
+}
+
+func mapKeysToList(m map[string]struct{}) []string {
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func firstOrNone(xs []string) string {
+	if len(xs) == 0 {
+		return "<none>"
+	}
+	if strings.TrimSpace(xs[0]) == "" {
+		return "<none>"
+	}
+	return xs[0]
+}
+
+func selectorMapToSelector(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	ls := labels.Set(m)
+	return labels.SelectorFromSet(ls).String()
+}

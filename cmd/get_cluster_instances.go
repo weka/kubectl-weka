@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -46,10 +45,6 @@ func init() {
 
 func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
-	includeNamespaceColumn := false
-	if getClusterInstancesAllNamespaces {
-		includeNamespaceColumn = true
-	}
 
 	currentNS, err := GetKubeNamespace()
 	if err != nil {
@@ -59,9 +54,6 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 		currentNS = getClusterInstancesNamespace
 	}
 
-	k8s := KubeClients.Clientset
-	crClient := KubeClients.CRClient
-
 	var targetCluster string
 	if len(args) == 1 {
 		targetCluster = args[0]
@@ -69,39 +61,72 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("cannot use -A/--all-namespaces when specifying a WekaCluster name; use -n to choose namespace")
 		}
 	}
-	clusters, err := getWekaClustersTyped(ctx, crClient, currentNS, getClusterInstancesAllNamespaces, targetCluster)
+
+	// Generate the output
+	output, err := generateClusterInstancesOutput(
+		ctx,
+		KubeClients,
+		currentNS,
+		getClusterInstancesAllNamespaces,
+		targetCluster,
+		getClusterInstancesNoHeaders,
+		getClusterInstancesWide,
+	)
 	if err != nil {
 		return err
 	}
+
+	// Print the output
+	fmt.Print(output)
+	return nil
+}
+
+// generateClusterInstancesOutput generates the cluster instances table as a string
+func generateClusterInstancesOutput(
+	ctx context.Context,
+	clients *K8sClients,
+	namespace string,
+	allNamespaces bool,
+	targetCluster string,
+	noHeaders bool,
+	wide bool,
+) (string, error) {
+	includeNamespaceColumn := allNamespaces
+
+	k8s := clients.Clientset
+	crClient := clients.CRClient
+
+	clusters, err := getWekaClustersTyped(ctx, crClient, namespace, allNamespaces, targetCluster)
+	if err != nil {
+		return "", err
+	}
 	if len(clusters) == 0 {
 		if targetCluster != "" {
-			fmt.Printf("WekaCluster %q not found.\n", targetCluster)
-		} else if getClusterInstancesAllNamespaces {
-			fmt.Println("No WekaCluster resources found.")
+			return fmt.Sprintf("WekaCluster %q not found.\n", targetCluster), nil
+		} else if allNamespaces {
+			return "No WekaCluster resources found.\n", nil
 		} else {
-			fmt.Printf("No WekaCluster resources found in namespace %q.\n", currentNS)
+			return fmt.Sprintf("No WekaCluster resources found in namespace %q.\n", namespace), nil
 		}
-		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
-	defer w.Flush()
+	var output strings.Builder
+	w := tabwriter.NewWriter(&output, 0, 8, 2, ' ', 0)
 
-	if !getClusterInstancesNoHeaders {
+	if !noHeaders {
 		if includeNamespaceColumn {
-			if getClusterInstancesWide {
+			if wide {
 				fmt.Fprintln(w, "NAMESPACE\tWEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID\tAGE\tCPU_UTIL")
 			} else {
 				fmt.Fprintln(w, "NAMESPACE\tWEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID")
 			}
 		} else {
-			if getClusterInstancesWide {
+			if wide {
 				fmt.Fprintln(w, "WEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID\tAGE\tCPU_UTIL")
 			} else {
 				fmt.Fprintln(w, "WEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID")
 			}
 		}
-
 	}
 
 	// Preload WekaContainers + Pods per namespace once
@@ -116,13 +141,13 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 	for ns := range needNS {
 		var contList wekaapi.WekaContainerList
 		if err := crClient.List(ctx, &contList, crclient.InNamespace(ns)); err != nil {
-			return fmt.Errorf("failed to list WekaContainer CRs in namespace %q: %w", ns, err)
+			return "", fmt.Errorf("failed to list WekaContainer CRs in namespace %q: %w", ns, err)
 		}
 		nsToContainers[ns] = contList.Items
 
 		podList, err := k8s.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to list pods in namespace %q: %w", ns, err)
+			return "", fmt.Errorf("failed to list pods in namespace %q: %w", ns, err)
 		}
 		m := make(map[string]*corev1.Pod, len(podList.Items))
 		for i := range podList.Items {
@@ -191,7 +216,7 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 				}
 			}
 
-			if getClusterInstancesWide {
+			if wide {
 				age := humanAge(now.Sub(wc.GetCreationTimestamp().Time))
 				cpuUtil := ""
 				if wc.Status.Stats != nil {
@@ -218,7 +243,8 @@ func runGetClusterInstances(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	return nil
+	w.Flush()
+	return output.String(), nil
 }
 
 // ---- helpers ----
@@ -267,14 +293,4 @@ func filterClusterContainersTyped(all []wekaapi.WekaContainer, cluster *wekaapi.
 	}
 
 	return out
-}
-
-func firstOrNone(xs []string) string {
-	if len(xs) == 0 {
-		return "<none>"
-	}
-	if strings.TrimSpace(xs[0]) == "" {
-		return "<none>"
-	}
-	return xs[0]
 }

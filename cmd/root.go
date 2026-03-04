@@ -64,5 +64,6 @@ func init() {
 	rootCmd.AddCommand(preflightCmd)
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(planCmd)
+	rootCmd.AddCommand(supportBundleCmd)
 
 }
