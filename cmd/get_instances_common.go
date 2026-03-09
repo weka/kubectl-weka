@@ -3,7 +3,6 @@ package cmd
 import (
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 )
 
 func inferWekaContainerStatusTyped(wc *wekaapi.WekaContainer) string {
@@ -35,12 +34,4 @@ func findConditionStatusTyped(conds []metav1.Condition, condType string) string 
 		return string(c.Status)
 	}
 	return "<none>"
-}
-
-func selectorMapToSelector(m map[string]string) string {
-	if len(m) == 0 {
-		return ""
-	}
-	ls := labels.Set(m)
-	return labels.SelectorFromSet(ls).String()
 }

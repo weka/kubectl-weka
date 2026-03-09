@@ -18,6 +18,7 @@ var (
 	operatorLogsFollow    bool
 	operatorLogsTail      int64
 	operatorLogsSince     time.Duration
+	operatorLogsPrevious  bool
 )
 
 var logsOperatorCmd = &cobra.Command{
@@ -41,6 +42,9 @@ func init() {
 
 	logsOperatorCmd.Flags().DurationVar(&operatorLogsSince, "since", 0,
 		"Only return logs newer than a relative duration like 5s, 2m, or 3h")
+
+	logsOperatorCmd.Flags().BoolVarP(&operatorLogsPrevious, "previous", "p", false,
+		"If true, print the logs for the previous instance of the container in a pod if it exists")
 
 	logsOperatorCmd.SilenceUsage = true
 }
@@ -87,6 +91,7 @@ func runLogsOperator(cmd *cobra.Command, args []string) error {
 	opts := &corev1.PodLogOptions{
 		Container: container,
 		Follow:    operatorLogsFollow,
+		Previous:  operatorLogsPrevious,
 	}
 
 	// Only set TailLines if the user explicitly set --tail.

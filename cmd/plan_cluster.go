@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/jedib0t/go-pretty/v6/table"
@@ -281,7 +280,7 @@ func validateAndPlan(ctx context.Context, cluster *wekaapi.WekaCluster, nodes []
 	fmt.Println("\n=== Fetching Cluster Resource Information ===")
 
 	// Collect pod data from cluster
-	podsByNode := GetPodsMapByNode(ctx, KubeClients.CRClient)
+	podsByNode := GetPodsMapByNode(ctx, KubeClients.CRClient, nil)
 
 	fmt.Printf("✅ Collected pod data from cluster\n")
 
@@ -909,27 +908,6 @@ func getNodeTotalDrives(node *corev1.Node, hostChecksMap HostChecksMap) int {
 	return 0
 }
 
-// colorizeContainerType returns a colored version of the container type name
-func colorizeContainerType(containerType string) string {
-
-	switch containerType {
-	case "compute":
-		return colorCompute + "Compute" + colorReset
-	case "drive":
-		return colorDrive + "Drive" + colorReset
-	case "s3":
-		return colorS3 + "S3" + colorReset
-	case "nfs":
-		return colorNFS + "NFS" + colorReset
-	case "envoy":
-		return colorEnvoy + "Envoy" + colorReset
-	case "client":
-		return colorClient + "Client" + colorReset // Reuse cyan color for client
-	default:
-		return containerType
-	}
-}
-
 func validateDrives(nodes []corev1.Node, driveContainers, numDrives int) error {
 	totalDrivesNeeded := driveContainers * numDrives
 	if totalDrivesNeeded == 0 {
@@ -1308,19 +1286,6 @@ func buildRoleNodeGrouping(nodes []corev1.Node, globalSelector map[string]string
 	return grouping
 }
 
-// matchesSelector checks if a node matches all labels in the selector
-func matchesSelector(node corev1.Node, selector map[string]string) bool {
-	if selector == nil || len(selector) == 0 {
-		return true
-	}
-	for key, value := range selector {
-		if labelValue, ok := node.Labels[key]; !ok || labelValue != value {
-			return false
-		}
-	}
-	return true
-}
-
 // printRoleNodeGrouping prints the role-based node grouping
 func printRoleNodeGrouping(cluster *wekaapi.WekaCluster, grouping RoleNodeGrouping) {
 	if len(grouping.Global) > 0 {
@@ -1350,44 +1315,6 @@ func printRoleNodeGrouping(cluster *wekaapi.WekaCluster, grouping RoleNodeGroupi
 				printNodeList("  ", nodeNames)
 			}
 			fmt.Println()
-		}
-	}
-}
-
-// printNodeList prints node names in a multi-column tabbed format
-func printNodeList(indent string, nodeNames []string) {
-	if len(nodeNames) == 0 {
-		return
-	}
-
-	// Calculate column width based on longest node name
-	maxLen := 0
-	for _, name := range nodeNames {
-		if len(name) > maxLen {
-			maxLen = len(name)
-		}
-	}
-	colWidth := maxLen + 2 // Add 2 for spacing
-
-	// Determine number of columns based on terminal width (assume 120 chars)
-	terminalWidth := 120
-	availableWidth := terminalWidth - len(indent) - 5 // Account for indent and padding
-	numCols := availableWidth / colWidth
-	if numCols < 1 {
-		numCols = 1
-	}
-
-	// Print nodes in columns
-	for i, name := range nodeNames {
-		fmt.Print(indent + name)
-
-		// Add spacing to align columns
-		if (i+1)%numCols == 0 || i == len(nodeNames)-1 {
-			fmt.Println()
-		} else {
-			// Pad to column width
-			padding := colWidth - len(name)
-			fmt.Print(strings.Repeat(" ", padding))
 		}
 	}
 }
@@ -1496,11 +1423,4 @@ func printNodeSelectorTable(title, selector string, nodes []corev1.Node, podsByN
 	t.SetStyle(table.StyleLight)
 	fmt.Printf("\n%s: %s\n  Matching nodes: %d\n", title, selector, len(nodes))
 	t.Render()
-}
-
-// tryParseInt tries to parse a string as an integer
-// Returns the integer value and whether parsing was successful
-func tryParseInt(s string) (int, bool) {
-	num, err := strconv.Atoi(s)
-	return num, err == nil
 }

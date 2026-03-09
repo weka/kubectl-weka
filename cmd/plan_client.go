@@ -145,7 +145,7 @@ func validateAndPlanClient(ctx context.Context, client *wekaapi.WekaClient, node
 	fmt.Println("\n=== Fetching Cluster Resource Information ===")
 
 	// Collect pod data from cluster
-	podsByNode := GetPodsMapByNode(ctx, KubeClients.CRClient)
+	podsByNode := GetPodsMapByNode(ctx, KubeClients.CRClient, nil)
 	fmt.Printf("✅ Collected pod data from cluster\n")
 
 	// Find matching nodes
@@ -238,14 +238,6 @@ func getClientInstanceCount(client *wekaapi.WekaClient, nodes []corev1.Node) int
 	}
 	matchingNodes := FilterNodesBySelector(nodes, client.Spec.NodeSelector)
 	return len(matchingNodes)
-}
-
-// getTargetClusterNamespace returns the namespace of the target cluster (defaults to client's namespace)
-func getTargetClusterNamespace(client *wekaapi.WekaClient) string {
-	if client.Spec.TargetCluster.Namespace != "" {
-		return client.Spec.TargetCluster.Namespace
-	}
-	return client.Namespace
 }
 
 func calculateClientContainerRequirements(client *wekaapi.WekaClient) ClientContainerRequirements {

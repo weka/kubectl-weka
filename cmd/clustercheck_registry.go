@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"k8s.io/client-go/kubernetes"
@@ -114,8 +115,10 @@ func (r *ClusterCheckRegistry) ValidateAll(
 	return results, nil
 }
 
-// PrintCheckResults prints validation results for all checks
-func (r *ClusterCheckRegistry) PrintCheckResults(results map[string]*ClusterCheckResult) {
+// FormatCheckResults formats validation results for all checks as a string
+func (r *ClusterCheckRegistry) FormatCheckResults(results map[string]*ClusterCheckResult) string {
+	var output strings.Builder
+
 	for _, result := range results {
 		module, _ := r.Get(result.ModuleName)
 		if module == nil {
@@ -136,8 +139,16 @@ func (r *ClusterCheckRegistry) PrintCheckResults(results map[string]*ClusterChec
 
 		// Use Summary() to format the output
 		displayText := result.Summary(contextParams)
-		fmt.Println(displayText)
+		output.WriteString(displayText)
+		output.WriteString("\n")
 	}
+
+	return output.String()
+}
+
+// PrintCheckResults prints validation results for all checks
+func (r *ClusterCheckRegistry) PrintCheckResults(results map[string]*ClusterCheckResult) {
+	fmt.Print(r.FormatCheckResults(results))
 }
 
 // GlobalClusterCheckRegistry is the global instance - initialized immediately to avoid nil during module init
