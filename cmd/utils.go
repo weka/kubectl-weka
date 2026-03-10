@@ -286,6 +286,14 @@ func firstOrNone(xs []string) string {
 	return xs[0]
 }
 
+// getNameOrNone returns the name or "<none>" if empty
+func getNameOrNone(name string) string {
+	if name == "" {
+		return "<none>"
+	}
+	return name
+}
+
 func selectorMapToSelector(m map[string]string) string {
 	if len(m) == 0 {
 		return ""

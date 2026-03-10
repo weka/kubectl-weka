@@ -49,6 +49,9 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 #### Inspect WEKA resources
 → See [README.md - Get Commands](README.md#get-commands)
 
+#### Monitor CSI drivers
+→ See [README.md - get csi-drivers](README.md#get-csi-drivers)
+
 #### Collect diagnostic data
 → See [README.md - Support Bundle Commands](README.md#support-bundle-commands)
 

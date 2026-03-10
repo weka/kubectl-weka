@@ -79,7 +79,7 @@ kubectl weka <command> [subcommand] [flags]
 | Command | Purpose | Key Subcommands |
 |---------|---------|-----------------|
 | `preflight` | Pre-deployment validation | `cluster`, `nodes` |
-| `get` | Inspect WEKA resources | `cluster-instances`, `client-instances`, `nodes`, `policies` |
+| `get` | Inspect WEKA resources | `cluster-instances`, `client-instances`, `nodes`, `policies`, `csi-drivers` |
 | `plan` | Deployment planning | `cluster`, `client`, `converged` |
 | `logs` | Stream logs | `operator` |
 | `support-bundle` | Diagnostic data collection | `operator`, `cluster`, `client`, `csi`, `k8s`, `all` |
@@ -396,6 +396,100 @@ kubectl weka get policies [flags]
 **Flags:**
 - `-n, --namespace <string>` – Kubernetes namespace
 - `-A, --all-namespaces` – List across all namespaces
+
+---
+
+### `get csi-drivers`
+
+**Purpose:** Displays CSI (Container Storage Interface) driver deployment information, showing installation method, component status, and storage usage metrics.
+
+**Usage:**
+```bash
+kubectl weka get csi-drivers [DRIVER_NAME] [flags]
+```
+
+**Arguments:**
+- `DRIVER_NAME` (optional) – Show only a specific CSI driver by name (must contain `weka.io`)
+
+**Flags:**
+- `--only-helm` – Show only CSI drivers installed via Helm chart (label: `app.kubernetes.io/managed-by=Helm`)
+- `--only-operator` – Show only CSI drivers installed by Weka operator (label: `app.kubernetes.io/created-by=weka-operator`)
+- `--wide, -w` – Show additional columns (PVs, PVCs, Bound PVs)
+
+**Output Columns (Default):**
+- `CSI DRIVER` – CSI driver name (e.g., `weka.io`, `weka-csi.weka.io`)
+- `MANAGED BY` – Installation method: `Helm`, `weka-operator`, or `Unknown`
+- `NAMESPACE` – Kubernetes namespace where CSI components are deployed
+- `CONTROLLER` – Controller component deployment name (or `<none>`)
+- `NODE DAEMONSET` – Node component daemonset name (or `<none>`)
+- `STORAGECLASSES` – Number of StorageClasses that refer to this driver
+- `AGE` – Time since CSI driver was installed
+
+**Output Columns (Wide: `--wide`):**
+- All default columns, plus:
+- `PVS` – Total number of PersistentVolumes using this CSI driver
+- `PVCS` – Total number of PersistentVolumeClaims using this CSI driver
+- `BOUND PVS` – Number of PersistentVolumes in `Bound` state (actively attached)
+
+**Examples:**
+```bash
+# List all weka.io CSI drivers
+kubectl weka get csi-drivers
+
+# Show only a specific CSI driver
+kubectl weka get csi-drivers weka.io
+kubectl weka get csi-drivers weka-csi.weka.io
+
+# Show drivers with storage usage details
+kubectl weka get csi-drivers --wide
+kubectl weka get csi-drivers -w
+
+# Show only Helm-installed drivers
+kubectl weka get csi-drivers --only-helm
+
+# Show only Weka operator-installed drivers
+kubectl weka get csi-drivers --only-operator
+
+# Specific driver with wide format
+kubectl weka get csi-drivers weka.io --wide
+
+# Filter by installation method
+kubectl weka get csi-drivers --only-helm --wide
+```
+
+**Example Output (Default):**
+```
+CSI DRIVER              MANAGED BY      NAMESPACE   CONTROLLER           NODE DAEMONSET       STORAGECLASSES   AGE
+weka-csi.weka.io        Helm            csi-weka    csi-controller       csi-node             3                45d 12h
+weka-infra.weka.io      weka-operator   weka-infra  weka-csi-controller  weka-csi-node        5                10d 5h
+```
+
+**Example Output (Wide Format):**
+```
+CSI DRIVER              MANAGED BY      NAMESPACE   CONTROLLER           NODE DAEMONSET       STORAGECLASSES   PVS   PVCS   BOUND PVS   AGE
+weka-csi.weka.io        Helm            csi-weka    csi-controller       csi-node             3                42    38     38          45d 12h
+weka-infra.weka.io      weka-operator   weka-infra  weka-csi-controller  weka-csi-node        5                127   120    115         10d 5h
+```
+
+**How It Works:**
+1. **CSI Driver Discovery** – Lists all CSI driver resources (cluster-wide, non-namespaced) matching `*.weka.io`
+2. **Component Matching** – Associates controller Deployments and node DaemonSets by reading `CSI_DRIVER_NAME` environment variable from first container
+3. **Installation Detection** – Determines installation method via labels:
+   - `app.kubernetes.io/managed-by=Helm` → "Helm"
+   - `app.kubernetes.io/created-by=weka-operator` → "weka-operator"
+   - No labels → "Unknown"
+4. **Storage Metrics (Wide Mode)**:
+   - **PVs**: Counts PersistentVolumes with matching `spec.csi.driver`
+   - **PVCs**: Counts PersistentVolumeClaims with StorageClasses using the driver
+   - **Bound PVs**: Filters PVs with `status.phase == Bound` (actively attached volumes)
+
+**Use Cases:**
+- ✅ Verify CSI driver installation status across cluster
+- ✅ Monitor storage usage by CSI driver
+- ✅ Identify underutilized or orphaned CSI drivers
+- ✅ Check deployment health (missing components show `<none>`)
+- ✅ Compare Helm vs operator-managed deployments
+- ✅ Validate PVC/PV binding status
 
 ---
 

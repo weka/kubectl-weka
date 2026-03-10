@@ -44,6 +44,13 @@ kubectl weka get client-instances -A
 kubectl weka get nodes
 kubectl weka get nodes --node-selector role=storage
 
+# List CSI drivers
+kubectl weka get csi-drivers
+kubectl weka get csi-drivers csi.weka.io
+kubectl weka get csi-drivers --wide
+kubectl weka get csi-drivers --only-helm
+kubectl weka get csi-drivers csi.weka.io --wide
+
 # List policies
 kubectl weka get policies -A
 ```
