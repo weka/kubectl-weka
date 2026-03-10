@@ -295,30 +295,8 @@ func generateCSIInstancesOutput(ctx context.Context, clients *K8sClients, driver
 	return output.String(), nil
 }
 
-// isPodBelongsToCSIDriver checks if a pod belongs to any of the CSI drivers
-func isPodBelongsToCSIDriver(pod *corev1.Pod, driverMap map[string]bool) bool {
-	// Check if pod has CSI_DRIVER_NAME env var set to any of our drivers
-	if len(pod.Spec.Containers) == 0 {
-		return false
-	}
-
-	container := &pod.Spec.Containers[0]
-	if container.Env == nil {
-		return false
-	}
-
-	for _, envVar := range container.Env {
-		if envVar.Name == "CSI_DRIVER_NAME" {
-			if driverMap[envVar.Value] {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
 // getCSIDriverFromPod extracts the CSI driver name from a pod
+// Returns empty string if CSI_DRIVER_NAME env var is not set
 func getCSIDriverFromPod(pod *corev1.Pod) string {
 	if len(pod.Spec.Containers) == 0 {
 		return ""
@@ -336,6 +314,19 @@ func getCSIDriverFromPod(pod *corev1.Pod) string {
 	}
 
 	return ""
+}
+
+// isPodBelongsToCSIDriver checks if a pod belongs to any of the CSI drivers
+// by checking if the CSI_DRIVER_NAME environment variable matches one of the provided drivers
+func isPodBelongsToCSIDriver(pod *corev1.Pod, driverMap map[string]bool) bool {
+	// Get the CSI driver name from the pod
+	driverName := getCSIDriverFromPod(pod)
+	if driverName == "" {
+		return false
+	}
+
+	// Check if the driver is in our map
+	return driverMap[driverName]
 }
 
 // determinePodRole determines if a pod is a controller or node instance
