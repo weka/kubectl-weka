@@ -327,7 +327,7 @@ kubectl weka get client-instances -A --wide
 
 ### `get nodes`
 
-**Purpose:** Lists Kubernetes nodes with WEKA-relevant labels and resource information.
+**Purpose:** Lists Kubernetes nodes with WEKA-relevant information including resource availability and status.
 
 **Usage:**
 ```bash
@@ -335,8 +335,52 @@ kubectl weka get nodes [flags]
 ```
 
 **Flags:**
-- `--node-selector <label>=<value>` – Filter nodes by label
-- `--wide` – Show additional resource details
+- `--node-selector <label>=<value>` – Filter nodes by label selector (e.g., `role=storage`, `weka.io/supports-backends=true`)
+- `--wide` – Show additional resource columns (allocatable and allocated resources)
+- `--no-headers` – Don't print table headers
+
+**Output Columns:**
+- `NAME` – Node name (sorted numerically: node1, node2, node11, etc.)
+- `IP` – Internal IP address
+- `OS` – Operating system
+- `ARCH` – Architecture (amd64, arm64, etc.)
+- `KERNEL` – Kernel version
+- `STATUS` – Node readiness status with uptime (e.g., "Ready (45d 12h)", "NotReady")
+  - "Ready (uptime)" – Node is ready with how long it's been running
+  - "NotReady" – Node is not ready
+- `HP_FREE` – Available hugepages (2Mi)
+- `CORES_FREE` – Available CPU cores
+- `RAM_FREE` – Available memory
+- `CLTROLE` – Client role label value
+- `BKNDROLE` – Backend role label value
+
+**Wide Output Adds:**
+- `HP_ALLOCATABLE`, `HP_ALLOCATED` – Hugepages allocation info
+- `CORES_ALLOCATABLE`, `CORES_ALLOCATED` – CPU allocation info
+- `RAM_ALLOCATABLE`, `RAM_ALLOCATED` – Memory allocation info
+
+**Examples:**
+```bash
+# List all nodes
+kubectl weka get nodes
+
+# Filter by label
+kubectl weka get nodes --node-selector role=storage
+
+# Show wide output
+kubectl weka get nodes --wide
+
+# No headers (for scripting)
+kubectl weka get nodes --no-headers
+```
+
+**Output Example:**
+```
+NAME             IP              OS              ARCH    KERNEL                    STATUS              HP_FREE      CORES_FREE   RAM_FREE
+node1            10.240.1.10     Ubuntu 24.04    amd64   6.8.0-41-generic          Ready (45d 12h)     120GB        32 cores     512GB
+node2            10.240.1.11     Ubuntu 24.04    amd64   6.8.0-41-generic          Ready (2d 5h 15m)   120GB        64 cores     1024GB
+node11           10.240.1.12     Ubuntu 24.04    amd64   6.8.0-41-generic          NotReady            120GB        32 cores     512GB
+```
 
 ---
 
@@ -510,6 +554,8 @@ kubectl weka logs operator --previous
 
 Support bundle commands collect comprehensive diagnostic information for troubleshooting and support cases.
 
+**Note:** Node descriptions and a nodes table are **always collected** in all support-bundle modes (operator, cluster, client, csi, k8s, all). Use `--node-selector` flag to filter which nodes to collect.
+
 ### `support-bundle operator`
 
 **Purpose:** Collects operator-related diagnostic data.
@@ -673,6 +719,11 @@ All support bundles create a `.tar.gz` archive with the following structure:
 ```
 weka-support-bundle-[case-id-]YYYYMMDD-HHMMSSZ.tar.gz
 ├── collection.log                    # Full collection log
+├── nodes/                            # Always collected (all modes)
+│   ├── nodes-table.txt               # kubectl weka get nodes output
+│   ├── node-1_describe.yaml          # Individual node descriptions
+│   ├── node-2_describe.yaml
+│   └── ...
 ├── operator/
 │   ├── logs/
 │   │   ├── controller-manager_manager.log
@@ -694,12 +745,26 @@ weka-support-bundle-[case-id-]YYYYMMDD-HHMMSSZ.tar.gz
 │   │   └── pods/
 │   └── ...
 ├── clients/
+│   ├── weka01-clients/
+│   │   ├── WekaClient_default_weka01-clients.yaml
+│   │   ├── client-instances-weka01-clients.txt
+│   │   ├── containers/
+│   │   ├── logs/
+│   │   └── pods/
+│   └── ...
+├── csi/
 │   └── ...
 ├── k8s/
 │   ├── cluster-preflight.log
 │   └── nodes-preflight.log
 └── ...
 ```
+
+**Key Points:**
+- **nodes/** directory is **always collected** in all support bundle modes
+- **nodes/nodes-table.txt** contains the same output as `kubectl weka get nodes` for quick reference
+- **nodes/node-X_describe.yaml** contains full YAML descriptions for each node
+- Node filtering with `--node-selector` applies to the nodes collection as well
 
 ---
 This command performs cluster-level checks to ensure the Kubernetes environment is suitable for WEKA installation.
