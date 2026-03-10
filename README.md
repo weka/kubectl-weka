@@ -20,6 +20,7 @@ The plugin is designed to feel **kubectl-native** and integrates cleanly with Ku
 - [Commands Overview](#commands-overview)
   - [Preflight Commands](#preflight-commands)
   - [Get Commands](#get-commands)
+    - [CSI Commands](#csi-commands)
   - [Plan Commands](#plan-commands)
   - [Logs Commands](#logs-commands)
   - [Support Bundle Commands](#support-bundle-commands)
@@ -603,6 +604,150 @@ weka-infra.weka.io      weka-infra  node6       node          weka-csi-node-b3n2
 
 ---
 
+### `get csi-secrets`
+
+**Purpose:** Lists and validates CSI-related secrets referenced by storage classes, checking for required parameters and configuration issues.
+
+**Usage:**
+```bash
+kubectl weka get csi-secrets
+```
+
+**Output Columns:**
+- `NAME` – Secret name
+- `NAMESPACE` – Kubernetes namespace where the secret is stored
+- `STORAGECLASS COUNT` – Number of storage classes referencing this secret
+- `VALID` – Validation status: ✓ (valid) or ✗ (invalid)
+- `DETAIL` – First validation error message (if any)
+
+**Validation Checks:**
+- ✅ Required parameters: `username`, `password`, `organization`, `endpoints`, `scheme`
+- ✅ Scheme value must be either `http` or `https`
+- ✅ No leading or trailing whitespace on parameter values
+
+**Example Output:**
+```
+NAME                  NAMESPACE    STORAGECLASS COUNT   VALID   DETAIL
+weka-csi-secret       csi-weka     2                    ✓       
+weka-infra-secret     weka-infra   1                    ✗       Secret weka-infra-secret/weka-infra is missing required parameter: username
+backup-secret         default      1                    ✗       Secret backup-secret/default parameter 'scheme' has invalid value 'ftp' (must be 'http' or 'https')
+```
+
+**How It Works:**
+1. **Driver Discovery** – Identifies all WEKA CSI drivers (matching `*.weka.io`)
+2. **Storage Class Analysis** – Finds all storage classes using WEKA CSI drivers as provisioner
+3. **Secret Extraction** – Extracts secret references from storage class parameters:
+   - `csi.storage.k8s.io/provisioner-secret-name` and `-namespace`
+   - `csi.storage.k8s.io/controller-expand-secret-name` and `-namespace`
+   - `csi.storage.k8s.io/controller-publish-secret-name` and `-namespace`
+   - `csi.storage.k8s.io/node-stage-secret-name` and `-namespace`
+   - `csi.storage.k8s.io/node-publish-secret-name` and `-namespace`
+4. **Validation** – Validates each secret against CSI requirements
+5. **Deduplication** – Groups by namespace/name and counts storage class references
+
+**Important Note:** Secrets must have explicit namespace parameters in storage class definitions. If namespace is not specified, the secret is skipped.
+
+**Use Cases:**
+- ✅ Validate CSI secret configuration
+- ✅ Identify misconfigured secrets
+- ✅ Find unused or missing secrets
+- ✅ Detect whitespace issues in configuration
+- ✅ Verify scheme configuration (http vs https)
+
+---
+
+### CSI Commands
+
+CSI (Container Storage Interface) commands provide comprehensive visibility into WEKA CSI driver deployments, health, and configuration.
+
+#### `get csi-drivers`
+
+**Purpose:** Lists all WEKA CSI drivers and their deployment information.
+
+**Usage:**
+```bash
+kubectl weka get csi-drivers [DRIVER_NAME] [flags]
+```
+
+**Output Columns:**
+- `CSI DRIVER` – Driver name
+- `MANAGED BY` – Installation method (Helm or weka-operator)
+- `NAMESPACE` – Namespace where CSI is deployed
+- `CONTROLLER` – Deployment name for controller component
+- `REPLICAS (CTRL)` – Number of controller instances
+- `NODE DAEMONSET` – DaemonSet name for node component
+- `REPLICAS (NODE)` – Number of node instances
+- `STORAGE CLASSES` – Number of storage classes using this driver
+- `AGE` – Time since driver was installed
+
+**Use Cases:**
+- ✅ Verify CSI driver deployments across namespaces
+- ✅ Check CSI component scaling (controller/node replicas)
+- ✅ Identify which storage classes use each driver
+- ✅ Monitor CSI driver age and updates
+
+#### `get csi-instances`
+
+**Purpose:** Lists CSI driver pods (controller and node instances) with health status.
+
+**Usage:**
+```bash
+kubectl weka get csi-instances [DRIVER_NAME] [flags]
+```
+
+**Flags:**
+- `-n, --namespace <string>` – Filter by namespace
+- `-r, --role <string>` – Filter by role (controller or node)
+- `-w, --wide` – Show additional columns (last restart time)
+- `--unhealthy` – Show only pods with frequent restarts (>1 in 5 minutes)
+
+**Output Columns:**
+- `CSI DRIVER` – Driver name
+- `NAMESPACE` – Pod namespace
+- `NODE` – Node where pod is running
+- `ROLE` – Pod role (controller or node)
+- `POD NAME` – Pod name
+- `STATUS` – Pod status (Running, CrashLoopBackoff, etc.)
+- `RESTARTS` – Number of container restarts
+- `AGE` – Pod age
+- `LAST RESTART` (--wide only) – Time since last restart
+
+**Use Cases:**
+- ✅ Monitor CSI pod health and restart patterns
+- ✅ Identify unhealthy or crashing CSI components
+- ✅ Verify pod distribution across nodes
+- ✅ Troubleshoot CSI deployment issues
+- ✅ Investigate restart loops
+
+#### `get csi-secrets`
+
+**Purpose:** Lists and validates CSI-related secrets referenced by storage classes.
+
+**Usage:**
+```bash
+kubectl weka get csi-secrets
+```
+
+**Output Columns:**
+- `NAME` – Secret name
+- `NAMESPACE` – Secret namespace
+- `STORAGECLASS COUNT` – Number of storage classes referencing the secret
+- `VALID` – Validation status (✓ or ✗)
+- `DETAIL` – Validation error details (if any)
+
+**Validation Checks:**
+- ✅ Required parameters: `username`, `password`, `organization`, `endpoints`, `scheme`
+- ✅ Scheme must be `http` or `https`
+- ✅ No leading/trailing whitespace on parameters
+
+**Use Cases:**
+- ✅ Validate CSI secret configuration
+- ✅ Identify misconfigured secrets
+- ✅ Find missing or invalid secrets
+- ✅ Verify parameter values
+
+---
+
 ## Plan Commands
 
 Plan commands analyze WEKA YAML specifications and calculate resource requirements **before** deployment.
@@ -866,14 +1011,67 @@ kubectl weka support-bundle client [CLIENT_NAME] [flags]
 
 ### `support-bundle csi`
 
-**Purpose:** Collects CSI driver diagnostic data.
+**Purpose:** Collects comprehensive CSI driver diagnostic data.
+
+**Collected Data:**
+- CSI drivers list and deployment information
+- CSI instances (pod status, restart counts, health)
+- Unhealthy CSI instances (wide view with restart details)
+- Pod logs (current and previous) for all CSI pods organized by driver/role
+- CSI secrets (with validation of required parameters)
+- Storage classes using WEKA CSI drivers
+- Persistent volumes (CSI driver references)
+- Persistent volume claims (CSI driver references)
 
 **Usage:**
 ```bash
 kubectl weka support-bundle csi [flags]
 ```
 
----
+**Flags:**
+- `--case-id <ID>` – Case ID (Salesforce/Jira) to include in bundle name
+- `-o, --output <dir>` – Output directory for the support bundle archive
+- `-n, --namespace <string>` – Kubernetes namespace filter
+- `-A, --all-namespaces` – Collect from all namespaces
+- `--include-sensitive-data` – Include unredacted CSI secrets (⚠️ INSECURE)
+- `--node-selector <label>=<value>` – Filter nodes for node descriptions
+- `--debug` – Enable debug output
+
+**Example:**
+```bash
+kubectl weka support-bundle csi --case-id SF-12345 -o /tmp
+```
+
+**Bundle Contents:**
+```
+weka-support-bundle-SF-12345-20260310-170001Z/
+├── csi/
+│   ├── csi-drivers.txt                    # CSI driver deployment info
+│   ├── csi-instances.txt                  # All CSI pod instances
+│   ├── csi-instances-unhealthy.txt        # Only pods with restart issues
+│   ├── logs/                              # Pod logs organized by driver
+│   │   ├── weka.io/
+│   │   │   ├── controller/
+│   │   │   │   └── pod-name/
+│   │   │   │       ├── container1.log
+│   │   │   │       └── container1.previous.log
+│   │   │   └── node/
+│   │   └── weka-csi.io/...
+│   ├── secrets/                           # CSI secrets with validation
+│   │   ├── weka.io/
+│   │   │   └── storage-class-name/
+│   │   │       └── secret-name/
+│   │   │           └── secret.txt
+│   │   └── errors.txt                     # Validation errors
+│   ├── storage-classes.txt                # Storage classes using WEKA CSI
+│   ├── persistent-volumes.txt             # PVs with CSI references
+│   └── persistent-volume-claims.txt       # PVCs with CSI references
+├── nodes/                                 # Node descriptions
+│   └── nodes.txt                          # Nodes table
+└── support-bundle.log                     # Collection log file
+```
+
+
 
 ### `support-bundle k8s`
 

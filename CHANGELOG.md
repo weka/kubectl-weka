@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+* **CSI Commands** – New comprehensive CSI driver visibility commands:
+  * `kubectl weka get csi-drivers` – List WEKA CSI drivers with deployment info and scaling
+  * `kubectl weka get csi-instances` – List CSI pods with health status, restart counts, and unhealthy filter
+  * `kubectl weka get csi-secrets` – List and validate CSI secrets with configuration checks
+
+* **CSI Support Bundle** – New `kubectl weka support-bundle csi` command:
+  * Collects CSI driver deployment information
+  * Gathers CSI pod logs (current and previous) organized by driver and role
+  * Validates CSI secrets with detailed error reporting
+  * Extracts storage classes, persistent volumes, and persistent volume claims
+  * Creates organized archive with detailed diagnostic data
+
+* **CSI Secret Validation** – Comprehensive validation of CSI secrets:
+  * Checks for required parameters (username, password, organization, endpoints, scheme)
+  * Validates scheme values (http/https)
+  * Detects leading/trailing whitespace issues
+  * Reports validation errors to console, log file, and archive
+
+* **CSI Pod Health Monitoring** – Enhanced pod status and health checks:
+  * Displays actual pod status from container state (CrashLoopBackoff, ImagePullBackOff, etc.)
+  * Aggregates restart counts across all containers
+  * Tracks most recent restart time across all containers
+  * Filters for unhealthy pods (>1 restart in 5 minutes)
+  * Wide view mode shows detailed restart timing
+
 ## 1.0.0 (2026-02-02)
 
 

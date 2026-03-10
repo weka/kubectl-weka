@@ -61,6 +61,9 @@ kubectl weka get csi-instances -w --role node -n csi-weka
 kubectl weka get csi-instances --unhealthy
 kubectl weka get csi-instances --unhealthy --wide
 
+# List and validate CSI secrets
+kubectl weka get csi-secrets
+
 # List policies
 kubectl weka get policies -A
 ```
@@ -105,6 +108,9 @@ kubectl weka support-bundle cluster weka01
 
 # Client diagnostics
 kubectl weka support-bundle client weka01-clients
+
+# CSI diagnostics (drivers, pods, logs, secrets, storage classes)
+kubectl weka support-bundle csi --case-id SF-12345
 
 # All clusters/clients in namespace
 kubectl weka support-bundle cluster -n default
