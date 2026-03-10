@@ -171,9 +171,13 @@ func (mh *multiHandler) WithGroup(name string) slog.Handler {
 
 // collectorsByMode returns the list of collectors for a given mode
 func collectorsByMode(mode CollectionMode, resourceName string) []Collector {
+	// Nodes descriptions collector is always included with optional node selector
+	nodesCollector := &NodesDescriptionCollector{NodeSelector: supportBundleNodeSel}
+
 	switch mode {
 	case ModeOperator:
 		return []Collector{
+			nodesCollector,
 			&OperatorLogsCollector{},
 			&OperatorNodeAgentLogsCollector{},
 			&OperatorResourcesCollector{},
@@ -181,26 +185,31 @@ func collectorsByMode(mode CollectionMode, resourceName string) []Collector {
 
 	case ModeCluster:
 		return []Collector{
+			nodesCollector,
 			&ClusterResourcesCollector{ClusterName: resourceName},
 		}
 
 	case ModeClient:
 		return []Collector{
+			nodesCollector,
 			&ClientResourcesCollector{ClientName: resourceName},
 		}
 
 	case ModeCSI:
 		return []Collector{
+			nodesCollector,
 			&CSIResourcesCollector{},
 		}
 
 	case ModeK8s:
 		return []Collector{
+			nodesCollector,
 			&K8sPreflightCollector{NodeSelector: supportBundleNodeSel},
 		}
 
 	case ModeAll:
 		return []Collector{
+			nodesCollector,
 			&OperatorLogsCollector{},
 			&OperatorNodeAgentLogsCollector{},
 			&OperatorResourcesCollector{},

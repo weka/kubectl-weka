@@ -489,13 +489,20 @@ func collectorsByMode(mode CollectionMode, resourceName string) []Collector {
 	switch mode {
 	case ModeAll:
 		return []Collector{
-			// ...existing collectors...
 			&ExampleCollector{ResourceName: resourceName},
+			// ... other collectors ...
 		}
 	// ...
 	}
 }
 ```
+
+**Real-World Examples:**
+- `NodesDescriptionCollector` (`cmd/supportbundle_nodes.go`) – Collects node descriptions and a nodes table in **all** support-bundle modes
+- `OperatorLogsCollector` (`cmd/supportbundle_operator.go`) – Collects operator-specific logs and resources
+- `ClusterResourcesCollector` (`cmd/supportbundle_cluster.go`) – Collects cluster-specific data with namespace filtering
+
+These collectors demonstrate best practices for parallel collection, error handling, and organized output.
 
 ### Collector Best Practices
 
@@ -728,6 +735,17 @@ func runTestModule(cmd *cobra.Command, args []string) error {
 ---
 
 ## Common Patterns
+
+### Numeric/Natural Sorting
+
+```go
+// Sort items numerically (node1, node2, node11 instead of node1, node11, node2)
+sort.Slice(items, func(i, j int) bool {
+	return compareNodeNames(items[i].Name, items[j].Name) < 0
+})
+```
+
+The `compareNodeNames()` function in `plan_common.go` handles numeric comparison and is reused across multiple commands (get nodes, plan output, etc.) for consistency.
 
 ### Parallel Data Collection
 
