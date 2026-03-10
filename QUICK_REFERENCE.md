@@ -51,6 +51,16 @@ kubectl weka get csi-drivers --wide
 kubectl weka get csi-drivers --only-helm
 kubectl weka get csi-drivers csi.weka.io --wide
 
+# List CSI instances (pods)
+kubectl weka get csi-instances
+kubectl weka get csi-instances weka.io
+kubectl weka get csi-instances --role controller
+kubectl weka get csi-instances -n csi-weka
+kubectl weka get csi-instances weka.io --wide
+kubectl weka get csi-instances -w --role node -n csi-weka
+kubectl weka get csi-instances --unhealthy
+kubectl weka get csi-instances --unhealthy --wide
+
 # List policies
 kubectl weka get policies -A
 ```

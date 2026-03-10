@@ -79,7 +79,7 @@ kubectl weka <command> [subcommand] [flags]
 | Command | Purpose | Key Subcommands |
 |---------|---------|-----------------|
 | `preflight` | Pre-deployment validation | `cluster`, `nodes` |
-| `get` | Inspect WEKA resources | `cluster-instances`, `client-instances`, `nodes`, `policies`, `csi-drivers` |
+| `get` | Inspect WEKA resources | `cluster-instances`, `client-instances`, `nodes`, `policies`, `csi-drivers`, `csi-instances` |
 | `plan` | Deployment planning | `cluster`, `client`, `converged` |
 | `logs` | Stream logs | `operator` |
 | `support-bundle` | Diagnostic data collection | `operator`, `cluster`, `client`, `csi`, `k8s`, `all` |
@@ -490,6 +490,116 @@ weka-infra.weka.io      weka-operator   weka-infra  weka-csi-controller  weka-cs
 - ✅ Check deployment health (missing components show `<none>`)
 - ✅ Compare Helm vs operator-managed deployments
 - ✅ Validate PVC/PV binding status
+
+---
+
+### `get csi-instances`
+
+**Purpose:** Lists CSI driver pod instances (controller and node pods) showing deployment status and restart information.
+
+**Usage:**
+```bash
+kubectl weka get csi-instances [DRIVER_NAME] [flags]
+```
+
+**Arguments:**
+- `DRIVER_NAME` (optional) – Show only pods of a specific CSI driver by name
+
+**Flags:**
+- `-n, --namespace <string>` – Filter by Kubernetes namespace (shows all namespaces if not set)
+- `-r, --role <string>` – Filter by pod role: `controller` or `node` (shows both if not set)
+- `-w, --wide` – Show additional column: last restart time
+- `--unhealthy` – Show only pods with frequent restarts (more than 1 restart in the last 5 minutes)
+
+**Output Columns (Default):**
+- `CSI DRIVER` – CSI driver name
+- `NAMESPACE` – Kubernetes namespace where pod is deployed
+- `NODE` – Kubernetes node where the pod is running
+- `ROLE` – Pod role: `controller` (deployment pod) or `node` (daemonset pod)
+- `POD NAME` – Name of the CSI pod
+- `STATUS` – Pod status from container state: `Running`, `CrashLoopBackoff`, `ImagePullBackOff`, `Pending`, `Succeeded`, `Failed`, `Unknown`, or other container state reasons
+- `RESTARTS` – Number of times the pod container(s) have restarted
+- `AGE` – Time since the pod was created
+
+**Wide Columns (`--wide`):**
+- `LAST RESTART` – Time since the pod container was last restarted (shows `N/A` if never restarted)
+
+**Examples:**
+```bash
+# List all CSI pods
+kubectl weka get csi-instances
+
+# Show pods for a specific driver
+kubectl weka get csi-instances weka.io
+
+# Show only controller pods
+kubectl weka get csi-instances --role controller
+
+# Show only node pods
+kubectl weka get csi-instances --role node
+
+# Filter by namespace
+kubectl weka get csi-instances -n csi-weka
+
+# Wide view with restart timing
+kubectl weka get csi-instances --wide
+kubectl weka get csi-instances -w
+
+# Show only unhealthy pods (frequent restarts)
+kubectl weka get csi-instances --unhealthy
+kubectl weka get csi-instances --unhealthy --wide
+kubectl weka get csi-instances --unhealthy -n csi-weka
+
+# Combine filters with wide view
+kubectl weka get csi-instances weka.io -n csi-weka --role controller --wide
+
+# Specific driver with all filters
+kubectl weka get csi-instances weka-csi.weka.io -n csi-weka --role node --wide
+```
+
+**Example Output (Default):**
+```
+CSI DRIVER              NAMESPACE   NODE        ROLE          POD NAME                      STATUS     RESTARTS   AGE
+weka-csi.weka.io        csi-weka    node1       controller    csi-controller-0              Running    0          45d 12h
+weka-csi.weka.io        csi-weka    node2       controller    csi-controller-1              Running    0          45d 12h
+weka-csi.weka.io        csi-weka    node1       node          csi-node-abc12               Running    2          45d 11h
+weka-csi.weka.io        csi-weka    node2       node          csi-node-def45               Running    0          45d 12h
+weka-csi.weka.io        csi-weka    node3       node          csi-node-ghi78               Running    1          44d 8h
+weka-infra.weka.io      weka-infra  node4       controller    weka-csi-controller-6f2h9    Running    0          10d 5h
+weka-infra.weka.io      weka-infra  node5       node          weka-csi-node-5m8kl          Running    0          10d 5h
+weka-infra.weka.io      weka-infra  node6       node          weka-csi-node-b3n2p          Pending    1          9d 14h
+```
+
+**Example Output (Wide: `--wide`):**
+```
+CSI DRIVER              NAMESPACE   NODE        ROLE          POD NAME                      STATUS     RESTARTS   LAST RESTART   AGE
+weka-csi.weka.io        csi-weka    node1       controller    csi-controller-0              Running    0          N/A            45d 12h
+weka-csi.weka.io        csi-weka    node2       controller    csi-controller-1              Running    0          N/A            45d 12h
+weka-csi.weka.io        csi-weka    node1       node          csi-node-abc12               Running    2          3d 5h          45d 11h
+weka-csi.weka.io        csi-weka    node2       node          csi-node-def45               Running    0          N/A            45d 12h
+weka-csi.weka.io        csi-weka    node3       node          csi-node-ghi78               Running    1          14d 2h         44d 8h
+weka-infra.weka.io      weka-infra  node4       controller    weka-csi-controller-6f2h9    Running    0          N/A            10d 5h
+weka-infra.weka.io      weka-infra  node5       node          weka-csi-node-5m8kl          Running    0          N/A            10d 5h
+weka-infra.weka.io      weka-infra  node6       node          weka-csi-node-b3n2p          Pending    1          2d 8h          9d 14h
+```
+
+**How It Works:**
+1. **Driver Discovery** – Lists all CSI driver resources matching `*.weka.io`
+2. **Pod Matching** – Finds all pods with `CSI_DRIVER_NAME` environment variable set to a matching driver
+3. **Role Detection** – Determines pod role by:
+   - Checking `app.kubernetes.io/component` label
+   - Analyzing pod name patterns (controller/node keywords)
+   - Identifying parent resource type (Deployment → controller, DaemonSet → node)
+4. **Restart Monitoring** – Reports restart count from container status
+5. **Filtering** – Applies optional namespace and role filters
+
+**Use Cases:**
+- ✅ Monitor CSI pod health and restart patterns
+- ✅ Identify unhealthy or crashing CSI components
+- ✅ Verify pod distribution across nodes (controller vs node)
+- ✅ Troubleshoot CSI deployment issues
+- ✅ Check pod age and stability
+- ✅ Investigate restart loops or pod crashes
 
 ---
 

@@ -52,6 +52,9 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 #### Monitor CSI drivers
 → See [README.md - get csi-drivers](README.md#get-csi-drivers)
 
+#### View CSI pod instances
+→ See [README.md - get csi-instances](README.md#get-csi-instances)
+
 #### Collect diagnostic data
 → See [README.md - Support Bundle Commands](README.md#support-bundle-commands)
 
