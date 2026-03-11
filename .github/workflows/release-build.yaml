@@ -1,0 +1,132 @@
+name: Build Release Binaries
+
+on:
+  release:
+    types: [ published ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds
+          - goos: linux
+            goarch: amd64
+            runs-on: ubuntu-latest
+          - goos: linux
+            goarch: arm64
+            runs-on: ubuntu-latest
+
+          # macOS builds
+          - goos: darwin
+            goarch: amd64
+            runs-on: macos-latest
+          - goos: darwin
+            goarch: arm64
+            runs-on: macos-latest
+
+          # Windows builds
+          - goos: windows
+            goarch: amd64
+            runs-on: windows-latest
+          - goos: windows
+            goarch: arm64
+            runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Get version from release
+        id: version
+        shell: bash
+        run: |
+          # Release tag is in GITHUB_REF_NAME
+          VERSION="${{ github.event.release.tag_name }}"
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "commit=${GIT_COMMIT}" >> $GITHUB_OUTPUT
+          echo "date=${BUILD_DATE}" >> $GITHUB_OUTPUT
+          echo "Version: ${VERSION}"
+          echo "Commit: ${GIT_COMMIT}"
+          echo "Date: ${BUILD_DATE}"
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          COMMIT=${{ steps.version.outputs.commit }}
+          DATE=${{ steps.version.outputs.date }}
+          
+          BINARY_NAME=kubectl-weka
+          if [ "${{ matrix.goos }}" == "windows" ]; then
+            BINARY_NAME=${BINARY_NAME}.exe
+          fi
+          
+          echo "Building ${BINARY_NAME} for ${{ matrix.goos }}/${{ matrix.goarch }}"
+          go build \
+            -ldflags="-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+            -o ${BINARY_NAME} \
+            .
+          
+          # Verify binary was created
+          if [ ! -f "${BINARY_NAME}" ]; then
+            echo "Error: Binary not created"
+            exit 1
+          fi
+          
+          ls -lh ${BINARY_NAME}
+
+      - name: Rename binary with architecture
+        shell: bash
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          GOOS=${{ matrix.goos }}
+          GOARCH=${{ matrix.goarch }}
+          
+          BINARY_NAME=kubectl-weka
+          if [ "${{ matrix.goos }}" == "windows" ]; then
+            BINARY_NAME=${BINARY_NAME}.exe
+          fi
+          
+          # Rename binary to include version, OS, and architecture
+          # Format: kubectl-weka-v1.0.0-linux-amd64 or kubectl-weka-v1.0.0-windows-amd64.exe
+          if [ "${{ matrix.goos }}" == "windows" ]; then
+            FINAL_NAME=kubectl-weka-${VERSION}-${GOOS}-${GOARCH}.exe
+          else
+            FINAL_NAME=kubectl-weka-${VERSION}-${GOOS}-${GOARCH}
+          fi
+          
+          mv ${BINARY_NAME} ${FINAL_NAME}
+          
+          echo "FINAL_NAME=${FINAL_NAME}" >> $GITHUB_ENV
+          
+          ls -lh ${FINAL_NAME}
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ env.FINAL_NAME }}
+          fail_on_unmatched_files: true
+
+

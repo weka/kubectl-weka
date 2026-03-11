@@ -1,0 +1,191 @@
+name: Build Multi-Arch Binaries
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds
+          - goos: linux
+            goarch: amd64
+            runs-on: ubuntu-latest
+          - goos: linux
+            goarch: arm64
+            runs-on: ubuntu-latest
+          - goos: linux
+            goarch: arm
+            goarm: 7
+            runs-on: ubuntu-latest
+
+          # macOS builds
+          - goos: darwin
+            goarch: amd64
+            runs-on: macos-latest
+          - goos: darwin
+            goarch: arm64
+            runs-on: macos-latest
+
+          # Windows builds
+          - goos: windows
+            goarch: amd64
+            runs-on: windows-latest
+          - goos: windows
+            goarch: arm64
+            runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for git describe to work
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Get version information
+        id: version
+        shell: bash
+        run: |
+          GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          
+          # Check if tag is on HEAD
+          TAG_ON_HEAD=$(git describe --exact-match --tags 2>/dev/null || echo "")
+          
+          # Check if working directory is dirty
+          IS_DIRTY=$(git status --porcelain 2>/dev/null | wc -l)
+          
+          # Calculate version
+          if [ -z "$TAG_ON_HEAD" ]; then
+            # Tag is NOT on current HEAD
+            GIT_COMMITS=$(git rev-list --count ${GIT_TAG}..HEAD 2>/dev/null || echo "0")
+            if [ "$IS_DIRTY" -eq 0 ]; then
+              VERSION="${GIT_TAG}-${GIT_COMMITS}-${GIT_COMMIT}"
+            else
+              VERSION="${GIT_TAG}-${GIT_COMMITS}-${GIT_COMMIT}-dirty"
+            fi
+          else
+            # Tag IS on current HEAD
+            if [ "$IS_DIRTY" -eq 0 ]; then
+              VERSION="$TAG_ON_HEAD"
+            else
+              VERSION="${TAG_ON_HEAD}-${GIT_COMMIT}-dirty"
+            fi
+          fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "commit=${GIT_COMMIT}" >> $GITHUB_OUTPUT
+          echo "date=${BUILD_DATE}" >> $GITHUB_OUTPUT
+          echo "Version: ${VERSION}"
+          echo "Commit: ${GIT_COMMIT}"
+          echo "Date: ${BUILD_DATE}"
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          COMMIT=${{ steps.version.outputs.commit }}
+          DATE=${{ steps.version.outputs.date }}
+          
+          BINARY_NAME=kubectl-weka
+          if [ "${{ matrix.goos }}" == "windows" ]; then
+            BINARY_NAME=${BINARY_NAME}.exe
+          fi
+          
+          echo "Building ${BINARY_NAME} for ${{ matrix.goos }}/${{ matrix.goarch }}"
+          go build \
+            -ldflags="-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+            -o ${BINARY_NAME} \
+            .
+          
+          # Verify binary was created
+          if [ ! -f "${BINARY_NAME}" ]; then
+            echo "Error: Binary not created"
+            exit 1
+          fi
+          
+          ls -lh ${BINARY_NAME}
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          GOOS=${{ matrix.goos }}
+          GOARCH=${{ matrix.goarch }}
+          BINARY_NAME=kubectl-weka
+          
+          if [ "${{ matrix.goos }}" == "windows" ]; then
+            BINARY_NAME=${BINARY_NAME}.exe
+          fi
+          
+          # Create artifact directory
+          ARTIFACT_DIR="kubectl-weka-${VERSION}-${GOOS}-${GOARCH}"
+          mkdir -p ${ARTIFACT_DIR}
+          
+          # Copy binary
+          cp ${BINARY_NAME} ${ARTIFACT_DIR}/
+          
+          # Copy useful documentation
+          cp README.md ${ARTIFACT_DIR}/ 2>/dev/null || true
+          cp LICENSE.md ${ARTIFACT_DIR}/ 2>/dev/null || true
+          
+          # Create a VERSION file with build information
+          cat > ${ARTIFACT_DIR}/VERSION.txt << EOF
+          Name:    kubectl-weka
+          Version: ${VERSION}
+          Commit:  ${{ steps.version.outputs.commit }}
+          Date:    ${{ steps.version.outputs.date }}
+          OS:      ${GOOS}
+          Arch:    ${GOARCH}
+          EOF
+          
+          echo "ARTIFACT_DIR=${ARTIFACT_DIR}" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubectl-weka-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ env.ARTIFACT_DIR }}/
+          retention-days: 30
+          if-no-files-found: error
+
+  summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: build
+    if: always()
+    steps:
+      - name: Check build status
+        run: |
+          if [ "${{ needs.build.result }}" == "success" ]; then
+            echo "✅ All builds completed successfully!"
+          else
+            echo "⚠️ Some builds failed. Check the build logs above."
+            exit 1
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: List artifacts
+        run: |
+          echo "📦 Available artifacts:"
+          ls -lah artifacts/
+          find artifacts/ -type f -name "kubectl-weka*" | sort
+

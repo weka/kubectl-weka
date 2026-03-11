@@ -4,6 +4,15 @@
 
 ### Features
 
+* **GitHub Actions CI/CD Workflows** – Complete multi-architecture automated build pipeline:
+  * `build-pr.yaml` – Automated builds on pull requests for 7 platform/architecture combinations
+  * `release-build.yaml` – Automated builds and asset publishing for GitHub Releases
+  * Multi-platform support: Linux (amd64, arm64, armv7), macOS (amd64, arm64), Windows (amd64, arm64)
+  * Release assets uploaded as raw binaries with architecture-specific names
+  * Binaries named: `kubectl-weka-{version}-{os}-{arch}[.exe]`
+  * PR artifacts available for 30 days for testing
+  * Full version information embedded via ldflags
+
 * **Build System with Makefile** – Complete build automation:
   * `make build` – Build binary in current directory
   * `make install` – Install binary to GOPATH/bin
