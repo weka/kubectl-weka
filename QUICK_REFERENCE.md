@@ -8,6 +8,13 @@ kubectl krew install weka
 
 ## Command Cheat Sheet
 
+### Version Information
+
+```bash
+# Display version, commit, and build date
+kubectl weka version
+```
+
 ### Preflight Validation
 
 ```bash
