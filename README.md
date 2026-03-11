@@ -79,6 +79,7 @@ kubectl weka <command> [subcommand] [flags]
 
 | Command | Purpose | Key Subcommands |
 |---------|---------|-----------------|
+| `version` | Display version information | None |
 | `preflight` | Pre-deployment validation | `cluster`, `nodes` |
 | `get` | Inspect WEKA resources | `cluster-instances`, `client-instances`, `nodes`, `policies`, `csi-drivers`, `csi-instances` |
 | `plan` | Deployment planning | `cluster`, `client`, `converged` |
@@ -91,6 +92,32 @@ kubectl weka help
 kubectl weka help preflight
 kubectl weka help support-bundle
 ```
+
+---
+
+## Version Command
+
+### `version`
+
+**Purpose:** Display the version, commit hash, and build date of kubectl-weka.
+
+**Usage:**
+```bash
+kubectl weka version
+```
+
+**Output Example:**
+```
+kubectl-weka version 1.0.0
+commit: abc123def456
+date: 2026-03-11T15:30:00Z
+```
+
+**Use Cases:**
+- ✅ Verify which version of kubectl-weka is installed
+- ✅ Check the exact build information for bug reports
+- ✅ Confirm commit hash matches a specific release
+- ✅ Verify build date for version tracking
 
 ---
 

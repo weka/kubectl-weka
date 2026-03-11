@@ -4,6 +4,11 @@
 
 ### Features
 
+* **Version Command** – New `kubectl weka version` command:
+  * Displays version, commit hash, and build date
+  * Useful for verifying installation and reporting bugs
+  * Build information set at compile time via ldflags
+
 * **CSI Commands** – New comprehensive CSI driver visibility commands:
   * `kubectl weka get csi-drivers` – List WEKA CSI drivers with deployment info and scaling
   * `kubectl weka get csi-instances` – List CSI pods with health status, restart counts, and unhealthy filter

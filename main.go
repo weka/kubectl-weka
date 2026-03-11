@@ -9,5 +9,7 @@ var (
 )
 
 func main() {
+	// Set version information in cmd package before executing
+	cmd.SetVersion(version, commit, date)
 	cmd.Execute()
 }
