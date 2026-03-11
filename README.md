@@ -55,6 +55,76 @@ chmod +x kubectl-weka_X.Y.Z_linux_amd64
 mv kubectl-weka_X.Y.Z_linux_amd64 /usr/local/bin/kubectl-weka
 ```
 
+### Building from Source
+
+**Prerequisites:** Go 1.25.0 or later
+
+#### Using Makefile (recommended)
+
+```bash
+# Clone the repository
+git clone https://github.com/weka/kubectl-weka.git
+cd kubectl-weka
+
+# Build binary in current directory
+make build
+
+# Or install directly to GOPATH/bin
+make install
+
+# View available targets and build info
+make help
+```
+
+The Makefile automatically:
+- Extracts version from git tags (with v prefix, e.g., `v1.0.0`)
+- If tag is ON current HEAD: uses tag as-is
+- If tag is NOT on current HEAD: appends commit count, commit hash, and "dirty" flag if uncommitted changes exist
+- Retrieves the latest commit hash
+- Sets the build date to current UTC time
+- Injects these values via ldflags into the binary
+
+#### Version String Examples
+
+| Scenario | Tag | HEAD | Working Dir | Result Version |
+|----------|-----|------|-------------|-----------------|
+| Release | v1.0.0 | v1.0.0 | clean | v1.0.0 |
+| Release | v1.0.0 | v1.0.0 | dirty | v1.0.0-abc123d-dirty |
+| Development | v1.0.0 | 5 commits after | clean | v1.0.0-5-abc123d |
+| Development | v1.0.0 | 5 commits after | dirty | v1.0.0-5-abc123d-dirty |
+
+#### Manual build
+
+```bash
+git clone https://github.com/weka/kubectl-weka.git
+cd kubectl-weka
+
+# Get current version info from git
+TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+COMMIT=$(git rev-parse --short HEAD)
+DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+# Check if tag is on HEAD
+if git describe --exact-match --tags >/dev/null 2>&1; then
+  # Tag is on HEAD - use it as-is
+  VERSION=$TAG
+else
+  # Tag is not on HEAD - add commit count and hash
+  COMMITS=$(git rev-list --count $TAG..HEAD)
+  VERSION="$TAG-$COMMITS-$COMMIT"
+  
+  # Add dirty flag if there are uncommitted changes
+  if [ -n "$(git status --porcelain)" ]; then
+    VERSION="$VERSION-dirty"
+  fi
+fi
+
+go build -ldflags="-X main.version=$VERSION -X main.commit=$COMMIT -X main.date=$DATE" -o kubectl-weka .
+
+# Verify the version
+./kubectl-weka version
+```
+
 ## Usage
 General syntax:
 ```

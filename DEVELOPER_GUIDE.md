@@ -4,6 +4,7 @@ This guide explains how to extend `kubectl-weka` with new functionality.
 
 ## Table of Contents
 
+- [Building](#building)
 - [Architecture Overview](#architecture-overview)
 - [Adding Preflight Checks](#adding-preflight-checks)
   - [Node Preflight Checks](#node-preflight-checks)
@@ -14,6 +15,163 @@ This guide explains how to extend `kubectl-weka` with new functionality.
 - [Adding Support Bundle Collectors](#adding-support-bundle-collectors)
 - [Adding New Commands](#adding-new-commands)
 - [Testing Guidelines](#testing-guidelines)
+
+---
+
+## Building
+
+### Prerequisites
+
+- Go 1.25.0 or later
+- git (for version information extraction)
+- make (for convenient building)
+
+### Building with Makefile
+
+The Makefile automates the build process and embeds version information via ldflags.
+
+#### Available Targets
+
+```bash
+# Show available targets and current build information
+make help
+
+# Build binary in current directory
+make build
+
+# Install binary to GOPATH/bin
+make install
+
+# Remove built binary
+make clean
+```
+
+#### How Version Information is Determined
+
+The Makefile intelligently determines the version based on git state:
+
+**Release Version (tag on HEAD):**
+- Format: `v1.0.0` (exactly the tag, with v prefix)
+- Used when building exactly at a git tag
+- If working directory has uncommitted changes: `v1.0.0-abc123d-dirty`
+
+**Development Version (commits after tag):**
+- Format: `v1.0.0-5-abc123d` (tag-commit_count-commit_hash)
+- Used when there are commits after the latest tag
+- If working directory has uncommitted changes: `v1.0.0-5-abc123d-dirty`
+
+**Version Components:**
+1. **Tag** – Extracted from git with v prefix preserved (e.g., `v1.0.0`)
+2. **Commits Since Tag** – Only included if not on a tag (e.g., `-5`)
+3. **Commit Hash** – Only included if not on a clean tag (e.g., `-abc123d`)
+4. **Dirty Flag** – Added if working directory has uncommitted changes (e.g., `-dirty`)
+5. **Commit** – Latest commit hash (short form)
+6. **Date** – Current UTC timestamp in ISO 8601 format
+
+#### Version Examples
+
+| Scenario | Command | Version |
+|----------|---------|---------|
+| At release tag, clean | `git checkout v1.0.0` | `v1.0.0` |
+| At release tag, dirty | `git checkout v1.0.0 && echo "change" > file.go` | `v1.0.0-abc123d-dirty` |
+| 5 commits after tag, clean | After 5 commits on main | `v1.0.0-5-abc123d` |
+| 5 commits after tag, dirty | 5 commits + uncommitted change | `v1.0.0-5-abc123d-dirty` |
+| No tags (initial dev) | First repository | `v0.0.0-N-abc123d` |
+
+#### Example Build Output
+
+```bash
+$ make build
+Git Information:
+  Latest Tag:     v1.0.0
+  Tag on HEAD:    
+  Working Dir:    clean
+  Version:        v1.0.0-5-abc123d
+  Commit:         abc123d
+Building kubectl-weka v1.0.0-5-abc123d
+  Commit: abc123d
+  Date:   2026-03-11T15:30:00Z
+```
+
+#### After Tagging a Release
+
+```bash
+$ git tag v1.0.1
+$ git push origin v1.0.1
+$ make build
+Git Information:
+  Latest Tag:     v1.0.1
+  Tag on HEAD:    v1.0.1
+  Working Dir:    clean
+  Version:        v1.0.1
+  Commit:         abc123d
+Building kubectl-weka v1.0.1
+  Commit: abc123d
+  Date:   2026-03-11T15:30:00Z
+```
+
+#### Verify Version Information
+
+After building, verify the version information was correctly embedded:
+
+```bash
+./kubectl-weka version
+# Output:
+# kubectl-weka version v1.0.0-5-abc123d
+# commit: abc123d
+# date: 2026-03-11T15:30:00Z
+```
+
+### Manual Build
+
+If you prefer not to use the Makefile:
+
+```bash
+# Determine version based on git state
+TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+COMMIT=$(git rev-parse --short HEAD)
+DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+# Check if tag is on HEAD
+if git describe --exact-match --tags >/dev/null 2>&1; then
+  VERSION="$TAG"
+else
+  COMMITS=$(git rev-list --count $TAG..HEAD)
+  VERSION="$TAG-$COMMITS-$COMMIT"
+  
+  if [ -n "$(git status --porcelain)" ]; then
+    VERSION="$VERSION-dirty"
+  fi
+fi
+
+# Build
+go build -ldflags="-X main.version=$VERSION -X main.commit=$COMMIT -X main.date=$DATE" -o kubectl-weka .
+
+# Install
+go install -ldflags="-X main.version=$VERSION -X main.commit=$COMMIT -X main.date=$DATE" .
+```
+
+### Tagged Releases
+
+For official releases, create a git tag:
+
+```bash
+# Create a semantic version tag
+git tag v1.0.0
+git push origin v1.0.0
+
+# Now when you build, it will automatically detect it's a release
+make build
+# Version will be exactly: v1.0.0
+```
+
+Development continues after the tag:
+
+```bash
+# After 5 more commits
+make build
+# Version will be: v1.0.0-5-abc123d (5 commits after tag)
+```
 
 ---
 

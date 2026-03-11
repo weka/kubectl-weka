@@ -4,6 +4,19 @@
 
 ### Features
 
+* **Build System with Makefile** – Complete build automation:
+  * `make build` – Build binary in current directory
+  * `make install` – Install binary to GOPATH/bin
+  * `make clean` – Remove built binary
+  * `make help` – Show build information
+  * Version information automatically extracted from git tags and embedded via ldflags
+
+* **Intelligent Versioning** – Version string adapts to git state:
+  * Release version (tag on HEAD): uses tag as-is (e.g., `v1.0.0`)
+  * Development version (commits after tag): includes commit count and hash (e.g., `v1.0.0-5-abc123d`)
+  * Dirty detection: appends `-dirty` flag if working directory has uncommitted changes
+  * Preserves 'v' prefix for consistency with kubectl utilities
+
 * **Version Command** – New `kubectl weka version` command:
   * Displays version, commit hash, and build date
   * Useful for verifying installation and reporting bugs
