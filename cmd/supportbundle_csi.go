@@ -2,6 +2,10 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+
 	"github.com/spf13/cobra"
 )
 
@@ -13,8 +17,7 @@ var supportBundleCSICmd = &cobra.Command{
   - CSI controller pods and logs
   - Storage classes
   - Persistent volumes and claims
-
-Note: CSI component detection logic is a placeholder and will be implemented later.`,
+  - CSI driver deployment information`,
 	RunE: runSupportBundleCSI,
 }
 
@@ -36,26 +39,27 @@ func runSupportBundleCSI(cmd *cobra.Command, args []string) error {
 	return runSupportBundleByMode(ModeCSI, "", supportBundleNamespace, supportBundleAllNS)
 }
 
-// CSIResourcesCollector collects CSI driver and controller resources
+// CSIResourcesCollector collects CSI driver components and diagnostics
 type CSIResourcesCollector struct{}
 
 func (c *CSIResourcesCollector) Name() string {
-	return "CSI Resources"
+	return "CSI Driver Components"
 }
 
 func (c *CSIResourcesCollector) Start(ctx context.Context) {
 	logger := getLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
-	logger.Info("Will collect", "status", "CSI collection is a placeholder")
+	logger.Info("Will collect",
+		"items", "CSI drivers list, CSI instances (pods), unhealthy instances (wide view)")
 }
 
 func (c *CSIResourcesCollector) Finish(ctx context.Context, result CollectorResult) {
 	logger := getLogger(ctx)
 	switch result.Status {
 	case StatusSuccess:
-		logger.Info("Collector finished", "name", c.Name(), "status", "success")
+		logger.Info("Collector finished", "name", c.Name(), "status", "success", "files_created", len(result.FilesCreated))
 	case StatusPartial:
-		logger.Warn("Collector finished", "name", c.Name(), "status", "partial")
+		logger.Warn("Collector finished", "name", c.Name(), "status", "partial", "files_created", len(result.FilesCreated))
 	case StatusFailure:
 		logger.Error("Collector failed", "name", c.Name(), "error", result.Error)
 	}
@@ -63,36 +67,75 @@ func (c *CSIResourcesCollector) Finish(ctx context.Context, result CollectorResu
 
 func (c *CSIResourcesCollector) Collect(ctx context.Context) CollectorResult {
 	logger := getLogger(ctx)
+	bundlePath := getBundlePath(ctx)
 	var filesCreated []string
-	var warnings []string
+	var errors []string
 
-	logger.Debug("=== CSIResourcesCollector Debug Mode", "enabled", supportBundleDebug)
-	logger.Debug("⚠️  CSI collection is not yet implemented (placeholder)")
+	// Create CSI directory in the bundle
+	csiDir := filepath.Join(bundlePath, "csi")
+	if err := os.MkdirAll(csiDir, 0755); err != nil {
+		logger.Error("Failed to create CSI directory", "error", err)
+		return CollectorResult{
+			Status:       StatusFailure,
+			FilesCreated: filesCreated,
+			Error:        err,
+		}
+	}
 
-	// TODO: Implement CSI component collection
-	// This is a placeholder implementation
-	//
-	// The actual implementation should:
-	// 1. Find CSI driver pods (typically have labels like app=csi-wekafsplugin)
-	// 2. Find CSI controller pods
-	// 3. Collect logs from all CSI-related pods
-	// 4. Collect storage classes related to Weka
-	// 5. Optionally collect PVs and PVCs
-	//
-	// Example label selectors to look for:
-	// - app=csi-wekafsplugin
-	// - app.kubernetes.io/name=weka-csi-driver
-	// - component=csi-driver
-	//
-	// Common namespaces:
-	// - csi-wekafsplugin
-	// - kube-system
+	// Collect CSI drivers information
+	logger.Debug("Collecting CSI drivers")
+	driverOutput, err := generateCSIDriversOutput(ctx, KubeClients, false, false, false, "")
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("failed to get CSI drivers: %v", err))
+		logger.Warn("Failed to collect CSI drivers", "error", err)
+	} else {
+		driversFile := filepath.Join(csiDir, "csi-drivers.txt")
+		if err := os.WriteFile(driversFile, []byte(driverOutput), 0644); err != nil {
+			errors = append(errors, fmt.Sprintf("failed to write CSI drivers file: %v", err))
+			logger.Warn("Failed to write CSI drivers file", "error", err)
+		} else {
+			filesCreated = append(filesCreated, driversFile)
+			logger.Debug("Collected CSI drivers", "file", driversFile)
+		}
+	}
 
-	warnings = append(warnings, "CSI collection is not yet implemented (placeholder)")
+	// Collect CSI instances (pods) information
+	logger.Debug("Collecting CSI instances")
+	instancesOutput, err := generateCSIInstancesOutput(ctx, KubeClients, "", "", "", false, false)
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("failed to get CSI instances: %v", err))
+		logger.Warn("Failed to collect CSI instances", "error", err)
+	} else {
+		instancesFile := filepath.Join(csiDir, "csi-instances.txt")
+		if err := os.WriteFile(instancesFile, []byte(instancesOutput), 0644); err != nil {
+			errors = append(errors, fmt.Sprintf("failed to write CSI instances file: %v", err))
+			logger.Warn("Failed to write CSI instances file", "error", err)
+		} else {
+			filesCreated = append(filesCreated, instancesFile)
+			logger.Debug("Collected CSI instances", "file", instancesFile)
+		}
+	}
+
+	// Collect unhealthy CSI instances in wide view
+	logger.Debug("Collecting unhealthy CSI instances")
+	unhealthyOutput, err := generateCSIInstancesOutput(ctx, KubeClients, "", "", "", true, true)
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("failed to get unhealthy CSI instances: %v", err))
+		logger.Warn("Failed to collect unhealthy CSI instances", "error", err)
+	} else {
+		unhealthyFile := filepath.Join(csiDir, "csi-instances-unhealthy.txt")
+		if err := os.WriteFile(unhealthyFile, []byte(unhealthyOutput), 0644); err != nil {
+			errors = append(errors, fmt.Sprintf("failed to write unhealthy CSI instances file: %v", err))
+			logger.Warn("Failed to write unhealthy CSI instances file", "error", err)
+		} else {
+			filesCreated = append(filesCreated, unhealthyFile)
+			logger.Debug("Collected unhealthy CSI instances", "file", unhealthyFile)
+		}
+	}
 
 	// Determine overall status
 	status := StatusSuccess
-	if len(warnings) > 0 {
+	if len(errors) > 0 {
 		if len(filesCreated) > 0 {
 			status = StatusPartial
 		} else {
@@ -100,5 +143,9 @@ func (c *CSIResourcesCollector) Collect(ctx context.Context) CollectorResult {
 		}
 	}
 
-	return CollectorResult{Status: status, FilesCreated: filesCreated, Warnings: warnings}
+	return CollectorResult{
+		Status:       status,
+		FilesCreated: filesCreated,
+		Warnings:     errors,
+	}
 }

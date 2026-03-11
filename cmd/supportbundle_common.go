@@ -199,6 +199,12 @@ func collectorsByMode(mode CollectionMode, resourceName string) []Collector {
 		return []Collector{
 			nodesCollector,
 			&CSIResourcesCollector{},
+			&CSIPodLogsCollector{},
+			&CSISecretsCollector{},
+			&StorageClassCollector{},
+			&PersistentVolumeClaimCollector{},
+			&PersistentVolumeCollector{},
+			&CSIDriverCollector{},
 		}
 
 	case ModeK8s:
@@ -215,8 +221,14 @@ func collectorsByMode(mode CollectionMode, resourceName string) []Collector {
 			&OperatorResourcesCollector{},
 			&ClusterResourcesCollector{ClusterName: ""},
 			&ClientResourcesCollector{ClientName: ""},
-			&CSIResourcesCollector{},
 			&K8sPreflightCollector{NodeSelector: supportBundleNodeSel},
+			&CSIResourcesCollector{},
+			&CSIPodLogsCollector{},
+			&CSISecretsCollector{},
+			&StorageClassCollector{},
+			&PersistentVolumeClaimCollector{},
+			&PersistentVolumeCollector{},
+			&CSIDriverCollector{},
 		}
 
 	default:

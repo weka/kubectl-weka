@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"math/rand"
 	"os"
@@ -286,10 +287,224 @@ func firstOrNone(xs []string) string {
 	return xs[0]
 }
 
+// getNameOrNone returns the name or "<none>" if empty
+func getNameOrNone(name string) string {
+	if name == "" {
+		return "<none>"
+	}
+	return name
+}
+
 func selectorMapToSelector(m map[string]string) string {
 	if len(m) == 0 {
 		return ""
 	}
 	ls := labels.Set(m)
 	return labels.SelectorFromSet(ls).String()
+}
+
+// PodHealthCheckOptions contains optional parameters for pod health validation
+type PodHealthCheckOptions struct {
+	RestartThreshold     int32         // Restart count threshold (default: 2)
+	LastRestartThreshold time.Duration // Time threshold for last restart (default: 5 minutes)
+}
+
+// DefaultPodHealthCheckOptions returns the default pod health check options
+func DefaultPodHealthCheckOptions() PodHealthCheckOptions {
+	return PodHealthCheckOptions{
+		RestartThreshold:     2,
+		LastRestartThreshold: 5 * time.Minute,
+	}
+}
+
+// IsPodUnhealthy checks if a pod is unhealthy based on restart count and last restart time.
+// A pod is considered unhealthy if:
+// - It has more restarts than the threshold, AND
+// - The last restart was within the threshold time duration
+//
+// The function examines ALL containers (regular and init) to:
+// - Sum up total restart count across all containers
+// - Find the most recent termination time across all containers
+//
+// Parameters:
+//
+//	pod: The pod to check
+//	opts: Optional parameters (uses defaults if nil)
+//
+// Returns true if the pod meets the unhealthy criteria
+func IsPodUnhealthy(pod *v1.Pod, opts *PodHealthCheckOptions) bool {
+	// Use defaults if options not provided
+	if opts == nil {
+		opts = &PodHealthCheckOptions{
+			RestartThreshold:     2,
+			LastRestartThreshold: 5 * time.Minute,
+		}
+	}
+
+	// Calculate total restart count across all containers
+	var totalRestarts int32
+
+	// Sum restarts from regular containers
+	if pod.Status.ContainerStatuses != nil {
+		for i := range pod.Status.ContainerStatuses {
+			totalRestarts += pod.Status.ContainerStatuses[i].RestartCount
+		}
+	}
+
+	// Sum restarts from init containers
+	if pod.Status.InitContainerStatuses != nil {
+		for i := range pod.Status.InitContainerStatuses {
+			totalRestarts += pod.Status.InitContainerStatuses[i].RestartCount
+		}
+	}
+
+	// If restart count doesn't exceed threshold, pod is healthy
+	if totalRestarts <= opts.RestartThreshold {
+		return false
+	}
+
+	// Find the most recent termination time across all containers
+	var lastRestartTime *metav1.Time
+
+	// Check regular containers for most recent termination
+	if pod.Status.ContainerStatuses != nil {
+		for i := range pod.Status.ContainerStatuses {
+			cs := &pod.Status.ContainerStatuses[i]
+			if cs.LastTerminationState.Terminated != nil {
+				finishedTime := &cs.LastTerminationState.Terminated.FinishedAt
+				// Track the most recent termination time
+				if lastRestartTime == nil || finishedTime.After(lastRestartTime.Time) {
+					lastRestartTime = finishedTime
+				}
+			}
+		}
+	}
+
+	// Check init containers for most recent termination
+	if pod.Status.InitContainerStatuses != nil {
+		for i := range pod.Status.InitContainerStatuses {
+			cs := &pod.Status.InitContainerStatuses[i]
+			if cs.LastTerminationState.Terminated != nil {
+				finishedTime := &cs.LastTerminationState.Terminated.FinishedAt
+				// Track the most recent termination time
+				if lastRestartTime == nil || finishedTime.After(lastRestartTime.Time) {
+					lastRestartTime = finishedTime
+				}
+			}
+		}
+	}
+
+	// Pod is unhealthy if:
+	// 1. Restart count exceeds threshold (already checked above), AND
+	// 2. Last restart time is set (has actually restarted), AND
+	// 3. Last restart was within the threshold duration
+	if lastRestartTime != nil {
+		thresholdTime := metav1.Now().Add(-opts.LastRestartThreshold)
+		if lastRestartTime.After(thresholdTime) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// IsPodUnhealthyWithValues checks if a pod is unhealthy based on pre-computed restart count and last restart time.
+// This is a wrapper around IsPodUnhealthy for cases where restart metrics have already been aggregated.
+//
+// It constructs a minimal pod object from the provided values and delegates to IsPodUnhealthy.
+//
+// Parameters:
+//
+//	restartCount: Total number of restarts across all containers
+//	lastRestartTime: Timestamp of the most recent container termination (nil if never restarted)
+//	opts: Optional parameters (uses defaults if nil)
+//
+// Returns true if the pod meets the unhealthy criteria
+func IsPodUnhealthyWithValues(restartCount int32, lastRestartTime *metav1.Time, opts *PodHealthCheckOptions) bool {
+	// Construct a minimal pod object with the provided values
+	pod := &v1.Pod{
+		Status: v1.PodStatus{
+			ContainerStatuses: []v1.ContainerStatus{
+				{
+					RestartCount: restartCount,
+				},
+			},
+		},
+	}
+
+	// Set last termination state only if lastRestartTime is not nil
+	if lastRestartTime != nil {
+		pod.Status.ContainerStatuses[0].LastTerminationState = v1.ContainerState{
+			Terminated: &v1.ContainerStateTerminated{
+				FinishedAt: *lastRestartTime,
+			},
+		}
+	}
+
+	// Delegate to the main function
+	return IsPodUnhealthy(pod, opts)
+}
+
+// PodRestartMetrics holds restart-related metrics for a pod
+type PodRestartMetrics struct {
+	RestartCount    int32        // Total number of restarts across all containers
+	LastRestartTime *metav1.Time // Timestamp of the most recent container termination
+}
+
+// GetPodRestartMetrics calculates restart metrics for a pod by examining all containers.
+// It sums restart counts from all regular and init containers, and finds the most recent
+// termination time across all containers.
+//
+// Parameters:
+//
+//	pod: The pod to analyze
+//
+// Returns PodRestartMetrics with aggregated restart information
+func GetPodRestartMetrics(pod *v1.Pod) PodRestartMetrics {
+	metrics := PodRestartMetrics{}
+
+	// Sum restarts from regular containers
+	if pod.Status.ContainerStatuses != nil {
+		for i := range pod.Status.ContainerStatuses {
+			metrics.RestartCount += pod.Status.ContainerStatuses[i].RestartCount
+		}
+	}
+
+	// Sum restarts from init containers
+	if pod.Status.InitContainerStatuses != nil {
+		for i := range pod.Status.InitContainerStatuses {
+			metrics.RestartCount += pod.Status.InitContainerStatuses[i].RestartCount
+		}
+	}
+
+	// Find the most recent termination time across all containers
+	// Check regular containers for most recent termination
+	if pod.Status.ContainerStatuses != nil {
+		for i := range pod.Status.ContainerStatuses {
+			cs := &pod.Status.ContainerStatuses[i]
+			if cs.LastTerminationState.Terminated != nil {
+				finishedTime := &cs.LastTerminationState.Terminated.FinishedAt
+				// Track the most recent termination time
+				if metrics.LastRestartTime == nil || finishedTime.After(metrics.LastRestartTime.Time) {
+					metrics.LastRestartTime = finishedTime
+				}
+			}
+		}
+	}
+
+	// Check init containers for most recent termination
+	if pod.Status.InitContainerStatuses != nil {
+		for i := range pod.Status.InitContainerStatuses {
+			cs := &pod.Status.InitContainerStatuses[i]
+			if cs.LastTerminationState.Terminated != nil {
+				finishedTime := &cs.LastTerminationState.Terminated.FinishedAt
+				// Track the most recent termination time
+				if metrics.LastRestartTime == nil || finishedTime.After(metrics.LastRestartTime.Time) {
+					metrics.LastRestartTime = finishedTime
+				}
+			}
+		}
+	}
+
+	return metrics
 }
