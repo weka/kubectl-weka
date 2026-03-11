@@ -1153,7 +1153,7 @@ weka-support-bundle-SF-12345-20260310-170001Z/
 │   │   │   │   └── pod-name/
 │   │   │   │       ├── container1.log
 │   │   │   │       └── container1.previous.log
-│   │   │   └── node/
+│   │   │   └── node/...
 │   │   └── weka-csi.io/...
 │   ├── secrets/                           # CSI secrets with validation
 │   │   ├── weka.io/
@@ -1164,9 +1164,15 @@ weka-support-bundle-SF-12345-20260310-170001Z/
 │   ├── storage-classes.txt                # Storage classes using WEKA CSI
 │   ├── persistent-volumes.txt             # PVs with CSI references
 │   └── persistent-volume-claims.txt       # PVCs with CSI references
-├── nodes/                                 # Node descriptions
-│   └── nodes.txt                          # Nodes table
-└── support-bundle.log                     # Collection log file
+├── nodes/                                 # Node information
+│   ├── nodes-table.txt                    # Nodes overview table
+│   ├── {node1}_describe.yaml              # Individual node descriptions
+│   └── {node2}_describe.yaml
+├── node-hostchecks/                       # Node hostcheck information dump (pretty-printed JSON)
+│   ├── {node1}_hostcheck.json             # Hardware & system info
+│   ├── {node2}_hostcheck.json             # (OS, kernel, CPU, memory, NVMe, NICs etc.)
+│   └── ...
+└── collection.log                         # Collection log file
 ```
 
 
