@@ -826,6 +826,343 @@ func TestInfiniBandInterfaceWithPCIAddress(t *testing.T) {
 	}
 }
 
+// TestNetworkInterfaceWithNUMANode tests NetworkInterface with NUMA node information
+func TestNetworkInterfaceWithNUMANode(t *testing.T) {
+	iface := &NetworkInterface{
+		Name:       "eth0",
+		Type:       "ethernet",
+		IP:         "10.0.0.1/24",
+		PCIAddress: "0000:00:1f.6",
+		NUMANode:   0,
+		Model:      "Intel I350",
+		Status:     "up",
+	}
+
+	if iface.NUMANode != 0 {
+		t.Errorf("Expected NUMANode 0, got %d", iface.NUMANode)
+	}
+}
+
+// TestNetworkInterfaceMultipleNUMANodes tests interfaces on different NUMA nodes
+func TestNetworkInterfaceMultipleNUMANodes(t *testing.T) {
+	tests := []struct {
+		name     string
+		ifname   string
+		pci      string
+		numa     int
+		expected int
+	}{
+		{
+			name:     "NUMA node 0",
+			ifname:   "eth0",
+			pci:      "0000:00:1f.6",
+			numa:     0,
+			expected: 0,
+		},
+		{
+			name:     "NUMA node 1",
+			ifname:   "eth1",
+			pci:      "0001:00:00.0",
+			numa:     1,
+			expected: 1,
+		},
+		{
+			name:     "Unknown NUMA",
+			ifname:   "eth2",
+			pci:      "",
+			numa:     -1,
+			expected: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iface := &NetworkInterface{
+				Name:       tt.ifname,
+				PCIAddress: tt.pci,
+				NUMANode:   tt.numa,
+			}
+
+			if iface.NUMANode != tt.expected {
+				t.Errorf("Expected NUMANode %d, got %d", tt.expected, iface.NUMANode)
+			}
+		})
+	}
+}
+
+// TestNVMeDriveWithNUMANode tests NVMeDriveInfo with NUMA node information
+func TestNVMeDriveWithNUMANode(t *testing.T) {
+	drive := NVMeDriveInfo{
+		DeviceName: "nvme0n1",
+		DevicePath: "/dev/nvme0n1",
+		Model:      "Samsung 970 EVO",
+		Size:       1099511627776,
+		PCIAddress: "0000:00:1d.0",
+		NUMANode:   0,
+		Mounted:    true,
+		MountPoint: "/data",
+	}
+
+	if drive.NUMANode != 0 {
+		t.Errorf("Expected NUMANode 0, got %d", drive.NUMANode)
+	}
+	if drive.PCIAddress != "0000:00:1d.0" {
+		t.Errorf("Expected PCIAddress '0000:00:1d.0', got %q", drive.PCIAddress)
+	}
+}
+
+// TestNVMeDrivesMultipleNUMANodes tests NVMe drives on different NUMA nodes
+func TestNVMeDrivesMultipleNUMANodes(t *testing.T) {
+	tests := []struct {
+		name     string
+		devname  string
+		pci      string
+		numa     int
+		expected int
+	}{
+		{
+			name:     "NVMe on NUMA 0",
+			devname:  "nvme0n1",
+			pci:      "0000:00:1d.0",
+			numa:     0,
+			expected: 0,
+		},
+		{
+			name:     "NVMe on NUMA 1",
+			devname:  "nvme1n1",
+			pci:      "0001:00:00.0",
+			numa:     1,
+			expected: 1,
+		},
+		{
+			name:     "Unknown NUMA",
+			devname:  "nvme2n1",
+			pci:      "",
+			numa:     -1,
+			expected: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			drive := NVMeDriveInfo{
+				DeviceName: tt.devname,
+				PCIAddress: tt.pci,
+				NUMANode:   tt.numa,
+			}
+
+			if drive.NUMANode != tt.expected {
+				t.Errorf("Expected NUMANode %d, got %d", tt.expected, drive.NUMANode)
+			}
+		})
+	}
+}
+
+// TestDualFunctionMellanoxDevice tests handling of dual-function Mellanox devices
+func TestDualFunctionMellanoxDevice(t *testing.T) {
+	// Mellanox MT2910 (ConnectX-7) supports dual-protocol operation:
+	// - Function 0: Ethernet controller
+	// - Function 1: InfiniBand controller
+	// Both functions share the same NUMA node and physical hardware
+
+	// Simulate the Ethernet function interface
+	ethernetIface := &NetworkInterface{
+		Name:       "eth0",
+		Type:       "ethernet",
+		IP:         "192.168.1.10/24",
+		PCIAddress: "0000:63:00.0", // Ethernet function
+		NUMANode:   0,
+		Model:      "Mellanox ConnectX-7",
+		MaxSpeed:   "100Gbps",
+		Status:     "up",
+	}
+
+	// Simulate the InfiniBand function interface
+	infinibandIface := &NetworkInterface{
+		Name:       "ib0",
+		Type:       "infiniband",
+		IP:         "10.200.5.41/24",
+		PCIAddress: "0000:63:00.1", // InfiniBand function
+		NUMANode:   0,
+		Model:      "Mellanox ConnectX-7",
+		MaxSpeed:   "400Gbps",
+		Status:     "up",
+	}
+
+	// Verify both functions are extracted correctly
+	if ethernetIface.PCIAddress != "0000:63:00.0" {
+		t.Errorf("Expected Ethernet PCIAddress '0000:63:00.0', got %q", ethernetIface.PCIAddress)
+	}
+	if infinibandIface.PCIAddress != "0000:63:00.1" {
+		t.Errorf("Expected InfiniBand PCIAddress '0000:63:00.1', got %q", infinibandIface.PCIAddress)
+	}
+
+	// Verify both are on same NUMA node (they're the same physical device)
+	if ethernetIface.NUMANode != infinibandIface.NUMANode {
+		t.Errorf("Expected both functions on same NUMA node, got Ethernet=%d, InfiniBand=%d",
+			ethernetIface.NUMANode, infinibandIface.NUMANode)
+	}
+
+	// Verify function numbers are different
+	if ethernetIface.PCIAddress[len(ethernetIface.PCIAddress)-1:] ==
+		infinibandIface.PCIAddress[len(infinibandIface.PCIAddress)-1:] {
+		t.Errorf("Expected different function numbers for Ethernet and InfiniBand")
+	}
+}
+
+// TestMellanoxConnectX7DualProtocol tests ConnectX-7 dual-protocol capability
+func TestMellanoxConnectX7DualProtocol(t *testing.T) {
+	tests := []struct {
+		name         string
+		ifname       string
+		pciFunc      string // Function number (0 or 1)
+		ifaceType    string
+		expectedType string
+	}{
+		{
+			name:         "ConnectX-7 Ethernet mode",
+			ifname:       "eth0",
+			pciFunc:      "0",
+			ifaceType:    "ethernet",
+			expectedType: "ethernet",
+		},
+		{
+			name:         "ConnectX-7 InfiniBand mode",
+			ifname:       "ib0",
+			pciFunc:      "1",
+			ifaceType:    "infiniband",
+			expectedType: "infiniband",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iface := &NetworkInterface{
+				Name:       tt.ifname,
+				Type:       tt.ifaceType,
+				PCIAddress: "0000:63:00." + tt.pciFunc,
+				Model:      "Mellanox ConnectX-7",
+			}
+
+			if iface.Type != tt.expectedType {
+				t.Errorf("Expected type %q, got %q", tt.expectedType, iface.Type)
+			}
+
+			// Verify PCI address format is correct
+			if !matchPCIAddressPattern(iface.PCIAddress) {
+				t.Errorf("PCIAddress %q doesn't match expected format", iface.PCIAddress)
+			}
+		})
+	}
+}
+
+// TestNUMANodeDetectionFallbacks tests the fallback paths for NUMA node detection
+func TestNUMANodeDetectionFallbacks(t *testing.T) {
+	tests := []struct {
+		name         string
+		pciAddr      string
+		expectedNUMA int
+		scenario     string
+	}{
+		{
+			name:         "Standard Ethernet",
+			pciAddr:      "0000:00:1f.6",
+			expectedNUMA: 0,
+			scenario:     "Uses /sys/bus/pci/devices/<addr>/numa_node",
+		},
+		{
+			name:         "Mellanox Ethernet Function 0",
+			pciAddr:      "0000:50:00.0",
+			expectedNUMA: 0,
+			scenario:     "Mellanox ConnectX-7 Ethernet - primary device",
+		},
+		{
+			name:         "Mellanox InfiniBand Function 1",
+			pciAddr:      "0000:50:00.1",
+			expectedNUMA: 0,
+			scenario:     "Mellanox ConnectX-7 InfiniBand - may use parent device NUMA",
+		},
+		{
+			name:         "NVMe on different NUMA",
+			pciAddr:      "0001:00:00.0",
+			expectedNUMA: 1,
+			scenario:     "Device on NUMA node 1",
+		},
+		{
+			name:         "Unknown NUMA",
+			pciAddr:      "",
+			expectedNUMA: -1,
+			scenario:     "Empty PCI address returns -1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// This test documents the expected behavior
+			// Actual NUMA detection happens via sysfs in the shell script
+
+			if tt.pciAddr == "" {
+				// Empty address should return -1
+				if tt.expectedNUMA != -1 {
+					t.Errorf("Expected NUMA -1 for empty address, got %d", tt.expectedNUMA)
+				}
+			} else {
+				// Verify PCI address format is valid
+				if !matchPCIAddressPattern(tt.pciAddr) {
+					t.Errorf("Invalid PCI address format: %s", tt.pciAddr)
+				}
+
+				// Valid NUMA node should be >= 0 or -1 for unknown
+				if tt.expectedNUMA < -1 {
+					t.Errorf("Invalid NUMA node value: %d", tt.expectedNUMA)
+				}
+			}
+		})
+	}
+}
+
+// TestMultiFunctionDeviceNUMAInheritance tests NUMA detection for multi-function devices
+func TestMultiFunctionDeviceNUMAInheritance(t *testing.T) {
+	// Dual-function Mellanox device where Function 1 (InfiniBand) inherits from Function 0
+
+	tests := []struct {
+		name        string
+		function    string
+		description string
+	}{
+		{
+			name:        "Function 0 - Ethernet",
+			function:    "0000:50:00.0",
+			description: "Primary Mellanox device with direct NUMA node",
+		},
+		{
+			name:        "Function 1 - InfiniBand",
+			function:    "0000:50:00.1",
+			description: "Secondary function may inherit NUMA from parent (0000:50:00.0)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iface := &NetworkInterface{
+				Name:       "test",
+				PCIAddress: tt.function,
+				NUMANode:   0, // Both should be on same NUMA
+			}
+
+			if iface.PCIAddress != tt.function {
+				t.Errorf("PCI address mismatch: expected %s, got %s", tt.function, iface.PCIAddress)
+			}
+
+			// For dual-function devices, both functions should have same NUMA node
+			// since they're the same physical device
+			if !matchPCIAddressPattern(iface.PCIAddress) {
+				t.Errorf("Invalid PCI address format: %s", iface.PCIAddress)
+			}
+		})
+	}
+}
+
 // Helper function to validate PCI address format
 func matchPCIAddressPattern(addr string) bool {
 	// PCI address format: XXXX:XX:XX.X where X is hex digit

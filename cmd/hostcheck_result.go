@@ -88,7 +88,8 @@ type NetworkInterface struct {
 	BondSlave        bool                     `json:"bond_slave"`                // Whether this is a bond slave
 	MaxSpeed         string                   `json:"max_speed,omitempty"`       // Maximum speed (e.g., "100Gbps")
 	EffectiveSpeed   string                   `json:"effective_speed,omitempty"` // Current speed (e.g., "40Gbps")
-	PCIAddress       string                   `json:"pci_address,omitempty"`     // PCI address (e.g., "0000:3d:00.0")
+	PCIAddress       string                   `json:"pci_address"`               // PCI address (e.g., "0000:3d:00.0")
+	NUMANode         int                      `json:"numa_node"`                 // NUMA node (-1 if unknown)
 	Model            string                   `json:"model,omitempty"`           // NIC model (e.g., "CX-7")
 	Metrics          *NetworkInterfaceMetrics `json:"metrics,omitempty"`         // Network statistics
 	Status           string                   `json:"status,omitempty"`          // Interface status (up/down)
@@ -187,4 +188,5 @@ type NVMeDriveInfo struct {
 	Mounted      bool   `json:"mounted"`     // Is the drive currently mounted?
 	MountPoint   string `json:"mount_point"` // Mount point if mounted
 	PCIAddress   string `json:"pci_address"` // PCI address (e.g., "0000:01:00.0")
+	NUMANode     int    `json:"numa_node"`   // NUMA node (-1 if unknown)
 }

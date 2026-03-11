@@ -141,6 +141,16 @@ get_iface_pci_addr() {
   fi
 }
 
+# helper: get NUMA node for a PCI device by fetching from sysfs
+get_pci_numa_node() {
+    local pci="$1" 
+    [[ -z "$pci" ]] && echo -1 && return
+    [[ "$pci" =~ ^[0-9a-fA-F]{2}: ]] && pci="0000:$pci"
+    local f="/sys/bus/pci/devices/$pci/numa_node"
+    [[ -f "$f" ]] && cat "$f" && return
+	echo -1
+}
+
 # helper: get interface type (ethernet or infiniband)
 get_iface_type() {
   local ifname="$1"
@@ -818,6 +828,7 @@ for iface_dir in /host-sys/class/net/*; do
   iface_type="$(get_iface_type "$ifname")"
   ip4="$(iface_ipv4 "$ifname")"
   pci_addr="$(get_iface_pci_addr "$ifname")"
+  numa_node="$(get_pci_numa_node "$pci_addr")" 
   mac="$(get_iface_mac "$ifname")"
   mtu="$(get_iface_mtu "$ifname")"
   status="$(get_iface_status "$ifname")"
@@ -846,6 +857,7 @@ for iface_dir in /host-sys/class/net/*; do
   obj="$obj\"max_speed\":\"$(json_escape "$max_speed")\","
   obj="$obj\"effective_speed\":\"$(json_escape "$effective_speed")\","
   obj="$obj\"pci_address\":\"$(json_escape "$pci_addr")\","
+  obj="$obj\"numa_node\":$numa_node,"
   obj="$obj\"status\":\"$(json_escape "$status")\","
   obj="$obj\"is_default_route\":$is_default_route,"
   obj="$obj\"associated_routes\":[$associated_routes],"
@@ -1222,6 +1234,8 @@ for nvme_dev in /host/dev/nvme[0-9]n[0-9]; do
   model="$(get_nvme_model "$dev_name")"
   size="$(get_nvme_size "$dev_name")"
   pci_addr="$(get_nvme_pci_addr "$dev_name")"
+  numa_node="$(get_pci_numa_node "$pci_addr")"
+  
   mount_info="$(is_nvme_mounted "$dev_name")"
   
   is_mounted="${mount_info%%|*}"
@@ -1235,6 +1249,7 @@ for nvme_dev in /host/dev/nvme[0-9]n[0-9]; do
   obj="$obj\"model\":\"$(json_escape "$model")\","
   obj="$obj\"size\":$size,"
   obj="$obj\"pci_address\":\"$(json_escape "$pci_addr")\","
+  obj="$obj\"numa_node\":$numa_node,"
   obj="$obj\"mounted\":$is_mounted,"
   obj="$obj\"mount_point\":\"$(json_escape "$mount_point")\""
   obj="$obj}"
