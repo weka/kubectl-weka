@@ -118,6 +118,105 @@ func TestBondInfoStructure(t *testing.T) {
 	}
 }
 
+// TestNetworkInterfaceMetrics tests NetworkInterfaceMetrics struct
+func TestNetworkInterfaceMetrics(t *testing.T) {
+	metrics := &NetworkInterfaceMetrics{
+		BytesIn:      1000000000, // 1GB
+		BytesOut:     500000000,  // 500MB
+		PacketsIn:    1000000,
+		PacketsOut:   500000,
+		ErrorsIn:     10,
+		ErrorsOut:    5,
+		DroppedIn:    2,
+		DroppedOut:   1,
+		CollisionsIn: 0,
+		OverrunsIn:   0,
+		OverrunsOut:  0,
+		CRCErrors:    0,
+	}
+
+	if metrics.BytesIn != 1000000000 {
+		t.Errorf("Expected BytesIn 1000000000, got %d", metrics.BytesIn)
+	}
+	if metrics.PacketsIn != 1000000 {
+		t.Errorf("Expected PacketsIn 1000000, got %d", metrics.PacketsIn)
+	}
+	if metrics.ErrorsIn != 10 {
+		t.Errorf("Expected ErrorsIn 10, got %d", metrics.ErrorsIn)
+	}
+}
+
+// TestNetworkInterface tests NetworkInterface struct with all fields
+func TestNetworkInterface(t *testing.T) {
+	iface := &NetworkInterface{
+		Name:           "eth0",
+		Type:           "ethernet",
+		IP:             "10.0.0.1/24",
+		MTU:            1500,
+		MAC:            "52:54:00:12:34:56",
+		BondMaster:     "",
+		BondSlave:      false,
+		MaxSpeed:       "10Gbps",
+		EffectiveSpeed: "10Gbps",
+		PCIAddress:     "0000:01:00.0",
+		Model:          "Intel I350",
+		Status:         "up",
+		Metrics: &NetworkInterfaceMetrics{
+			BytesIn:   5000000000,
+			BytesOut:  3000000000,
+			PacketsIn: 5000000,
+		},
+	}
+
+	if iface.Name != "eth0" {
+		t.Errorf("Expected name 'eth0', got %q", iface.Name)
+	}
+	if iface.Type != "ethernet" {
+		t.Errorf("Expected type 'ethernet', got %q", iface.Type)
+	}
+	if iface.PCIAddress != "0000:01:00.0" {
+		t.Errorf("Expected PCIAddress '0000:01:00.0', got %q", iface.PCIAddress)
+	}
+	if iface.MaxSpeed != "10Gbps" {
+		t.Errorf("Expected MaxSpeed '10Gbps', got %q", iface.MaxSpeed)
+	}
+	if iface.EffectiveSpeed != "10Gbps" {
+		t.Errorf("Expected EffectiveSpeed '10Gbps', got %q", iface.EffectiveSpeed)
+	}
+	if iface.Metrics == nil {
+		t.Errorf("Expected Metrics to be set, got nil")
+	}
+	if iface.Metrics.BytesIn != 5000000000 {
+		t.Errorf("Expected Metrics.BytesIn 5000000000, got %d", iface.Metrics.BytesIn)
+	}
+}
+
+// TestNetworkInterfaceInfiniBand tests InfiniBand interface
+func TestNetworkInterfaceInfiniBand(t *testing.T) {
+	iface := &NetworkInterface{
+		Name:           "ib0",
+		Type:           "infiniband",
+		IP:             "192.168.1.10/24",
+		MTU:            2048,
+		BondSlave:      false,
+		MaxSpeed:       "400Gbps",
+		EffectiveSpeed: "400Gbps",
+		PCIAddress:     "0000:3d:00.0",
+		Model:          "Mellanox ConnectX-7",
+		Status:         "up",
+	}
+
+	if iface.Type != "infiniband" {
+		t.Errorf("Expected type 'infiniband', got %q", iface.Type)
+	}
+	if iface.MaxSpeed != "400Gbps" {
+		t.Errorf("Expected MaxSpeed '400Gbps', got %q", iface.MaxSpeed)
+	}
+	if iface.Model != "Mellanox ConnectX-7" {
+		t.Errorf("Expected Model 'Mellanox ConnectX-7', got %q", iface.Model)
+	}
+}
+
 // TestNVMeDriveInfo tests NVMeDriveInfo struct
 func TestNVMeDriveInfo(t *testing.T) {
 	drive := NVMeDriveInfo{
@@ -128,6 +227,7 @@ func TestNVMeDriveInfo(t *testing.T) {
 		Size:         1099511627776, // 1TB
 		Mounted:      true,
 		MountPoint:   "/mnt/nvme0n1",
+		PCIAddress:   "0000:01:00.0",
 	}
 
 	if drive.DeviceName != "nvme0n1" {
@@ -141,5 +241,8 @@ func TestNVMeDriveInfo(t *testing.T) {
 	}
 	if !drive.Mounted {
 		t.Errorf("Expected Mounted=true, got %v", drive.Mounted)
+	}
+	if drive.PCIAddress != "0000:01:00.0" {
+		t.Errorf("Expected PCIAddress '0000:01:00.0', got %q", drive.PCIAddress)
 	}
 }

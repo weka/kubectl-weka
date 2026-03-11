@@ -100,6 +100,100 @@ iface_ipv4() {
   ip -o -4 addr show dev "$1" 2>/dev/null | awk '{print $4}' | head -n1 || true
 }
 
+# helper: get PCI address for network interface
+get_iface_pci_addr() {
+  local ifname="$1"
+  local pci_dir="/host-sys/class/net/$ifname/device"
+  
+  if [ -d "$pci_dir" ]; then
+    # Resolve the symlink to get the actual PCI address
+    local pci_path="$(readlink -f "$pci_dir" 2>/dev/null || true)"
+    if [ -n "$pci_path" ]; then
+      # Extract PCI address from path like /sys/devices/pci0000:00/0000:00:1f.6
+      basename "$pci_path"
+    fi
+  fi
+}
+
+# helper: get interface type (ethernet or infiniband)
+get_iface_type() {
+  local ifname="$1"
+  local sysfs="/host-sys/class/net/$ifname"
+  
+  # Check for InfiniBand
+  if [ -d "$sysfs/device/infiniband" ]; then
+    echo "infiniband"
+    return
+  fi
+  
+  # Check device type
+  if [ -f "$sysfs/type" ]; then
+    local type="$(cat "$sysfs/type" 2>/dev/null || true)"
+    case "$type" in
+      32) echo "infiniband" ;;
+      1|*) echo "ethernet" ;;  # 1 is Ethernet, default to ethernet
+    esac
+  else
+    echo "ethernet"
+  fi
+}
+
+# helper: get interface MAC address
+get_iface_mac() {
+  local ifname="$1"
+  [ -f "/host-sys/class/net/$ifname/address" ] && cat "/host-sys/class/net/$ifname/address" 2>/dev/null || echo ""
+}
+
+# helper: get interface MTU
+get_iface_mtu() {
+  local ifname="$1"
+  [ -f "/host-sys/class/net/$ifname/mtu" ] && cat "/host-sys/class/net/$ifname/mtu" 2>/dev/null || echo "0"
+}
+
+# helper: get interface status (up/down)
+get_iface_status() {
+  local ifname="$1"
+  if [ -f "/host-sys/class/net/$ifname/operstate" ]; then
+    cat "/host-sys/class/net/$ifname/operstate" 2>/dev/null || echo "unknown"
+  else
+    echo "unknown"
+  fi
+}
+
+# helper: get network interface metrics from /proc/net/dev
+get_iface_metrics() {
+  local ifname="$1"
+  local metrics_line
+  
+  metrics_line="$(grep -E "^\s*$ifname:" /host/proc/net/dev 2>/dev/null | sed 's/.*:\s*//' || true)"
+  
+  if [ -z "$metrics_line" ]; then
+    echo ""
+    return
+  fi
+  
+  # Format: bytes_rcvd packets_rcvd errs_rcvd drop_rcvd fifo_rcvd frame_rcvd compressed_rcvd multicast_rcvd
+  #         bytes_sent packets_sent errs_sent drop_sent fifo_sent colls_sent carrier_sent compressed_sent
+  
+  local bytes_in="$(echo "$metrics_line" | awk '{print $1}' | sed 's/[^0-9]//g')"
+  local packets_in="$(echo "$metrics_line" | awk '{print $2}' | sed 's/[^0-9]//g')"
+  local errors_in="$(echo "$metrics_line" | awk '{print $3}' | sed 's/[^0-9]//g')"
+  local dropped_in="$(echo "$metrics_line" | awk '{print $4}' | sed 's/[^0-9]//g')"
+  local overruns_in="$(echo "$metrics_line" | awk '{print $5}' | sed 's/[^0-9]//g')"
+  
+  local bytes_out="$(echo "$metrics_line" | awk '{print $9}' | sed 's/[^0-9]//g')"
+  local packets_out="$(echo "$metrics_line" | awk '{print $10}' | sed 's/[^0-9]//g')"
+  local errors_out="$(echo "$metrics_line" | awk '{print $11}' | sed 's/[^0-9]//g')"
+  local dropped_out="$(echo "$metrics_line" | awk '{print $12}' | sed 's/[^0-9]//g')"
+  local overruns_out="$(echo "$metrics_line" | awk '{print $13}' | sed 's/[^0-9]//g')"
+  local collisions="$(echo "$metrics_line" | awk '{print $14}' | sed 's/[^0-9]//g')"
+  
+  printf '{"bytes_in":%d,"bytes_out":%d,"packets_in":%d,"packets_out":%d,"errors_in":%d,"errors_out":%d,"dropped_in":%d,"dropped_out":%d,"overruns_in":%d,"overruns_out":%d,"collisions_in":%d,"crc_errors":0}' \
+    "${bytes_in:-0}" "${bytes_out:-0}" "${packets_in:-0}" "${packets_out:-0}" \
+    "${errors_in:-0}" "${errors_out:-0}" "${dropped_in:-0}" "${dropped_out:-0}" \
+    "${overruns_in:-0}" "${overruns_out:-0}" "${collisions:-0}"
+}
+
 # helper: bond master name if enslaved, else empty
 iface_bond_master() {
   # use host sysfs to avoid dependence on iproute details
@@ -154,7 +248,63 @@ iface_speed() {
   echo "unknown"
 }
 
-# enumerate Mellanox NIC PCI functions, then their net ifaces
+# ----- Generic Network Interfaces Collection (Ethernet + InfiniBand) -----
+NETWORK_IFACES_JSON=""
+NETWORK_IFACES_COUNT=0
+
+# Scan all network interfaces
+for iface_dir in /host-sys/class/net/*; do
+  [ -d "$iface_dir" ] || continue
+  ifname="$(basename "$iface_dir")"
+  
+  # Skip loopback
+  [ "$ifname" = "lo" ] && continue
+  
+  # Get interface information
+  iface_type="$(get_iface_type "$ifname")"
+  ip4="$(iface_ipv4 "$ifname")"
+  pci_addr="$(get_iface_pci_addr "$ifname")"
+  mac="$(get_iface_mac "$ifname")"
+  mtu="$(get_iface_mtu "$ifname")"
+  status="$(get_iface_status "$ifname")"
+  bond_master="$(iface_bond_master "$ifname")"
+  is_bond_slave=false
+  [ -n "$bond_master" ] && is_bond_slave=true
+  max_speed="$(iface_speed "$ifname")"
+  effective_speed="$max_speed"  # TODO: Could be extended to read negotiated speed separately
+  metrics="$(get_iface_metrics "$ifname")"
+  
+  # Build JSON object
+  obj="{"
+  obj="$obj\"name\":\"$(json_escape "$ifname")\","
+  obj="$obj\"type\":\"$(json_escape "$iface_type")\","
+  obj="$obj\"ip\":\"$(json_escape "$ip4")\","
+  obj="$obj\"mtu\":$mtu,"
+  obj="$obj\"mac\":\"$(json_escape "$mac")\","
+  obj="$obj\"bond_master\":\"$(json_escape "$bond_master")\","
+  obj="$obj\"bond_slave\":$is_bond_slave,"
+  obj="$obj\"max_speed\":\"$(json_escape "$max_speed")\","
+  obj="$obj\"effective_speed\":\"$(json_escape "$effective_speed")\","
+  obj="$obj\"pci_address\":\"$(json_escape "$pci_addr")\","
+  obj="$obj\"status\":\"$(json_escape "$status")\","
+  obj="$obj\"metrics\":$metrics"
+  obj="$obj}"
+  
+  if [ "$NETWORK_IFACES_COUNT" -gt 0 ]; then
+    NETWORK_IFACES_JSON="${NETWORK_IFACES_JSON},"
+  fi
+  NETWORK_IFACES_JSON="${NETWORK_IFACES_JSON}${obj}"
+  NETWORK_IFACES_COUNT=$((NETWORK_IFACES_COUNT+1))
+done
+
+NETWORK_DETAIL=""
+if [ "$NETWORK_IFACES_COUNT" -gt 0 ]; then
+  NETWORK_DETAIL="found $NETWORK_IFACES_COUNT interface(s)"
+else
+  NETWORK_DETAIL="no network interfaces found"
+fi
+
+# ----- Mellanox interface inventory -----
 for d in /host-sys/bus/pci/devices/*; do
   [ -f "$d/vendor" ] || continue
   v="$(cat "$d/vendor" 2>/dev/null || true)"
@@ -383,6 +533,24 @@ NVME_DRIVES_JSON=""
 NVME_DRIVES_COUNT=0
 NVME_DETAIL="no NVMe drives found"
 
+# Function to get NVMe drive PCI address
+get_nvme_pci_addr() {
+  local dev="$1"
+  local pci_addr=""
+  
+  # Try to get PCI address from sysfs
+  # NVMe devices are usually at /sys/devices/pci*/*/nvme/
+  if [ -L "/host-sys/class/block/$dev/device" ]; then
+    local device_path="$(readlink -f "/host-sys/class/block/$dev/device" 2>/dev/null || true)"
+    if [ -n "$device_path" ]; then
+      # Extract PCI address from path
+      pci_addr="$(basename "$device_path" 2>/dev/null || true)"
+    fi
+  fi
+  
+  echo "$pci_addr"
+}
+
 # Function to get drive serial number from sysfs
 get_nvme_serial() {
   local dev="$1"
@@ -455,16 +623,24 @@ is_nvme_mounted() {
   echo "false|"
 }
 
-# Scan for NVMe drives in /dev
-for nvme_dev in /host/dev/nvme[0-9]n[0-9]*; do
+# Scan for NVMe drives in /dev (only base devices, not partitions)
+for nvme_dev in /host/dev/nvme[0-9]n[0-9]; do
   [ -b "$nvme_dev" ] || continue
   
   dev_name="$(basename "$nvme_dev")"
+  
+  # Skip if this is a partition (contains 'p' followed by digits)
+  # Valid: nvme0n1, nvme5n3
+  # Invalid: nvme0n1p1, nvme5n1p2
+  case "$dev_name" in
+    *p[0-9]*) continue ;;  # Skip partitions
+  esac
   
   # Get drive information
   serial="$(get_nvme_serial "$dev_name")"
   model="$(get_nvme_model "$dev_name")"
   size="$(get_nvme_size "$dev_name")"
+  pci_addr="$(get_nvme_pci_addr "$dev_name")"
   mount_info="$(is_nvme_mounted "$dev_name")"
   
   is_mounted="${mount_info%%|*}"
@@ -477,6 +653,7 @@ for nvme_dev in /host/dev/nvme[0-9]n[0-9]*; do
   obj="$obj\"serial\":\"$(json_escape "$serial")\","
   obj="$obj\"model\":\"$(json_escape "$model")\","
   obj="$obj\"size\":$size,"
+  obj="$obj\"pci_address\":\"$(json_escape "$pci_addr")\","
   obj="$obj\"mounted\":$is_mounted,"
   obj="$obj\"mount_point\":\"$(json_escape "$mount_point")\""
   obj="$obj}"
@@ -504,6 +681,11 @@ printf '"xfs_installed":%s,' "$([ "$XFS_OK" -eq 1 ] && echo true || echo false)"
 printf '"xfs_detail":"%s",' "$(json_escape "$XFS_DETAIL")"
 printf '"weka_client_clean":%s,' "$([ "$WEKA_CLEAN" -eq 1 ] && echo true || echo false)"
 printf '"weka_client_detail":"%s",' "$(json_escape "$WEKA_DETAIL")"
+printf '"network_interfaces":[%s],' "$NETWORK_IFACES_JSON"
+printf '"network_interface_count":%d,' "$NETWORK_IFACES_COUNT"
+printf '"network_interface_detail":"%s",' "$(json_escape "$NETWORK_DETAIL")"
+printf '"mellanox":%s,' "$MLX_PRESENT"
+printf '"mellanox_detail":"%s",' "$(json_escape "Mellanox interface count: $MLX_IFACES_COUNT")"
 printf '"mlx_ifaces":[%s],' "$MLX_IFACES_JSON"
 printf '"mlx_bonds":[%s],' "$MLX_BONDS_JSON"
 printf '"bond_lacp_ok":%s,' "$([ "$BOND_LACP_OK" -eq 1 ] && echo true || echo false)"

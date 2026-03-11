@@ -686,23 +686,101 @@ The `NodesDescriptionCollector` includes a specialized `collectHostChecks()` met
    - Files: `{nodeName}_hostcheck.json`
    - One file per node with complete host check data
 
-4. **Collected Data Includes**
-   - OS and kernel information
-   - WEKA directory availability and size
-   - Network interfaces (Mellanox, bonds, LACP)
-   - CPU and memory configuration
-   - NVMe drive inventory
-   - System performance tuning parameters
+4. **Extended Hostcheck Data**
+   
+   The hostcheck now collects comprehensive information:
+   
+   - **OS and System**
+     - OS release information
+     - Kernel version
+     - CPU model, family, architecture
+   
+   - **Network Interfaces** (generic section)
+     - All Ethernet and InfiniBand interfaces
+     - Connection type and speeds (max and effective)
+     - PCI addresses for hardware mapping
+     - MTU, MAC address, bonding information
+     - Network metrics: bytes/packets in/out
+     - Error tracking: errors, drops, collisions, overruns, CRC errors
+   
+   - **Mellanox-Specific Interfaces** (backward compatible)
+     - Mellanox NIC detection
+     - LACP bond configuration
+     - Bond-specific information
+   
+   - **Storage**
+     - NVMe drive inventory with PCI addresses
+     - Drive models, serial numbers, sizes
+     - Mount point information
+   
+   - **Compute Resources**
+     - CPU cores (physical and logical)
+     - Hyperthreading status
+     - Memory capacity and available memory
+     - Hugepage configuration
+   
+   - **WEKA Resources**
+     - WEKA directory availability
+     - Available storage space
+     - WEKA client status
+     - XFS tools detection
 
-**Example JSON Output:**
+**Example JSON Output with Network Interfaces:**
 ```json
 {
   "os_release": "Ubuntu 22.04 LTS",
   "kernel_version": "5.15.0-1234-aws",
+  "network_interfaces": [
+    {
+      "name": "eth0",
+      "type": "ethernet",
+      "ip": "10.0.0.1/24",
+      "mtu": 1500,
+      "max_speed": "10Gbps",
+      "effective_speed": "10Gbps",
+      "pci_address": "0000:01:00.0",
+      "model": "Intel I350",
+      "status": "up",
+      "metrics": {
+        "bytes_in": 5000000000,
+        "bytes_out": 3000000000,
+        "packets_in": 5000000,
+        "errors_in": 0,
+        "crc_errors": 0
+      }
+    },
+    {
+      "name": "ib0",
+      "type": "infiniband",
+      "ip": "192.168.1.10/24",
+      "mtu": 2048,
+      "max_speed": "400Gbps",
+      "effective_speed": "400Gbps",
+      "pci_address": "0000:3d:00.0",
+      "model": "Mellanox ConnectX-7",
+      "status": "up",
+      "metrics": {
+        "bytes_in": 50000000000,
+        "bytes_out": 30000000000
+      }
+    }
+  ],
+  "network_interface_count": 2,
+  "nvme_drives": [
+    {
+      "device_name": "nvme0n1",
+      "device_path": "/dev/nvme0n1",
+      "serial": "SERIAL123",
+      "model": "Samsung 970 EVO",
+      "size": 1099511627776,
+      "pci_address": "0000:01:00.0",
+      "mounted": true,
+      "mount_point": "/mnt/nvme0n1"
+    }
+  ],
   "weka_dir_ok": true,
   "weka_dir_path": "/mnt/weka",
   "weka_dir_avail_bytes": 1649267441664,
-  "mellanox": true,
   "physical_cores": 32,
   "logical_cores": 64,
   "memory_bytes": 274877906944,

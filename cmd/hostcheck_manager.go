@@ -186,6 +186,7 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 
 	// Wait for pods to complete and collect results
 	deadline := time.Now().Add(opts.Timeout)
+	collectionErrors := make(map[string]string)
 
 	for time.Now().Before(deadline) {
 		allCompleted := true
@@ -203,15 +204,48 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 				// Pod completed, read logs
 				if _, exists := hostChecksMap[nodeName]; !exists {
 					logs, err := getPodLogs(ctx, currentPod.Namespace, currentPod.Name, "hostchecks")
-					if err == nil {
+					if err != nil {
+						collectionErrors[nodeName] = fmt.Sprintf("failed to read pod logs: %v", err)
+						if opts.Verbose {
+							fmt.Printf("  [%s] Failed to read logs: %v\n", nodeName, err)
+						}
+					} else {
 						var hc HostChecksResult
-						if err := json.Unmarshal([]byte(logs), &hc); err == nil {
+						if err := json.Unmarshal([]byte(logs), &hc); err != nil {
+							collectionErrors[nodeName] = fmt.Sprintf("failed to parse hostcheck JSON: %v\nFirst 200 chars of output: %s",
+								err, truncateString(logs, 200))
+							if opts.Verbose {
+								fmt.Printf("  [%s] Failed to parse JSON: %v\n", nodeName, err)
+								fmt.Printf("       Output: %s\n", truncateString(logs, 200))
+							}
+						} else {
 							hostChecksMap[nodeName] = &hc
+							if opts.Verbose {
+								fmt.Printf("  [%s] ✅ Collected hostcheck data\n", nodeName)
+							}
 						}
 					}
 				}
 			} else if currentPod.Status.Phase != corev1.PodPending && currentPod.Status.Phase != corev1.PodRunning {
-				// Pod failed
+				// Pod failed - get error info
+				if len(currentPod.Status.ContainerStatuses) > 0 {
+					containerStatus := currentPod.Status.ContainerStatuses[0]
+					if containerStatus.State.Terminated != nil {
+						msg := containerStatus.State.Terminated.Message
+						if msg == "" {
+							msg = containerStatus.State.Terminated.Reason
+						}
+						collectionErrors[nodeName] = fmt.Sprintf("pod failed: %s", msg)
+						if opts.Verbose {
+							fmt.Printf("  [%s] Pod failed: %s\n", nodeName, msg)
+						}
+					}
+				} else {
+					collectionErrors[nodeName] = fmt.Sprintf("pod phase: %s", currentPod.Status.Phase)
+					if opts.Verbose {
+						fmt.Printf("  [%s] Pod failed with phase: %s\n", nodeName, currentPod.Status.Phase)
+					}
+				}
 				delete(createdPods, nodeName)
 			} else {
 				allCompleted = false
@@ -230,7 +264,16 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 	}
 
 	if len(hostChecksMap) == 0 {
-		return nil, fmt.Errorf("failed to collect hostcheck information from any node")
+		// Build detailed error message with all collection errors
+		var errorDetails strings.Builder
+		errorDetails.WriteString("failed to collect hostcheck information from any node")
+		if len(collectionErrors) > 0 {
+			errorDetails.WriteString(":\n")
+			for nodeName, errMsg := range collectionErrors {
+				errorDetails.WriteString(fmt.Sprintf("  [%s] %s\n", nodeName, errMsg))
+			}
+		}
+		return nil, fmt.Errorf(errorDetails.String())
 	}
 
 	return hostChecksMap, nil
@@ -679,4 +722,12 @@ func (r *HostCheckRegistry) PrintNodeValidationResults(
 	output, status := r.FormatNodeValidationResults(nodeName, commandName, moduleResults)
 	fmt.Print(output)
 	return status
+}
+
+// truncateString truncates a string to maxLength characters and adds ellipsis if needed
+func truncateString(s string, maxLength int) string {
+	if len(s) <= maxLength {
+		return s
+	}
+	return s[:maxLength] + "..."
 }

@@ -4,6 +4,17 @@
 
 ### Features
 
+* **Extended Hostcheck Information** – Comprehensive network and storage device data:
+  * Generic network interface collection: Ethernet and InfiniBand interfaces
+  * Network traffic metrics: bytes/packets in/out, errors, drops, collisions, overruns, CRC errors
+  * Network speed information: maximum speed and effective/negotiated speed
+  * PCI address identification: for all network interfaces and NVMe drives
+  * Separate sections for generic network interfaces and Mellanox-specific interfaces
+  * Interface bonding support: track bond master/slave relationships
+  * MTU and MAC address information
+  * Interface status (up/down) detection
+  * Backward compatible with existing Mellanox interface data
+
 * **Host Checks Collection in Support Bundle** – New section collects hardware and system information:
   * Automatically runs on all nodes in all support-bundle commands
   * Uses `GlobalHostCheckRegistry` with intelligent caching to avoid redundant execution
