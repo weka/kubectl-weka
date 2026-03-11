@@ -11,6 +11,5 @@ is packaged into a compressed archive that can be shared with support.`,
 }
 
 func init() {
-	rootCmd.AddCommand(supportBundleCmd)
 	supportBundleCmd.PersistentFlags().BoolVar(&supportBundleDebug, "debug", false, "Enable debug output")
 }
