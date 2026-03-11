@@ -1,5 +1,13 @@
 package cmd
 
+// CNIDetection contains detected CNI configuration from the node
+type CNIDetection struct {
+	PodCIDR  string `json:"pod_cidr,omitempty"` // Detected Pod CIDR (e.g., "10.244.0.0/24")
+	Source   string `json:"source,omitempty"`   // Source of detection (kubelet_config, kubelet_args, flannel_data, config_files)
+	CNIType  string `json:"cni_type,omitempty"` // CNI implementation (flannel, calico, weave, unknown)
+	Detected bool   `json:"detected"`           // Whether CNI was successfully detected
+}
+
 // NetworkInterfaceMetrics contains network traffic and error statistics
 type NetworkInterfaceMetrics struct {
 	BytesIn      int64 `json:"bytes_in"`      // Total bytes received
@@ -42,12 +50,30 @@ type RoutingTableInfo struct {
 	Routes    []RouteEntry `json:"routes"`             // All routes in this table
 }
 
+// SubnetInterface represents a network interface on a subnet
+type SubnetInterface struct {
+	Name string `json:"name"` // Interface name (eth0, ib0, etc.)
+	IP   string `json:"ip"`   // IP address on this subnet (x.x.x.x)
+}
+
+// Subnet represents a network subnet with its interfaces
+type Subnet struct {
+	NetworkAddress string            `json:"network_address"` // Network address (x.x.x.x)
+	Netmask        string            `json:"netmask"`         // Netmask (x.x.x.x)
+	CIDR           string            `json:"cidr"`            // CIDR notation (x.x.x.x/y)
+	Interfaces     []SubnetInterface `json:"interfaces"`      // Interfaces on this subnet
+	InterfaceCount int               `json:"interface_count"` // Number of interfaces
+	IsCNISubnet    bool              `json:"is_cni_subnet"`   // True if Kubernetes CNI subnet
+}
+
 // NetworkNamespaceRouting contains routing info for a network namespace
 type NetworkNamespaceRouting struct {
 	Namespace     string             `json:"namespace"`      // Namespace name (empty = default)
 	RoutingTables []RoutingTableInfo `json:"routing_tables"` // All routing tables
 	RoutingRules  []RoutingRule      `json:"routing_rules"`  // All policy-based routing rules
 	RuleCount     int                `json:"rule_count"`     // Total number of rules
+	Subnets       []Subnet           `json:"subnets"`        // All subnets on the system
+	SubnetCount   int                `json:"subnet_count"`   // Total number of subnets
 	TableCount    int                `json:"table_count"`    // Total number of tables
 }
 
@@ -129,6 +155,9 @@ type HostChecksResult struct {
 	// Routing Configuration (for source-based routing and multi-path verification)
 	NetworkNamespaceRouting *NetworkNamespaceRouting `json:"network_namespace_routing"` // Routing info for default namespace
 	RoutingDetail           string                   `json:"routing_detail"`            // Summary of routing config
+
+	// CNI Detection (detected from node configuration)
+	CNIDetection *CNIDetection `json:"cni_detection,omitempty"` // Detected CNI Pod CIDR configuration
 
 	// CPU and Memory info
 	HTEnabled       bool   `json:"ht_enabled"`

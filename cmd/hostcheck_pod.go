@@ -115,11 +115,28 @@ get_iface_pci_addr() {
   local pci_dir="/host-sys/class/net/$ifname/device"
   
   if [ -d "$pci_dir" ]; then
-    # Resolve the symlink to get the actual PCI address
+    # Resolve the symlink to get the actual device path
     local pci_path="$(readlink -f "$pci_dir" 2>/dev/null || true)"
     if [ -n "$pci_path" ]; then
-      # Extract PCI address from path like /sys/devices/pci0000:00/0000:00:1f.6
-      basename "$pci_path"
+      # Try to extract PCI address from path
+      # Look for pattern like 0000:00:1d.0 in the device path
+      local pci_addr=$(echo "$pci_path" | grep -o '[0-9a-f]\{4\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}\.[0-9]' | tail -n1)
+      
+      # If regex didn't work, try alternative method using directory walking
+      if [ -z "$pci_addr" ]; then
+        # Walk up the sysfs tree to find a directory matching PCI address format
+        local dev_dir="$(dirname "$pci_path")"
+        while [ -n "$dev_dir" ] && [ "$dev_dir" != "/" ] && [ "$dev_dir" != "/host" ]; do
+          local dir_name="$(basename "$dev_dir")"
+          if echo "$dir_name" | grep -q '^[0-9a-f]\{4\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}\.[0-9]'; then
+            pci_addr="$dir_name"
+            break
+          fi
+          dev_dir="$(dirname "$dev_dir")"
+        done
+      fi
+      
+      echo "$pci_addr"
     fi
   fi
 }
@@ -313,6 +330,366 @@ get_routes_for_iface() {
   echo "$route_json"
 }
 
+# helper: detect CNI Pod CIDR from kubelet configuration
+get_cni_from_kubelet_config() {
+  local kubelet_conf="/host/etc/kubernetes/kubelet.conf"
+  
+  # Try standard location first
+  if [ -f "$kubelet_conf" ]; then
+    grep -o '"podCIDR":"[^"]*"' "$kubelet_conf" 2>/dev/null | cut -d'"' -f4
+    return 0
+  fi
+  
+  # Try alternative location
+  kubelet_conf="/host/var/lib/kubelet/kubeconfig"
+  if [ -f "$kubelet_conf" ]; then
+    grep -o '"podCIDR":"[^"]*"' "$kubelet_conf" 2>/dev/null | cut -d'"' -f4
+    return 0
+  fi
+  
+  return 1
+}
+
+# helper: detect CNI Pod CIDR from kubelet process arguments
+get_cni_from_kubelet_args() {
+  # Find kubelet process
+  local kubelet_pid=""
+  
+  # Try pgrep first
+  kubelet_pid=$(pgrep -f "[k]ubelet" 2>/dev/null | head -n1)
+  
+  if [ -n "$kubelet_pid" ] && [ -f "/proc/$kubelet_pid/cmdline" ]; then
+    # Read cmdline (arguments are null-separated)
+    tr '\0' ' ' < "/proc/$kubelet_pid/cmdline" 2>/dev/null | grep -o "\--pod-cidr=[^ ]*" | cut -d= -f2
+    return 0
+  fi
+  
+  return 1
+}
+
+# helper: detect CNI Pod CIDR from Flannel data file
+get_cni_from_flannel_data() {
+  local flannel_file="/host/var/lib/cni/flannel/subnet.env"
+  
+  if [ -f "$flannel_file" ]; then
+    # Extract network from Flannel config
+    grep "^FLANNEL_NETWORK" "$flannel_file" 2>/dev/null | cut -d= -f2
+    return 0
+  fi
+  
+  return 1
+}
+
+# helper: detect CNI type and settings from CNI config files
+get_cni_from_config_files() {
+  local cni_dir="/host/etc/cni/net.d"
+  local cni_type=""
+  local pod_cidr=""
+  
+  if [ ! -d "$cni_dir" ]; then
+    return 1
+  fi
+  
+  # Check for Flannel
+  if [ -f "$cni_dir/10-flannel.conflist" ]; then
+    cni_type="flannel"
+    pod_cidr=$(grep -o '"Network":"[^"]*"' "$cni_dir/10-flannel.conflist" 2>/dev/null | cut -d'"' -f4)
+    echo "$cni_type|$pod_cidr"
+    return 0
+  fi
+  
+  # Check for Calico
+  if [ -f "$cni_dir/10-calico.conflist" ]; then
+    cni_type="calico"
+    pod_cidr=$(grep -o '"subnet":"[^"]*"' "$cni_dir/10-calico.conflist" 2>/dev/null | cut -d'"' -f4 | head -n1)
+    echo "$cni_type|$pod_cidr"
+    return 0
+  fi
+  
+  # Check for Weave
+  if [ -f "$cni_dir/10-weave.conf" ]; then
+    cni_type="weave"
+    pod_cidr=$(grep -o '"subnet":"[^"]*"' "$cni_dir/10-weave.conf" 2>/dev/null | cut -d'"' -f4 | head -n1)
+    echo "$cni_type|$pod_cidr"
+    return 0
+  fi
+  
+  # Generic search for Network or subnet in any config
+  for config in "$cni_dir"/*.conf*; do
+    if [ -f "$config" ]; then
+      # Try to extract Network (Flannel pattern)
+      pod_cidr=$(grep -o '"Network":"[^"]*"' "$config" 2>/dev/null | cut -d'"' -f4)
+      if [ -n "$pod_cidr" ]; then
+        cni_type="unknown"
+        echo "$cni_type|$pod_cidr"
+        return 0
+      fi
+      
+      # Try to extract subnet (Calico/Weave pattern)
+      pod_cidr=$(grep -o '"subnet":"[^"]*"' "$config" 2>/dev/null | cut -d'"' -f4 | head -n1)
+      if [ -n "$pod_cidr" ]; then
+        cni_type="unknown"
+        echo "$cni_type|$pod_cidr"
+        return 0
+      fi
+    fi
+  done
+  
+  return 1
+}
+
+# helper: comprehensive CNI Pod CIDR detection with fallback chain
+detect_cni_pod_cidr() {
+  local pod_cidr=""
+  local source=""
+  local cni_type=""
+  
+  # Priority 1: Kubelet config (most reliable)
+  pod_cidr=$(get_cni_from_kubelet_config)
+  if [ -n "$pod_cidr" ]; then
+    echo "$pod_cidr|kubelet_config|unknown"
+    return 0
+  fi
+  
+  # Priority 2: Kubelet process arguments
+  pod_cidr=$(get_cni_from_kubelet_args)
+  if [ -n "$pod_cidr" ]; then
+    echo "$pod_cidr|kubelet_args|unknown"
+    return 0
+  fi
+  
+  # Priority 3: Flannel data file
+  pod_cidr=$(get_cni_from_flannel_data)
+  if [ -n "$pod_cidr" ]; then
+    echo "$pod_cidr|flannel_data|flannel"
+    return 0
+  fi
+  
+  # Priority 4: CNI config files
+  local cni_info=""
+  cni_info=$(get_cni_from_config_files)
+  if [ -n "$cni_info" ]; then
+    cni_type=$(echo "$cni_info" | cut -d'|' -f1)
+    pod_cidr=$(echo "$cni_info" | cut -d'|' -f2)
+    if [ -n "$pod_cidr" ]; then
+      echo "$pod_cidr|config_files|$cni_type"
+      return 0
+    fi
+  fi
+  
+  # No CNI detected
+  return 1
+}
+
+# helper: convert IP and CIDR prefix to netmask
+cidr_to_netmask() {
+  local cidr="$1"
+  local prefix="${cidr##*/}"
+  
+  if [ -z "$prefix" ] || [ "$prefix" = "$cidr" ]; then
+    echo "255.255.255.255"
+    return
+  fi
+  
+  # Complete CIDR to netmask conversion for all sizes 0-32
+  case "$prefix" in
+    0) echo "0.0.0.0" ;;
+    1) echo "128.0.0.0" ;;
+    2) echo "192.0.0.0" ;;
+    3) echo "224.0.0.0" ;;
+    4) echo "240.0.0.0" ;;
+    5) echo "248.0.0.0" ;;
+    6) echo "252.0.0.0" ;;
+    7) echo "254.0.0.0" ;;
+    8) echo "255.0.0.0" ;;
+    9) echo "255.128.0.0" ;;
+    10) echo "255.192.0.0" ;;
+    11) echo "255.224.0.0" ;;
+    12) echo "255.240.0.0" ;;
+    13) echo "255.248.0.0" ;;
+    14) echo "255.252.0.0" ;;
+    15) echo "255.254.0.0" ;;
+    16) echo "255.255.0.0" ;;
+    17) echo "255.255.128.0" ;;
+    18) echo "255.255.192.0" ;;
+    19) echo "255.255.224.0" ;;
+    20) echo "255.255.240.0" ;;
+    21) echo "255.255.248.0" ;;
+    22) echo "255.255.252.0" ;;
+    23) echo "255.255.254.0" ;;
+    24) echo "255.255.255.0" ;;
+    25) echo "255.255.255.128" ;;
+    26) echo "255.255.255.192" ;;
+    27) echo "255.255.255.224" ;;
+    28) echo "255.255.255.240" ;;
+    29) echo "255.255.255.248" ;;
+    30) echo "255.255.255.252" ;;
+    31) echo "255.255.255.254" ;;
+    32) echo "255.255.255.255" ;;
+    *) echo "255.255.255.0" ;; # fallback for invalid input
+  esac
+}
+
+
+# helper: get network address from IP and CIDR prefix
+get_network_address() {
+  local ip="$1"
+  local prefix="${2##*/}"
+  
+  # Simple extraction of network address for common CIDR sizes
+  case "$prefix" in
+    24)
+      echo "$ip" | sed 's/\([^.]*\.[^.]*\.[^.]*\)\..*/\1.0/'
+      ;;
+    16)
+      echo "$ip" | sed 's/\([^.]*\.[^.]*\)\..*/\1.0.0/'
+      ;;
+    8)
+      echo "$ip" | sed 's/\([^.]*\)\..*/\1.0.0.0/'
+      ;;
+    *)
+      # For other prefixes, return the IP itself as fallback
+      echo "$ip"
+      ;;
+  esac
+}
+
+# helper: check if subnet is Kubernetes CNI subnet
+is_cni_subnet() {
+  local cidr="$1"
+  
+  # Kubernetes CNI Pod CIDRs typically use specific ranges:
+  # - 10.0.0.0/8 to 10.255.255.255/32 is too broad, but common CNI patterns are:
+  #   * Flannel: 10.x.0.0/24 per node (e.g., 10.1.0.0/24, 10.2.0.0/24)
+  #   * Weave: 10.32.0.0/12 by default
+  #   * Calico: 10.0.0.0/8 or 192.168.0.0/16
+  #   * AWS VPC CNI: Uses VPC CIDR (e.g., 10.0.0.0/16)
+  # - 172.16.0.0/12 to 172.31.255.255/32
+  # - 192.168.0.0/16
+  # 
+  # The key insight: if it's a /8, /12, or /16 with a single interface, it's likely management network
+  # If it's a /24 or smaller with multiple interfaces per node, it's likely CNI
+  #
+  # For now, we'll only mark as CNI if it matches known patterns or is clearly a Pod network
+  case "$cidr" in
+    # Known Kubernetes CNI defaults
+    10.0.0.0/8|10.32.0.0/12|172.16.0.0/12|192.168.0.0/16)
+      echo "false"  # These are too broad to be certain without more context
+      ;;
+    # Flannel per-node pattern (10.x.0.0/24)
+    10.[0-9]*.0.0/24)
+      echo "true"
+      ;;
+    # Weave pattern (10.32.0.0/12 - handled above, returns false)
+    # Calico inline subnets (typically /24, /25, etc with smaller network)
+    *)
+      # If it's in 10.x.x.x range AND it's a /24 or smaller (/25, /26, /27, /28, /29, /30, /31, /32)
+      # AND it has multiple interfaces, it might be CNI
+      # But since we can't easily check interface count here, we'll be conservative
+      # and only mark obvious CNI patterns
+      if echo "$cidr" | grep -qE '^10\.'; then
+        # Extract the prefix length
+        local prefix="${cidr##*/}"
+        # Only mark as CNI if it's /24 or smaller AND not a /16 or /8 (management networks)
+        if [ "$prefix" -ge 24 ] && [ "$prefix" -le 32 ]; then
+          echo "true"
+        else
+          echo "false"
+        fi
+      else
+        echo "false"
+      fi
+      ;;
+  esac
+}
+
+
+# helper: collect all subnets and their interfaces
+collect_subnets_info() {
+  local subnets_json=""
+  local subnet_count=0
+  local seen_subnets=""
+  
+  # Iterate through all interfaces and extract their subnets
+  for iface_dir in /host-sys/class/net/*; do
+    [ -d "$iface_dir" ] || continue
+    local ifname="$(basename "$iface_dir")"
+    [ "$ifname" = "lo" ] && continue
+    
+    # Get IP address for this interface
+    local ip_info="$(ip -o -4 addr show dev "$ifname" 2>/dev/null | awk '{print $4}')"
+    
+    if [ -z "$ip_info" ]; then
+      continue
+    fi
+    
+    # ip_info format: x.x.x.x/y
+    local ip_addr="${ip_info%/*}"
+    local cidr_prefix="${ip_info##*/}"
+    
+    # Get network address and netmask
+    local network="$(get_network_address "$ip_addr" "/$cidr_prefix")"
+    local netmask="$(cidr_to_netmask "/$cidr_prefix")"
+    local cidr="${network}/${cidr_prefix}"
+    
+    # Check if we've already processed this subnet
+    if echo "$seen_subnets" | grep -q "^${cidr}\$"; then
+      continue
+    fi
+    
+    # Build subnet JSON
+    local subnet_ifaces=""
+    local subnet_iface_count=0
+    
+    # Collect all interfaces on this subnet
+    for check_iface_dir in /host-sys/class/net/*; do
+      [ -d "$check_iface_dir" ] || continue
+      local check_ifname="$(basename "$check_iface_dir")"
+      [ "$check_ifname" = "lo" ] && continue
+      
+      local check_ip_info="$(ip -o -4 addr show dev "$check_ifname" 2>/dev/null | awk '{print $4}')"
+      if [ -z "$check_ip_info" ]; then
+        continue
+      fi
+      
+      local check_ip="${check_ip_info%/*}"
+      local check_prefix="${check_ip_info##*/}"
+      local check_network="$(get_network_address "$check_ip" "/$check_prefix")"
+      
+      # If this interface is on the same subnet
+      if [ "$check_network/${check_prefix}" = "$cidr" ]; then
+        local iface_obj="{\"name\":\"$(json_escape "$check_ifname")\",\"ip\":\"$(json_escape "$check_ip")\"}"
+        if [ "$subnet_iface_count" -gt 0 ]; then
+          subnet_ifaces="${subnet_ifaces},"
+        fi
+        subnet_ifaces="${subnet_ifaces}${iface_obj}"
+        subnet_iface_count=$((subnet_iface_count+1))
+      fi
+    done
+    
+    # Check if it's a CNI subnet
+    local is_cni="$(is_cni_subnet "$cidr")"
+    
+    local subnet_obj="{\"network_address\":\"$(json_escape "$network")\","
+    subnet_obj="$subnet_obj\"netmask\":\"$(json_escape "$netmask")\","
+    subnet_obj="$subnet_obj\"cidr\":\"$(json_escape "$cidr")\","
+    subnet_obj="$subnet_obj\"interfaces\":[$subnet_ifaces],"
+    subnet_obj="$subnet_obj\"interface_count\":$subnet_iface_count,"
+    subnet_obj="$subnet_obj\"is_cni_subnet\":$is_cni"
+    subnet_obj="$subnet_obj}"
+    
+    if [ "$subnet_count" -gt 0 ]; then
+      subnets_json="${subnets_json},"
+    fi
+    subnets_json="${subnets_json}${subnet_obj}"
+    subnet_count=$((subnet_count+1))
+    
+    seen_subnets="${seen_subnets}${cidr}"$'\n'
+  done
+  
+  echo "$subnets_json|$subnet_count"
+}
+
 # helper: collect all routing tables and rules
 collect_routing_info() {
   local routing_obj="{"
@@ -412,6 +789,14 @@ collect_routing_info() {
   routing_obj="$routing_obj\"routing_rules\":[$rules_json],"
   routing_obj="$routing_obj\"rule_count\":$rule_count,"
   routing_obj="$routing_obj\"table_count\":$table_count"
+  
+  # Collect subnets information
+  local subnets_info="$(collect_subnets_info)"
+  local subnets_json="${subnets_info%%|*}"
+  local subnet_count="${subnets_info##*|}"
+  
+  routing_obj="$routing_obj,\"subnets\":[$subnets_json],"
+  routing_obj="$routing_obj\"subnet_count\":$subnet_count"
   routing_obj="$routing_obj}"
   
   echo "$routing_obj"
@@ -717,12 +1102,30 @@ get_nvme_pci_addr() {
   local pci_addr=""
   
   # Try to get PCI address from sysfs
-  # NVMe devices are usually at /sys/devices/pci*/*/nvme/
+  # NVMe devices typically have path like: /sys/devices/pci0000:00/0000:00:1d.0/nvme/nvme0/nvme0n1
+  # We need to extract the PCI address (0000:00:1d.0)
+  
   if [ -L "/host-sys/class/block/$dev/device" ]; then
     local device_path="$(readlink -f "/host-sys/class/block/$dev/device" 2>/dev/null || true)"
     if [ -n "$device_path" ]; then
-      # Extract PCI address from path
-      pci_addr="$(basename "$device_path" 2>/dev/null || true)"
+      # Try to extract PCI address from path
+      # Look for pattern like 0000:00:1d.0 in the device path
+      pci_addr=$(echo "$device_path" | grep -o '[0-9a-f]\{4\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}\.[0-9]' | tail -n1)
+      
+      # If regex didn't work, try alternative method using ls
+      if [ -z "$pci_addr" ]; then
+        # Get the device directory and look for the pci address format
+        local dev_dir="$(dirname "$device_path")"
+        # Walk up the sysfs tree to find a directory matching PCI address format
+        while [ -n "$dev_dir" ] && [ "$dev_dir" != "/" ] && [ "$dev_dir" != "/host" ]; do
+          local dir_name="$(basename "$dev_dir")"
+          if echo "$dir_name" | grep -q '^[0-9a-f]\{4\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}\.[0-9]'; then
+            pci_addr="$dir_name"
+            break
+          fi
+          dev_dir="$(dirname "$dev_dir")"
+        done
+      fi
     fi
   fi
   
@@ -847,6 +1250,24 @@ if [ "$NVME_DRIVES_COUNT" -gt 0 ]; then
   NVME_DETAIL="found $NVME_DRIVES_COUNT NVMe drive(s)"
 fi
 
+# ----- CNI Detection -----
+CNI_DETECTED=false
+CNI_POD_CIDR=""
+CNI_SOURCE=""
+CNI_TYPE=""
+
+# Safe CNI detection with error handling
+cni_info=""
+if command -v detect_cni_pod_cidr >/dev/null 2>&1; then
+  cni_info="$(detect_cni_pod_cidr 2>/dev/null || true)"
+  if [ -n "$cni_info" ]; then
+    CNI_DETECTED=true
+    CNI_POD_CIDR=$(echo "$cni_info" | cut -d'|' -f1 2>/dev/null || true)
+    CNI_SOURCE=$(echo "$cni_info" | cut -d'|' -f2 2>/dev/null || true)
+    CNI_TYPE=$(echo "$cni_info" | cut -d'|' -f3 2>/dev/null || true)
+  fi
+fi
+
 # ----- Routing Configuration Collection -----
 ROUTING_JSON="$(collect_routing_info)"
 # Count custom routing rules (exclude default rules: priority 0, 32766, 32767)
@@ -881,6 +1302,11 @@ printf '"bond_lacp_ok":%s,' "$([ "$BOND_LACP_OK" -eq 1 ] && echo true || echo fa
 printf '"bond_lacp_detail":"%s",' "$(json_escape "$BOND_LACP_DETAIL")"
 printf '"network_namespace_routing":%s,' "$ROUTING_JSON"
 printf '"routing_detail":"%s",' "$(json_escape "$ROUTING_DETAIL")"
+printf '"cni_detection":{"pod_cidr":"%s","source":"%s","cni_type":"%s","detected":%s},' \
+  "$(json_escape "$CNI_POD_CIDR")" \
+  "$(json_escape "$CNI_SOURCE")" \
+  "$(json_escape "$CNI_TYPE")" \
+  "$([ "$CNI_DETECTED" = true ] && echo true || echo false)"
 printf '"ht_enabled":%s,' "$([ "$HT_ENABLED" -eq 1 ] && echo true || echo false)"
 printf '"physical_cores":%d,' "$PHYSICAL_CORES"
 printf '"logical_cores":%d,' "$LOGICAL_CORES"
