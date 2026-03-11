@@ -263,7 +263,7 @@ func parseSelector(selector string) map[string]string {
 	for _, pair := range pairs {
 		kv := strings.Split(strings.TrimSpace(pair), "=")
 		if len(kv) == 2 {
-			result[kv[0]] = kv[1]
+			result[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
 		}
 	}
 	return result
