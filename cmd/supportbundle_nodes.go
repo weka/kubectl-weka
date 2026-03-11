@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -71,6 +72,11 @@ func (c *NodesDescriptionCollector) Collect(ctx context.Context) CollectorResult
 	filesCreated = append(filesCreated, descFiles...)
 	warnings = append(warnings, descWarnings...)
 
+	// Collect host checks and dump as JSON
+	hostCheckFiles, hostCheckWarnings := c.collectHostChecks(ctx, &nodeList.Items, bundlePath, logger)
+	filesCreated = append(filesCreated, hostCheckFiles...)
+	warnings = append(warnings, hostCheckWarnings...)
+
 	// Determine status
 	status := StatusSuccess
 	if len(warnings) > 0 {
@@ -116,7 +122,60 @@ func (c *NodesDescriptionCollector) collectNodesTable(ctx context.Context) (stri
 	return filePath, ""
 }
 
-// ...existing code...
+// collectHostChecks runs host checks on all nodes and dumps results as JSON
+// Uses the HostCheckRegistry with caching to avoid redundant host check execution
+func (c *NodesDescriptionCollector) collectHostChecks(ctx context.Context, nodes *[]corev1.Node, bundlePath string, logger *slog.Logger) ([]string, []string) {
+	if len(*nodes) == 0 {
+		return []string{}, []string{}
+	}
+
+	logger.Debug("Running host checks on nodes", "count", len(*nodes))
+
+	// Use GlobalHostCheckRegistry to get cached results when available
+	// This avoids re-running hostchecks if they were already executed elsewhere
+	hostChecksMap, err := GlobalHostCheckRegistry.GetHostChecksForNodes(ctx, *nodes)
+	if err != nil {
+		warning := fmt.Sprintf("failed to run host checks: %v", err)
+		logger.Debug("⚠️  Failed to run host checks", "error", err)
+		return []string{}, []string{warning}
+	}
+
+	// Dump host checks as pretty-printed JSON files
+	var filesCreated []string
+	var warnings []string
+
+	for nodeName, hostCheckResult := range hostChecksMap {
+		if hostCheckResult == nil {
+			warning := fmt.Sprintf("no host check result for node %s", nodeName)
+			logger.Debug("⚠️  No host check result", "node", nodeName)
+			warnings = append(warnings, warning)
+			continue
+		}
+
+		// Marshal to pretty-printed JSON
+		jsonData, err := json.MarshalIndent(hostCheckResult, "", "  ")
+		if err != nil {
+			warning := fmt.Sprintf("failed to marshal host check result for node %s: %v", nodeName, err)
+			logger.Debug("⚠️  Failed to marshal host check", "node", nodeName, "error", err)
+			warnings = append(warnings, warning)
+			continue
+		}
+
+		// Write to file in nodes/hostchecks directory
+		filePath := filepath.Join("node-hostchecks", fmt.Sprintf("%s_hostcheck.json", nodeName))
+		if err := writeToFile(bundlePath, filePath, string(jsonData)); err != nil {
+			warning := fmt.Sprintf("failed to write host check file for node %s: %v", nodeName, err)
+			logger.Debug("⚠️  Failed to write host check file", "node", nodeName, "error", err)
+			warnings = append(warnings, warning)
+			continue
+		}
+
+		filesCreated = append(filesCreated, filePath)
+		logger.Debug("✓ Collected host check", "node", nodeName, "file", filePath)
+	}
+
+	return filesCreated, warnings
+}
 
 func (c *NodesDescriptionCollector) Finish(ctx context.Context, result CollectorResult) {
 	logger := getLogger(ctx)

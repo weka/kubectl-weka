@@ -656,11 +656,61 @@ func collectorsByMode(mode CollectionMode, resourceName string) []Collector {
 ```
 
 **Real-World Examples:**
-- `NodesDescriptionCollector` (`cmd/supportbundle_nodes.go`) – Collects node descriptions and a nodes table in **all** support-bundle modes
+- `NodesDescriptionCollector` (`cmd/supportbundle_nodes.go`) – Collects node descriptions, nodes table, and **host checks in JSON** in **all** support-bundle modes
+  - Uses `GlobalHostCheckRegistry.GetHostChecksForNodes()` for caching efficiency
+  - Dumps `HostChecksResult` as pretty-printed JSON to `node-hostchecks/{nodeName}_hostcheck.json`
+  - Collects hardware info: CPU, memory, NVMe, Mellanox NICs, LACP bonds, WEKA directory status
 - `OperatorLogsCollector` (`cmd/supportbundle_operator.go`) – Collects operator-specific logs and resources
 - `ClusterResourcesCollector` (`cmd/supportbundle_cluster.go`) – Collects cluster-specific data with namespace filtering
 
 These collectors demonstrate best practices for parallel collection, error handling, and organized output.
+
+### Special Case: Host Checks Collection
+
+The `NodesDescriptionCollector` includes a specialized `collectHostChecks()` method that:
+
+1. **Uses Registry Caching**
+   ```go
+   hostChecksMap, err := GlobalHostCheckRegistry.GetHostChecksForNodes(ctx, *nodes)
+   ```
+   This leverages cached results if host checks were already run elsewhere (e.g., `preflight nodes`)
+
+2. **Pretty-Prints JSON**
+   ```go
+   jsonData, err := json.MarshalIndent(hostCheckResult, "", "  ")
+   ```
+   Output is human-readable with 2-space indentation
+
+3. **Organized Output Structure**
+   - Directory: `node-hostchecks/`
+   - Files: `{nodeName}_hostcheck.json`
+   - One file per node with complete host check data
+
+4. **Collected Data Includes**
+   - OS and kernel information
+   - WEKA directory availability and size
+   - Network interfaces (Mellanox, bonds, LACP)
+   - CPU and memory configuration
+   - NVMe drive inventory
+   - System performance tuning parameters
+
+**Example JSON Output:**
+```json
+{
+  "os_release": "Ubuntu 22.04 LTS",
+  "kernel_version": "5.15.0-1234-aws",
+  "weka_dir_ok": true,
+  "weka_dir_path": "/mnt/weka",
+  "weka_dir_avail_bytes": 1649267441664,
+  "mellanox": true,
+  "physical_cores": 32,
+  "logical_cores": 64,
+  "memory_bytes": 274877906944,
+  "cpu_model": "Intel Xeon Platinum",
+  "nvme_drive_count": 4,
+  ...
+}
+```
 
 ### Collector Best Practices
 

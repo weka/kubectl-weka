@@ -4,6 +4,13 @@
 
 ### Features
 
+* **Host Checks Collection in Support Bundle** – New section collects hardware and system information:
+  * Automatically runs on all nodes in all support-bundle commands
+  * Uses `GlobalHostCheckRegistry` with intelligent caching to avoid redundant execution
+  * Outputs pretty-printed JSON files: `node-hostchecks/{nodeName}_hostcheck.json`
+  * Collected data includes: OS, kernel, CPU, memory, NVMe drives, Mellanox NICs, LACP bonds, WEKA directory status
+  * Graceful error handling - continues if individual node checks fail
+
 * **GitHub Actions CI/CD Workflows** – Complete multi-architecture automated build pipeline:
   * `build-pr.yaml` – Automated builds on pull requests for 7 platform/architecture combinations
   * `release-build.yaml` – Automated builds and asset publishing for GitHub Releases
