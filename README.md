@@ -1699,43 +1699,39 @@ The repository uses [release-please](https://github.com/googleapis/release-pleas
 
 ## Contributing
 
-Contributions are welcome! Please follow these guidelines:
+Contributions are welcome! We appreciate your interest in improving `kubectl-weka`.
 
-### Code Style
+**For detailed contribution guidelines**, please read [CONTRIBUTING.md](CONTRIBUTING.md) which includes:
 
-- Use `go fmt` for formatting
-- Follow Go best practices
-- Add comments for exported functions
-- Keep functions focused and small
+- **Getting Started** – Setting up your development environment
+- **Development Workflow** – Creating branches and making changes
+- **Commit Guidelines** – Using Conventional Commits format
+- **Pull Request Process** – Submitting high-quality PRs
+- **Testing** – Writing and running tests
+- **Code Style** – Following Go best practices
+- **Documentation** – Keeping docs up-to-date
+- **Release Process** – How automated releases work
 
-### Commit Messages
+### Quick Start for Contributors
 
-Use [Conventional Commits](https://www.conventionalcommits.org/):
+```bash
+# 1. Fork and clone the repository
+git clone https://github.com/YOUR_USERNAME/kubectl-weka.git
+cd kubectl-weka
 
-- `feat:` – New features
-- `fix:` – Bug fixes
-- `docs:` – Documentation changes
-- `refactor:` – Code refactoring
-- `test:` – Test additions/changes
-- `chore:` – Maintenance tasks
+# 2. Create a feature branch
+git checkout -b feature/your-feature-name
 
-**Examples:**
+# 3. Make your changes and test
+make build
+go test ./...
+
+# 4. Commit with conventional format
+git commit -m "feat(scope): description"
+
+# 5. Push and create a pull request
+git push origin feature/your-feature-name
 ```
-feat: add support-bundle cluster command
-fix: handle missing namespace in get client-instances
-docs: update README with support-bundle examples
-refactor: extract common validation logic
-```
-
-### Pull Request Process
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add/update tests
-5. Update documentation
-6. Ensure all tests pass
-7. Submit PR with clear description
 
 ### Design Principles
 
@@ -1744,6 +1740,28 @@ refactor: extract common validation logic
 - **Version agnostic** – Avoid hard dependencies on specific WEKA versions
 - **Clear output** – Human-readable with optional machine formats
 - **Error handling** – Provide actionable error messages
+
+### Development Commands
+
+```bash
+# Show build information and available targets
+make help
+
+# Build binary
+make build
+
+# Install to GOPATH/bin
+make install
+
+# Run tests
+go test ./...
+
+# Format code
+go fmt ./...
+
+# Check for issues
+go vet ./...
+```
 
 ---
 
