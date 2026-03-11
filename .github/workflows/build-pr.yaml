@@ -96,6 +96,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
+        shell: bash
         run: |
           VERSION=${{ steps.version.outputs.version }}
           COMMIT=${{ steps.version.outputs.commit }}
@@ -122,16 +123,17 @@ jobs:
 
       - name: Prepare artifact
         shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
           VERSION=${{ steps.version.outputs.version }}
-          GOOS=${{ matrix.goos }}
-          GOARCH=${{ matrix.goarch }}
           BINARY_NAME=kubectl-weka
           
           if [ "${{ matrix.goos }}" == "windows" ]; then
             BINARY_NAME=${BINARY_NAME}.exe
           fi
-          
+
           # Create artifact directory
           ARTIFACT_DIR="kubectl-weka-${VERSION}-${GOOS}-${GOARCH}"
           mkdir -p ${ARTIFACT_DIR}
@@ -149,10 +151,9 @@ jobs:
           Version: ${VERSION}
           Commit:  ${{ steps.version.outputs.commit }}
           Date:    ${{ steps.version.outputs.date }}
-          OS:      ${GOOS}
-          Arch:    ${GOARCH}
+          OS:      ${{ matrix.goos }}
+          Arch:    ${{ matrix.goarch }}
           EOF
-          
           echo "ARTIFACT_DIR=${ARTIFACT_DIR}" >> $GITHUB_ENV
 
       - name: Upload artifact

@@ -73,6 +73,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
+        shell: bash
         run: |
           VERSION=${{ steps.version.outputs.version }}
           COMMIT=${{ steps.version.outputs.commit }}
@@ -128,5 +129,6 @@ jobs:
         with:
           files: ${{ env.FINAL_NAME }}
           fail_on_unmatched_files: true
+
 
 
