@@ -25,6 +25,7 @@ The plugin is designed to feel **kubectl-native** and integrates cleanly with Ku
   - [Logs Commands](#logs-commands)
   - [Support Bundle Commands](#support-bundle-commands)
 - [Developer Guide](DEVELOPER_GUIDE.md)
+- [CI/CD](#cicd)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -1616,6 +1617,83 @@ See the [Developer Guide](DEVELOPER_GUIDE.md) for detailed instructions on:
 - Adding plan validations
 - Adding support bundle collectors
 - Creating new commands
+
+---
+
+## CI/CD
+
+### Automated Builds on Pull Requests
+
+Every pull request triggers automatic builds across 7 platform/architecture combinations:
+
+**Platforms:**
+- Linux: x86_64, ARM64, ARMv7
+- macOS: x86_64, ARM64 (Apple Silicon)
+- Windows: x86_64, ARM64
+
+**What Happens:**
+1. Go 1.25.0 is set up with module caching
+2. Version is calculated from git state
+3. Binary is compiled for each platform
+4. Artifacts are uploaded to GitHub Actions for 30 days
+5. Build summary is generated
+
+**Getting Artifacts:**
+1. Go to your Pull Request
+2. Click the **Checks** tab
+3. Select the build job for your platform
+4. Scroll to **Artifacts** section
+5. Download your platform's binary
+
+### Automated Release Builds
+
+When a release is published, binaries are automatically built and attached for all platforms:
+
+**What Happens:**
+1. All 7 platform combinations are built
+2. Each binary is named with version, OS, and architecture
+3. All binaries are attached to the GitHub Release
+
+**Release Assets Named:**
+- `kubectl-weka-v1.0.0-linux-amd64`
+- `kubectl-weka-v1.0.0-linux-arm64`
+- `kubectl-weka-v1.0.0-linux-arm`
+- `kubectl-weka-v1.0.0-darwin-amd64`
+- `kubectl-weka-v1.0.0-darwin-arm64`
+- `kubectl-weka-v1.0.0-windows-amd64.exe`
+- `kubectl-weka-v1.0.0-windows-arm64.exe`
+
+**Download Release Binaries:**
+
+Visit the [Releases](https://github.com/weka/kubectl-weka/releases) page and download the binary for your platform.
+
+Example:
+```bash
+# Linux x86_64
+curl -LO https://github.com/weka/kubectl-weka/releases/download/v1.0.0/kubectl-weka-v1.0.0-linux-amd64
+chmod +x kubectl-weka-v1.0.0-linux-amd64
+sudo mv kubectl-weka-v1.0.0-linux-amd64 /usr/local/bin/kubectl-weka
+
+# macOS ARM64
+curl -LO https://github.com/weka/kubectl-weka/releases/download/v1.0.0/kubectl-weka-v1.0.0-darwin-arm64
+chmod +x kubectl-weka-v1.0.0-darwin-arm64
+sudo mv kubectl-weka-v1.0.0-darwin-arm64 /usr/local/bin/kubectl-weka
+
+# Windows x86_64
+curl -LO https://github.com/weka/kubectl-weka/releases/download/v1.0.0/kubectl-weka-v1.0.0-windows-amd64.exe
+# Place in PATH or use directly
+```
+
+### Automatic Release Management
+
+The repository uses [release-please](https://github.com/googleapis/release-please) for automated versioning:
+
+1. Commits following [Conventional Commits](https://www.conventionalcommits.org/) are analyzed
+2. A release PR is automatically created with:
+   - Updated CHANGELOG.md
+   - Version bump (major/minor/patch)
+3. When merged, a Git tag is created automatically
+4. Release build workflow is triggered
 
 ---
 
