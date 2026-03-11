@@ -16,21 +16,59 @@ type NetworkInterfaceMetrics struct {
 	CRCErrors    int64 `json:"crc_errors"`    // CRC errors
 }
 
+// RouteEntry represents a single route entry
+type RouteEntry struct {
+	Destination string `json:"destination"`        // Destination CIDR (e.g., "10.0.0.0/24" or "default")
+	Gateway     string `json:"gateway,omitempty"`  // Gateway IP or "on-link"
+	Device      string `json:"device,omitempty"`   // Interface name
+	Metric      int    `json:"metric,omitempty"`   // Route metric/cost
+	Source      string `json:"source,omitempty"`   // Source IP for policy-based routing
+	Table       string `json:"table,omitempty"`    // Routing table name (main, local, custom)
+	Protocol    string `json:"protocol,omitempty"` // Protocol (kernel, boot, static, etc.)
+}
+
+// RoutingRule represents a policy-based routing rule
+type RoutingRule struct {
+	Priority  int    `json:"priority"`            // Rule priority (lower = higher priority)
+	Condition string `json:"condition,omitempty"` // Condition (from IP, to IP, etc.)
+	Table     string `json:"table,omitempty"`     // Target routing table
+	Action    string `json:"action,omitempty"`    // Action (lookup, blackhole, etc.)
+}
+
+// RoutingTableInfo contains all routes and rules for a routing table
+type RoutingTableInfo struct {
+	TableName string       `json:"table_name"`         // Table name (main, local, custom)
+	TableID   int          `json:"table_id,omitempty"` // Table ID number
+	Routes    []RouteEntry `json:"routes"`             // All routes in this table
+}
+
+// NetworkNamespaceRouting contains routing info for a network namespace
+type NetworkNamespaceRouting struct {
+	Namespace     string             `json:"namespace"`      // Namespace name (empty = default)
+	RoutingTables []RoutingTableInfo `json:"routing_tables"` // All routing tables
+	RoutingRules  []RoutingRule      `json:"routing_rules"`  // All policy-based routing rules
+	RuleCount     int                `json:"rule_count"`     // Total number of rules
+	TableCount    int                `json:"table_count"`    // Total number of tables
+}
+
 // NetworkInterface represents a generic network interface (Ethernet or InfiniBand)
 type NetworkInterface struct {
-	Name           string                   `json:"name"`                      // e.g., "eth0", "ib0"
-	Type           string                   `json:"type"`                      // "ethernet" or "infiniband"
-	IP             string                   `json:"ip,omitempty"`              // CIDR notation (e.g., 10.0.0.1/24)
-	MTU            int                      `json:"mtu,omitempty"`             // Maximum Transmission Unit
-	MAC            string                   `json:"mac,omitempty"`             // MAC address
-	BondMaster     string                   `json:"bond_master,omitempty"`     // Bond interface this is enslaved to
-	BondSlave      bool                     `json:"bond_slave"`                // Whether this is a bond slave
-	MaxSpeed       string                   `json:"max_speed,omitempty"`       // Maximum speed (e.g., "100Gbps")
-	EffectiveSpeed string                   `json:"effective_speed,omitempty"` // Current speed (e.g., "40Gbps")
-	PCIAddress     string                   `json:"pci_address,omitempty"`     // PCI address (e.g., "0000:3d:00.0")
-	Model          string                   `json:"model,omitempty"`           // NIC model (e.g., "CX-7")
-	Metrics        *NetworkInterfaceMetrics `json:"metrics,omitempty"`         // Network statistics
-	Status         string                   `json:"status,omitempty"`          // Interface status (up/down)
+	Name             string                   `json:"name"`                      // e.g., "eth0", "ib0"
+	Type             string                   `json:"type"`                      // "ethernet" or "infiniband"
+	IP               string                   `json:"ip,omitempty"`              // CIDR notation (e.g., 10.0.0.1/24)
+	MTU              int                      `json:"mtu,omitempty"`             // Maximum Transmission Unit
+	MAC              string                   `json:"mac,omitempty"`             // MAC address
+	BondMaster       string                   `json:"bond_master,omitempty"`     // Bond interface this is enslaved to
+	BondSlave        bool                     `json:"bond_slave"`                // Whether this is a bond slave
+	MaxSpeed         string                   `json:"max_speed,omitempty"`       // Maximum speed (e.g., "100Gbps")
+	EffectiveSpeed   string                   `json:"effective_speed,omitempty"` // Current speed (e.g., "40Gbps")
+	PCIAddress       string                   `json:"pci_address,omitempty"`     // PCI address (e.g., "0000:3d:00.0")
+	Model            string                   `json:"model,omitempty"`           // NIC model (e.g., "CX-7")
+	Metrics          *NetworkInterfaceMetrics `json:"metrics,omitempty"`         // Network statistics
+	Status           string                   `json:"status,omitempty"`          // Interface status (up/down)
+	IsDefaultRoute   bool                     `json:"is_default_route"`          // True if used as default route (0.0.0.0/0)
+	AssociatedRoutes []RouteEntry             `json:"associated_routes"`         // Routes using this interface
+	RouteCount       int                      `json:"route_count"`               // Number of routes using this interface
 }
 
 // MellanoxIface contains Mellanox-specific network interface information
@@ -87,6 +125,10 @@ type HostChecksResult struct {
 
 	BondLACPOk     bool   `json:"bond_lacp_ok"`
 	BondLACPDetail string `json:"bond_lacp_detail"`
+
+	// Routing Configuration (for source-based routing and multi-path verification)
+	NetworkNamespaceRouting *NetworkNamespaceRouting `json:"network_namespace_routing"` // Routing info for default namespace
+	RoutingDetail           string                   `json:"routing_detail"`            // Summary of routing config
 
 	// CPU and Memory info
 	HTEnabled       bool   `json:"ht_enabled"`

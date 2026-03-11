@@ -217,6 +217,132 @@ func TestNetworkInterfaceInfiniBand(t *testing.T) {
 	}
 }
 
+// TestRouteEntry tests RouteEntry struct
+func TestRouteEntry(t *testing.T) {
+	route := RouteEntry{
+		Destination: "10.0.0.0/24",
+		Gateway:     "10.0.0.1",
+		Device:      "eth0",
+		Metric:      100,
+		Table:       "main",
+		Protocol:    "kernel",
+	}
+
+	if route.Destination != "10.0.0.0/24" {
+		t.Errorf("Expected Destination '10.0.0.0/24', got %q", route.Destination)
+	}
+	if route.Gateway != "10.0.0.1" {
+		t.Errorf("Expected Gateway '10.0.0.1', got %q", route.Gateway)
+	}
+	if route.Metric != 100 {
+		t.Errorf("Expected Metric 100, got %d", route.Metric)
+	}
+}
+
+// TestRoutingRule tests RoutingRule struct
+func TestRoutingRule(t *testing.T) {
+	rule := RoutingRule{
+		Priority:  1000,
+		Condition: "from 10.0.1.0/24",
+		Table:     "200",
+		Action:    "lookup",
+	}
+
+	if rule.Priority != 1000 {
+		t.Errorf("Expected Priority 1000, got %d", rule.Priority)
+	}
+	if rule.Table != "200" {
+		t.Errorf("Expected Table '200', got %q", rule.Table)
+	}
+}
+
+// TestRoutingTableInfo tests RoutingTableInfo struct
+func TestRoutingTableInfo(t *testing.T) {
+	table := RoutingTableInfo{
+		TableName: "main",
+		TableID:   254,
+		Routes: []RouteEntry{
+			{
+				Destination: "default",
+				Gateway:     "10.0.0.1",
+				Device:      "eth0",
+				Metric:      100,
+			},
+		},
+	}
+
+	if table.TableName != "main" {
+		t.Errorf("Expected TableName 'main', got %q", table.TableName)
+	}
+	if table.TableID != 254 {
+		t.Errorf("Expected TableID 254, got %d", table.TableID)
+	}
+	if len(table.Routes) != 1 {
+		t.Errorf("Expected 1 route, got %d", len(table.Routes))
+	}
+}
+
+// TestNetworkNamespaceRouting tests NetworkNamespaceRouting struct
+func TestNetworkNamespaceRouting(t *testing.T) {
+	nsRouting := &NetworkNamespaceRouting{
+		Namespace: "",
+		RoutingTables: []RoutingTableInfo{
+			{
+				TableName: "main",
+				TableID:   254,
+				Routes:    []RouteEntry{},
+			},
+		},
+		RoutingRules: []RoutingRule{
+			{
+				Priority: 1000,
+				Table:    "200",
+			},
+		},
+		RuleCount:  1,
+		TableCount: 1,
+	}
+
+	if nsRouting.RuleCount != 1 {
+		t.Errorf("Expected RuleCount 1, got %d", nsRouting.RuleCount)
+	}
+	if nsRouting.TableCount != 1 {
+		t.Errorf("Expected TableCount 1, got %d", nsRouting.TableCount)
+	}
+}
+
+// TestNetworkInterfaceWithRouting tests NetworkInterface with routing information
+func TestNetworkInterfaceWithRouting(t *testing.T) {
+	iface := &NetworkInterface{
+		Name:           "eth0",
+		Type:           "ethernet",
+		IP:             "10.0.0.1/24",
+		IsDefaultRoute: true,
+		RouteCount:     2,
+		AssociatedRoutes: []RouteEntry{
+			{
+				Destination: "default",
+				Gateway:     "10.0.0.254",
+				Device:      "eth0",
+			},
+			{
+				Destination: "10.0.0.0/24",
+				Device:      "eth0",
+			},
+		},
+	}
+
+	if !iface.IsDefaultRoute {
+		t.Errorf("Expected IsDefaultRoute true, got %v", iface.IsDefaultRoute)
+	}
+	if iface.RouteCount != 2 {
+		t.Errorf("Expected RouteCount 2, got %d", iface.RouteCount)
+	}
+	if len(iface.AssociatedRoutes) != 2 {
+		t.Errorf("Expected 2 associated routes, got %d", len(iface.AssociatedRoutes))
+	}
+}
+
 // TestNVMeDriveInfo tests NVMeDriveInfo struct
 func TestNVMeDriveInfo(t *testing.T) {
 	drive := NVMeDriveInfo{

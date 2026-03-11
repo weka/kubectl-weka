@@ -10,7 +10,16 @@ func makeHostChecksPod(ns, nodeName, podName, labelKey, labelVal string) *v1.Pod
 	script := `
 set -eu
 
-json_escape() { echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+json_escape() { 
+  local str="$1"
+  # Use printf with %q and then process to create JSON string
+  str="${str//\\/\\\\}"  # backslash
+  str="${str//\"/\\\"}"  # quote
+  str="${str//$'\t'/\\t}"  # tab
+  str="${str//$'\n'/\\n}"  # newline
+  str="${str//$'\r'/\\r}"  # carriage return
+  echo "$str"
+}
 
 # ----- OS detection via /etc/os-release (host) -----
 OSR=""
@@ -248,6 +257,166 @@ iface_speed() {
   echo "unknown"
 }
 
+# helper: check if interface is used as default route
+is_default_route_iface() {
+  local ifname="$1"
+  # Check ip route show for default route via this interface
+  ip -o route show 2>/dev/null | grep -E "^default.*\s$ifname(\s|$)" >/dev/null 2>&1 && echo true || echo false
+}
+
+# helper: get all routes for a specific interface
+get_routes_for_iface() {
+  local ifname="$1"
+  local route_json=""
+  local route_count=0
+  
+  # Get all routes with this interface
+  while IFS= read -r line; do
+    if [ -z "$line" ]; then
+      continue
+    fi
+    
+    # Parse route line from ip route show
+    # Format: <destination> via <gateway> dev <device> metric <metric> ...
+    local dest="$(echo "$line" | awk '{print $1}')"
+    local via_idx=2
+    local gateway=""
+    local metric=""
+    
+    # Check if it contains "via"
+    if echo "$line" | grep -q " via "; then
+      gateway="$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="via") print $(i+1); exit}')"
+    fi
+    
+    # Get metric if present
+    if echo "$line" | grep -q " metric "; then
+      metric="$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="metric") print $(i+1); exit}')"
+    fi
+    
+    if [ -z "$dest" ]; then
+      continue
+    fi
+    
+    local route_obj="{\"destination\":\"$(json_escape "$dest")\""
+    [ -n "$gateway" ] && route_obj="$route_obj,\"gateway\":\"$(json_escape "$gateway")\""
+    route_obj="$route_obj,\"device\":\"$(json_escape "$ifname")\""
+    [ -n "$metric" ] && route_obj="$route_obj,\"metric\":$metric"
+    route_obj="$route_obj}"
+    
+    if [ "$route_count" -gt 0 ]; then
+      route_json="${route_json},"
+    fi
+    route_json="${route_json}${route_obj}"
+    route_count=$((route_count+1))
+  done < <(ip -o route show 2>/dev/null | grep " dev $ifname " || true)
+  
+  echo "$route_json"
+}
+
+# helper: collect all routing tables and rules
+collect_routing_info() {
+  local routing_obj="{"
+  
+  # Collect routing rules
+  local rules_json=""
+  local rule_count=0
+  
+  while IFS= read -r line; do
+    if [ -z "$line" ]; then
+      continue
+    fi
+    
+    # Parse rule: <priority>: from <src> lookup <table>
+    local priority="$(echo "$line" | awk '{print $1}' | sed 's/://')"
+    local table="$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="lookup") print $(i+1); exit}')"
+    
+    # Extract condition (everything after "priority:" and trim spaces)
+    local condition="$(echo "$line" | sed 's/^[0-9]*:[[:space:]]*//' | sed 's/[[:space:]]*$//')"
+    
+    if [ -z "$priority" ]; then
+      continue
+    fi
+    
+    local rule_obj="{\"priority\":$priority"
+    [ -n "$table" ] && rule_obj="$rule_obj,\"table\":\"$(json_escape "$table")\""
+    rule_obj="$rule_obj,\"condition\":\"$(json_escape "$condition")\""
+    rule_obj="$rule_obj}"
+    
+    if [ "$rule_count" -gt 0 ]; then
+      rules_json="${rules_json},"
+    fi
+    rules_json="${rules_json}${rule_obj}"
+    rule_count=$((rule_count+1))
+  done < <(ip rule show 2>/dev/null || true)
+  
+  # Collect routing tables (main and local)
+  local tables_json=""
+  local table_count=0
+  
+  for table_name in main local; do
+    local table_routes=""
+    local table_route_count=0
+    
+    while IFS= read -r line; do
+      if [ -z "$line" ]; then
+        continue
+      fi
+      
+      local dest="$(echo "$line" | awk '{print $1}')"
+      local gateway=""
+      local device=""
+      local metric=""
+      
+      if echo "$line" | grep -q " via "; then
+        gateway="$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="via") print $(i+1); exit}')"
+      fi
+      
+      if echo "$line" | grep -q " dev "; then
+        device="$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}')"
+      fi
+      
+      if echo "$line" | grep -q " metric "; then
+        metric="$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="metric") print $(i+1); exit}')"
+      fi
+      
+      if [ -z "$dest" ]; then
+        continue
+      fi
+      
+      local route_obj="{\"destination\":\"$(json_escape "$dest")\""
+      [ -n "$gateway" ] && route_obj="$route_obj,\"gateway\":\"$(json_escape "$gateway")\""
+      [ -n "$device" ] && route_obj="$route_obj,\"device\":\"$(json_escape "$device")\""
+      [ -n "$metric" ] && route_obj="$route_obj,\"metric\":$metric"
+      route_obj="$route_obj,\"table\":\"$(json_escape "$table_name")\""
+      route_obj="$route_obj}"
+      
+      if [ "$table_route_count" -gt 0 ]; then
+        table_routes="${table_routes},"
+      fi
+      table_routes="${table_routes}${route_obj}"
+      table_route_count=$((table_route_count+1))
+    done < <(ip -o route show table "$table_name" 2>/dev/null || true)
+    
+    if [ "$table_route_count" -gt 0 ] || [ "$table_name" = "main" ]; then
+      local table_obj="{\"table_name\":\"$(json_escape "$table_name")\",\"routes\":[$table_routes],\"route_count\":$table_route_count}"
+      if [ "$table_count" -gt 0 ]; then
+        tables_json="${tables_json},"
+      fi
+      tables_json="${tables_json}${table_obj}"
+      table_count=$((table_count+1))
+    fi
+  done
+  
+  routing_obj="$routing_obj\"namespace\":\"\","
+  routing_obj="$routing_obj\"routing_tables\":[$tables_json],"
+  routing_obj="$routing_obj\"routing_rules\":[$rules_json],"
+  routing_obj="$routing_obj\"rule_count\":$rule_count,"
+  routing_obj="$routing_obj\"table_count\":$table_count"
+  routing_obj="$routing_obj}"
+  
+  echo "$routing_obj"
+}
+
 # ----- Generic Network Interfaces Collection (Ethernet + InfiniBand) -----
 NETWORK_IFACES_JSON=""
 NETWORK_IFACES_COUNT=0
@@ -273,6 +442,12 @@ for iface_dir in /host-sys/class/net/*; do
   max_speed="$(iface_speed "$ifname")"
   effective_speed="$max_speed"  # TODO: Could be extended to read negotiated speed separately
   metrics="$(get_iface_metrics "$ifname")"
+  is_default_route="$(is_default_route_iface "$ifname")"
+  associated_routes="$(get_routes_for_iface "$ifname")"
+  route_count=0
+  if [ -n "$associated_routes" ]; then
+    route_count="$(echo "$associated_routes" | grep -o '"destination"' | wc -l)"
+  fi
   
   # Build JSON object
   obj="{"
@@ -287,6 +462,9 @@ for iface_dir in /host-sys/class/net/*; do
   obj="$obj\"effective_speed\":\"$(json_escape "$effective_speed")\","
   obj="$obj\"pci_address\":\"$(json_escape "$pci_addr")\","
   obj="$obj\"status\":\"$(json_escape "$status")\","
+  obj="$obj\"is_default_route\":$is_default_route,"
+  obj="$obj\"associated_routes\":[$associated_routes],"
+  obj="$obj\"route_count\":$route_count,"
   obj="$obj\"metrics\":$metrics"
   obj="$obj}"
   
@@ -669,6 +847,17 @@ if [ "$NVME_DRIVES_COUNT" -gt 0 ]; then
   NVME_DETAIL="found $NVME_DRIVES_COUNT NVMe drive(s)"
 fi
 
+# ----- Routing Configuration Collection -----
+ROUTING_JSON="$(collect_routing_info)"
+# Count custom routing rules (exclude default rules: priority 0, 32766, 32767)
+CUSTOM_RULES="$(echo "$ROUTING_JSON" | grep -o '"priority":[^,}]*' | grep -v '"priority":\(0\|32766\|32767\)' | wc -l)"
+ROUTING_DETAIL="routing configured"
+if [ "$CUSTOM_RULES" -eq 0 ]; then
+  ROUTING_DETAIL="default routing rules only (no custom rules configured)"
+else
+  ROUTING_DETAIL="custom routing rules configured ($CUSTOM_RULES rule(s))"
+fi
+
 # Output JSON (single line)
 printf '{'
 printf '"is_rhcos":%s,' "$([ "$IS_RHCOS" -eq 1 ] && echo true || echo false)"
@@ -690,6 +879,8 @@ printf '"mlx_ifaces":[%s],' "$MLX_IFACES_JSON"
 printf '"mlx_bonds":[%s],' "$MLX_BONDS_JSON"
 printf '"bond_lacp_ok":%s,' "$([ "$BOND_LACP_OK" -eq 1 ] && echo true || echo false)"
 printf '"bond_lacp_detail":"%s",' "$(json_escape "$BOND_LACP_DETAIL")"
+printf '"network_namespace_routing":%s,' "$ROUTING_JSON"
+printf '"routing_detail":"%s",' "$(json_escape "$ROUTING_DETAIL")"
 printf '"ht_enabled":%s,' "$([ "$HT_ENABLED" -eq 1 ] && echo true || echo false)"
 printf '"physical_cores":%d,' "$PHYSICAL_CORES"
 printf '"logical_cores":%d,' "$LOGICAL_CORES"
