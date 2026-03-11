@@ -1,4 +1,4 @@
-.PHONY: build install help clean
+.PHONY: build install help clean test test-verbose test-coverage
 
 # Binary name
 BINARY_NAME := kubectl-weka
@@ -42,10 +42,13 @@ help:
 	@echo "kubectl-weka Makefile"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make build       Build binary in current directory"
-	@echo "  make install     Install binary to GOPATH/bin"
-	@echo "  make clean       Remove built binary"
-	@echo "  make help        Show this help message"
+	@echo "  make build           Build binary in current directory"
+	@echo "  make install         Install binary to GOPATH/bin"
+	@echo "  make test            Run tests"
+	@echo "  make test-verbose    Run tests with verbose output"
+	@echo "  make test-coverage   Run tests with coverage report"
+	@echo "  make clean           Remove built binary"
+	@echo "  make help            Show this help message"
 	@echo ""
 	@echo "Build Information:"
 	@echo "  Version: $(VERSION)"
@@ -65,6 +68,23 @@ install: .git-info
 	@echo "  Date:   $(BUILD_DATE)"
 	go install $(LDFLAGS) .
 
+test:
+	@echo "Running tests..."
+	go test ./cmd -q
+
+test-verbose:
+	@echo "Running tests with verbose output..."
+	go test ./cmd -v
+
+test-coverage:
+	@echo "Running tests with coverage..."
+	go test ./cmd -coverprofile=coverage.out
+	@echo ""
+	@echo "Coverage report generated: coverage.out"
+	@echo "View coverage report:"
+	@echo "  go tool cover -html=coverage.out"
+	@go tool cover -func=coverage.out | tail -1
+
 clean:
 	@echo "Cleaning up..."
 	rm -f $(BINARY_NAME)
@@ -78,6 +98,9 @@ clean:
 	@echo "  Working Dir:    $(if $(filter-out 0,$(IS_DIRTY)),dirty,clean)"
 	@echo "  Version:        $(VERSION)"
 	@echo "  Commit:         $(GIT_COMMIT)"
+
+
+
 
 
 
