@@ -855,21 +855,6 @@ func (ni NetworkInterfaces) GetCandidateInterfacesForWeka(forWekaVersion ...stri
 		if prefix == 32 {
 			continue
 		}
-
-		// 5. Check if supported by Weka DPDK
-		supported, _ := iface.IsSupportedByWekaDpdk(forWekaVersion...)
-		if !supported {
-			continue
-		}
-
-		// 6. If bond, also verify the bond itself is supported
-		if iface.IsBond() {
-			bondSupported, _ := iface.IsSupportedByWekaDpdk(forWekaVersion...)
-			if !bondSupported {
-				continue
-			}
-		}
-
 		// All checks passed
 		candidates = append(candidates, iface)
 	}
