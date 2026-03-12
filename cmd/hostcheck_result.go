@@ -332,6 +332,10 @@ func (ni *NetworkInterface) IsSupportedByWekaDpdk(forWekaVersion ...string) (boo
 		return true, nil
 	}
 
+	if ni.IsBondSlave {
+		return false, fmt.Errorf("interface is a bond slave")
+	}
+
 	var wekaVersion string
 	if len(forWekaVersion) > 0 {
 		wekaVersion = forWekaVersion[0]
@@ -645,6 +649,41 @@ func (ni *NetworkInterface) IsSupportedByWekaForLacpDiffCards(forWekaVersion ...
 	return true, nil
 }
 
+// IsSupportedByWekaInUdpMode checks if the NIC can be used with Weka in UDP mode.
+// UDP mode is a fallback mode for older or unsupported NICs.
+// Returns true if:
+// 1. Interface is not a bond slave
+// 2. Not supported in DPDK mode (DPDK is preferred, UDP is fallback)
+// 3. SupportedByWekaUdp capability is true
+func (ni *NetworkInterface) IsSupportedByWekaInUdpMode() bool {
+	if ni == nil {
+		return false
+	}
+
+	// Bond slaves cannot be used directly
+	if ni.IsBondSlave {
+		return false
+	}
+
+	// If supported in DPDK, use DPDK instead (preferred)
+	dpdkSupported, _ := ni.IsSupportedByWekaDpdk()
+	if dpdkSupported {
+		return false
+	}
+
+	// Check if UDP mode is supported
+	if ni.VendorModel == "" {
+		return false
+	}
+
+	caps := ds.GetNICCapabilities(ni.VendorModel)
+	if caps == nil {
+		return false
+	}
+
+	return caps.SupportedByWekaUdp
+}
+
 // GetDeviceInfo returns detailed information about the NIC
 func (ni *NetworkInterface) GetDeviceInfo() *ds.NICInfo {
 	if ni == nil || ni.VendorModel == "" {
@@ -704,6 +743,101 @@ func (ni NetworkInterfaces) GetInfiniBands() []NetworkInterface {
 // GetVirtualInterfaces returns all virtual interfaces (bonds)
 func (ni NetworkInterfaces) GetVirtualInterfaces() []NetworkInterface {
 	return ni.GetBonds()
+}
+
+// getCIDRPrefix extracts the prefix length from a CIDR string
+// e.g., "10.0.0.1/24" returns 24, "10.0.0.1/32" returns 32
+// Returns 0 if unable to parse
+func getCIDRPrefix(cidr string) int {
+	if cidr == "" {
+		return 0
+	}
+	// Find the "/" separator
+	for i := len(cidr) - 1; i >= 0; i-- {
+		if cidr[i] == '/' {
+			// Parse the number after the "/"
+			prefixStr := cidr[i+1:]
+			prefix := 0
+			for _, ch := range prefixStr {
+				if ch >= '0' && ch <= '9' {
+					prefix = prefix*10 + int(ch-'0')
+				} else {
+					return 0 // Invalid character
+				}
+			}
+			return prefix
+		}
+	}
+	return 0 // No "/" found
+}
+
+// isLoopbackInterface returns true if the interface is a loopback
+func isLoopbackInterface(name string) bool {
+	return name == "lo" || name == "loopback"
+}
+
+// GetCandidateInterfacesForWeka returns interfaces suitable for Weka deployment
+// Filters based on:
+// 1. Interface is supported by Weka
+// 2. If bond, the bond itself is supported by Weka
+// 3. Has an IP address assigned
+// 4. Type is one of: vlan, ethernet, infiniband, or bond
+// 5. Does not have /32 subnet mask (host-only route)
+// 6. Is not a loopback interface
+//
+// Optionally validates against a Weka version if forWekaVersion is specified.
+// Returns a slice of pointers to suitable interfaces.
+func (ni NetworkInterfaces) GetCandidateInterfacesForWeka(forWekaVersion ...string) []*NetworkInterface {
+	if len(ni) == 0 {
+		return []*NetworkInterface{}
+	}
+
+	var candidates []*NetworkInterface
+
+	for i := range ni {
+		iface := &ni[i]
+
+		// 1. Skip loopback interfaces
+		if isLoopbackInterface(iface.Name) {
+			continue
+		}
+
+		// 2. Check type is vlan, ethernet, infiniband, or bond
+		if iface.Type != "vlan" && iface.Type != "ethernet" &&
+			iface.Type != "infiniband" && iface.Type != "bond" {
+			continue
+		}
+
+		// 3. Must have IP address
+		if iface.IP == "" {
+			continue
+		}
+
+		// 4. Check for /32 subnet mask (host-only route)
+		prefix := getCIDRPrefix(iface.IP)
+		if prefix == 32 {
+			continue
+		}
+
+		// 5. Check if supported by Weka DPDK
+		supported, _ := iface.IsSupportedByWekaDpdk(forWekaVersion...)
+		if !supported {
+			continue
+		}
+
+		// 6. If bond, also verify the bond itself is supported
+		if iface.IsBond() {
+			bondSupported, _ := iface.IsSupportedByWekaDpdk(forWekaVersion...)
+			if !bondSupported {
+				continue
+			}
+		}
+
+		// All checks passed
+		candidates = append(candidates, iface)
+	}
+
+	return candidates
 }
 
 // NvmeDrive contains information about a single NVMe drive discovered during hostcheck
