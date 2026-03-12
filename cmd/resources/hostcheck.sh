@@ -142,7 +142,26 @@ get_iface_type() {
   local ifname="$1"
   local sysfs="/host-sys/class/net/$ifname"
 
-  # Check for InfiniBand
+  # For Mellanox converged adapters (15b3:*), check if this is an InfiniBand interface
+  # or a converged adapter port. Converged adapters can operate as either Ethernet or IB.
+  #
+  # Strategy:
+  # 1. If it looks like an Ethernet port name (enp*s*f*np*), treat as ethernet
+  #    (these are usually Ethernet faces on converged adapters)
+  # 2. If it's an ib* interface but has a valid Ethernet name pattern, check vendor
+  # 3. For true InfiniBand (no eth/enp name), check if infiniband device exists
+
+  # Check if this looks like an Ethernet port name (enp, eth, ens patterns)
+  case "$ifname" in
+    enp*|eth*|ens*|en*)
+      # Standard Ethernet naming pattern - treat as ethernet
+      # even if it might support InfiniBand (converged adapters)
+      echo "ethernet"
+      return
+      ;;
+  esac
+
+  # Check for InfiniBand directory (means it's configured as IB)
   if [ -d "$sysfs/device/infiniband" ]; then
     echo "infiniband"
     return
@@ -152,8 +171,8 @@ get_iface_type() {
   if [ -f "$sysfs/type" ]; then
     local type="$(cat "$sysfs/type" 2>/dev/null || true)"
     case "$type" in
-      32) echo "infiniband" ;;
-      1|*) echo "ethernet" ;;  # 1 is Ethernet, default to ethernet
+      32) echo "infiniband" ;;      # type 32 = InfiniBand
+      1|*) echo "ethernet" ;;       # type 1 = Ethernet, default to ethernet
     esac
   else
     echo "ethernet"
