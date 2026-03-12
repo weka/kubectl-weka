@@ -536,16 +536,16 @@ var NICCapabilityMap = map[string]*NICCapabilities{
 
 	// Intel devices - DPDK capable but need dedicated NIC per process
 	"8086:0d58": { // 82599ES
-		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdk:             false,
 		SupportedByWekaDpdkSingleNic:    false,
-		SupportedByWekaUdp:              true,
+		SupportedByWekaUdp:              false,
 		SupportedByWekaForLacpSameCard:  false,
 		SupportedByWekaForLacpDiffCards: false,
 	},
 	"8086:1521": { // I350
-		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdk:             false,
 		SupportedByWekaDpdkSingleNic:    false,
-		SupportedByWekaUdp:              true,
+		SupportedByWekaUdp:              false,
 		SupportedByWekaForLacpSameCard:  false,
 		SupportedByWekaForLacpDiffCards: false,
 	},
