@@ -1162,6 +1162,111 @@ get_nvme_size() {
   echo "$size"
 }
 
+# Function to collect server/hardware information from DMI
+get_server_info() {
+  local vendor=""
+  local model=""
+  local serial=""
+  local uuid=""
+  local bios_version=""
+
+  # Read from /sys/class/dmi/id files
+  [ -f "/host/sys/class/dmi/id/sys_vendor" ] && vendor="$(cat /host/sys/class/dmi/id/sys_vendor 2>/dev/null | tr -d '\n' || echo "")"
+  [ -f "/host/sys/class/dmi/id/product_name" ] && model="$(cat /host/sys/class/dmi/id/product_name 2>/dev/null | tr -d '\n' || echo "")"
+  [ -f "/host/sys/class/dmi/id/product_serial" ] && serial="$(cat /host/sys/class/dmi/id/product_serial 2>/dev/null | tr -d '\n' || echo "")"
+  [ -f "/host/sys/class/dmi/id/product_uuid" ] && uuid="$(cat /host/sys/class/dmi/id/product_uuid 2>/dev/null | tr -d '\n' || echo "")"
+  [ -f "/host/sys/class/dmi/id/bios_version" ] && bios_version="$(cat /host/sys/class/dmi/id/bios_version 2>/dev/null | tr -d '\n' || echo "")"
+
+  # Build server_info JSON
+  local server_obj="{"
+  [ -n "$vendor" ] && server_obj="$server_obj\"vendor\":\"$(json_escape "$vendor")\","
+  [ -n "$model" ] && server_obj="$server_obj\"model\":\"$(json_escape "$model")\","
+  [ -n "$serial" ] && server_obj="$server_obj\"serial_number\":\"$(json_escape "$serial")\","
+  [ -n "$uuid" ] && server_obj="$server_obj\"system_uuid\":\"$(json_escape "$uuid")\","
+  [ -n "$bios_version" ] && server_obj="$server_obj\"bios_version\":\"$(json_escape "$bios_version")\""
+
+  # Remove trailing comma if present
+  server_obj="${server_obj%,}"
+  server_obj="$server_obj}"
+
+  echo "$server_obj"
+}
+
+# Function to detect cloud provider and instance metadata
+# Uses filesystem-based detection first (works in CNI networks),
+# network metadata endpoints as fallback (requires host network access)
+detect_cloud_info() {
+  local is_cloud=false
+  local provider=""
+  local region=""
+  local az=""
+  local instance_type=""
+  local instance_id=""
+  local mac=""
+  local vpc=""
+
+  # ===== FILESYSTEM-BASED DETECTION (works in CNI networks) =====
+
+  # Check for AWS (EC2 detection)
+  if [ -f "/host/sys/hypervisor/uuid" ] && grep -q "^ec2" /host/sys/hypervisor/uuid 2>/dev/null; then
+    provider="aws"
+    is_cloud=true
+
+    # Try to get AWS metadata from IMDSv2 (requires host network / hostNetwork: true)
+    # This will fail silently in CNI networks and that's OK - we already detected AWS
+    if command -v curl >/dev/null 2>&1; then
+      local token="$(curl -s -m 2 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || true)"
+      if [ -n "$token" ]; then
+        region="$(curl -s -m 2 -H "X-aws-ec2-metadata-token: $token" "http://169.254.169.254/latest/meta-data/placement/region" 2>/dev/null || echo "")"
+        az="$(curl -s -m 2 -H "X-aws-ec2-metadata-token: $token" "http://169.254.169.254/latest/meta-data/placement/availability-zone" 2>/dev/null || echo "")"
+        instance_type="$(curl -s -m 2 -H "X-aws-ec2-metadata-token: $token" "http://169.254.169.254/latest/meta-data/instance-type" 2>/dev/null || echo "")"
+        instance_id="$(curl -s -m 2 -H "X-aws-ec2-metadata-token: $token" "http://169.254.169.254/latest/meta-data/instance-id" 2>/dev/null || echo "")"
+        mac="$(curl -s -m 2 -H "X-aws-ec2-metadata-token: $token" "http://169.254.169.254/latest/meta-data/mac" 2>/dev/null || echo "")"
+      fi
+    fi
+  fi
+
+  # Check for Azure (DMI-based detection)
+  if [ -z "$provider" ] && [ -f "/host/sys/class/dmi/id/product_name" ] && grep -qi "microsoft" /host/sys/class/dmi/id/product_name 2>/dev/null; then
+    provider="azure"
+    is_cloud=true
+
+    # Try to get Azure metadata from IMDSv2 endpoint (requires host network / hostNetwork: true)
+    if command -v curl >/dev/null 2>&1; then
+      instance_id="$(curl -s -m 2 -H "Metadata:true" "http://169.254.169.254/metadata/instance/compute/vmId?api-version=2021-02-01&format=text" 2>/dev/null || echo "")"
+      region="$(curl -s -m 2 -H "Metadata:true" "http://169.254.169.254/metadata/instance/compute/location?api-version=2021-02-01&format=text" 2>/dev/null || echo "")"
+      instance_type="$(curl -s -m 2 -H "Metadata:true" "http://169.254.169.254/metadata/instance/compute/vmSize?api-version=2021-02-01&format=text" 2>/dev/null || echo "")"
+    fi
+  fi
+
+  # Check for GCP (only via network metadata endpoint, no filesystem detection)
+  # GCP doesn't have easy filesystem markers, so we skip this if not on host network
+  # Note: This will not work in CNI networks without hostNetwork: true
+  if [ -z "$provider" ]; then
+    if command -v curl >/dev/null 2>&1 && curl -s -m 2 -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/id" >/dev/null 2>&1; then
+      provider="gcp"
+      is_cloud=true
+      region="$(curl -s -m 2 -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/zone" 2>/dev/null | grep -o '[^/]*$' || echo "")"
+      az="$region"  # GCP uses zone
+      instance_type="$(curl -s -m 2 -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/machine-type" 2>/dev/null | grep -o '[^/]*$' || echo "")"
+      instance_id="$(curl -s -m 2 -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/id" 2>/dev/null || echo "")"
+    fi
+  fi
+
+  # Build cloud_info JSON
+  local cloud_obj="{"
+  cloud_obj="$cloud_obj\"is_cloud_instance\":$is_cloud"
+  [ -n "$provider" ] && cloud_obj="$cloud_obj,\"provider\":\"$(json_escape "$provider")\""
+  [ -n "$region" ] && cloud_obj="$cloud_obj,\"region\":\"$(json_escape "$region")\""
+  [ -n "$az" ] && cloud_obj="$cloud_obj,\"availability_zone\":\"$(json_escape "$az")\""
+  [ -n "$instance_type" ] && cloud_obj="$cloud_obj,\"instance_type\":\"$(json_escape "$instance_type")\""
+  [ -n "$instance_id" ] && cloud_obj="$cloud_obj,\"instance_id\":\"$(json_escape "$instance_id")\""
+  [ -n "$mac" ] && cloud_obj="$cloud_obj,\"mac_address\":\"$(json_escape "$mac")\""
+  cloud_obj="$cloud_obj}"
+
+  echo "$cloud_obj"
+}
+
 # Function to check if drive or its partitions are mounted
 is_nvme_mounted() {
   local dev="$1"
@@ -1251,10 +1356,16 @@ fi
 # ----- Routing Configuration Collection -----
 ROUTING_JSON="$(collect_routing_info)"
 
+# ----- Server Hardware and Cloud Detection -----
+SERVER_INFO_JSON="$(get_server_info)"
+CLOUD_INFO_JSON="$(detect_cloud_info)"
+
 # Output JSON (single line)
 printf '{'
 printf '"is_rhcos":%s,' "$([ "$IS_RHCOS" -eq 1 ] && echo true || echo false)"
 printf '"os_release":"%s",' "$(json_escape "$OSR")"
+printf '"server_info":%s,' "$SERVER_INFO_JSON"
+printf '"cloud_info":%s,' "$CLOUD_INFO_JSON"
 printf '"weka_dir_exists":%s,' "$([ "$WEKADIR_EXISTS" -eq 1 ] && echo true || echo false)"
 printf '"weka_dir_path":"%s",' "$(json_escape "$WEKADIR_PATH")"
 printf '"weka_dir_avail_bytes":%d,' "$WEKADIR_AVAIL_BYTES"

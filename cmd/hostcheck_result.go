@@ -729,10 +729,38 @@ func (nd *NvmeDrive) GetDeviceInfo() *ds.NVMeInfo {
 	return ds.GetNVMeInfo(nd.VendorModel)
 }
 
+// ServerInfo contains hardware information about the node
+type ServerInfo struct {
+	Vendor       string `json:"vendor,omitempty"`        // BIOS/DMI Vendor (e.g., "Dell Inc.", "HP", "Lenovo")
+	Model        string `json:"model,omitempty"`         // Hardware Model (e.g., "PowerEdge R750")
+	SerialNumber string `json:"serial_number,omitempty"` // Serial number of the system
+	SystemUUID   string `json:"system_uuid,omitempty"`   // System UUID (if available)
+	BIOSVersion  string `json:"bios_version,omitempty"`  // BIOS version
+}
+
+// CloudInfo contains information about cloud instance metadata
+type CloudInfo struct {
+	IsCloudInstance  bool              `json:"is_cloud_instance"`           // Whether this is a cloud instance
+	Provider         string            `json:"provider,omitempty"`          // Cloud provider (aws, gcp, azure, alibaba, etc.)
+	Region           string            `json:"region,omitempty"`            // Cloud region (e.g., "us-east-1", "us-central1")
+	AvailabilityZone string            `json:"availability_zone,omitempty"` // AZ/Zone (e.g., "us-east-1a", "us-central1-a")
+	InstanceType     string            `json:"instance_type,omitempty"`     // Instance type (e.g., "t3.xlarge", "n2-standard-8")
+	InstanceID       string            `json:"instance_id,omitempty"`       // Instance ID from cloud provider
+	MacAddress       string            `json:"mac_address,omitempty"`       // Primary MAC address
+	VPCSubnet        string            `json:"vpc_subnet,omitempty"`        // VPC/Subnet ID if available
+	Tags             map[string]string `json:"tags,omitempty"`              // Cloud tags/labels if available
+}
+
 type HostChecksResult struct {
 	// OS detection via /etc/os-release on host
 	IsRHCOS   bool   `json:"is_rhcos"`
 	OSRelease string `json:"os_release"`
+
+	// Server hardware information
+	ServerInfo *ServerInfo `json:"server_info,omitempty"` // Hardware/BIOS information
+
+	// Cloud instance detection
+	CloudInfo *CloudInfo `json:"cloud_info,omitempty"` // Cloud provider and instance information
 
 	// Kernel version detection via /proc/version
 	KernelVersion string `json:"kernel_version"`
