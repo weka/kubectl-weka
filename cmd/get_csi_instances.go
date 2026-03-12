@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"text/tabwriter"
 
+	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -244,17 +244,17 @@ func generateCSIInstancesOutput(ctx context.Context, clients *K8sClients, driver
 	})
 
 	// Generate table output
-	var output strings.Builder
-	w := tabwriter.NewWriter(&output, 0, 8, 2, ' ', 0)
+	t := table.NewWriter()
+	styleTableMinimal(t)
 
-	// Write header
+	// Set header
 	if wide {
-		fmt.Fprintln(w, "CSI DRIVER\tNAMESPACE\tNODE\tROLE\tPOD NAME\tSTATUS\tRESTARTS\tLAST RESTART\tAGE")
+		t.AppendHeader(table.Row{"CSI DRIVER", "NAMESPACE", "NODE", "ROLE", "POD NAME", "STATUS", "RESTARTS", "LAST RESTART", "AGE"})
 	} else {
-		fmt.Fprintln(w, "CSI DRIVER\tNAMESPACE\tNODE\tROLE\tPOD NAME\tSTATUS\tRESTARTS\tAGE")
+		t.AppendHeader(table.Row{"CSI DRIVER", "NAMESPACE", "NODE", "ROLE", "POD NAME", "STATUS", "RESTARTS", "AGE"})
 	}
 
-	// Write rows
+	// Append rows
 	for _, info := range instances {
 		age := humanAge(metav1.Now().Sub(info.CreatedTime.Time))
 
@@ -263,8 +263,7 @@ func generateCSIInstancesOutput(ctx context.Context, clients *K8sClients, driver
 			if info.LastRestartTime != nil {
 				lastRestart = humanAge(metav1.Now().Sub(info.LastRestartTime.Time))
 			}
-			fmt.Fprintf(w,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+			t.AppendRow(table.Row{
 				info.DriverName,
 				info.Namespace,
 				info.NodeName,
@@ -274,10 +273,9 @@ func generateCSIInstancesOutput(ctx context.Context, clients *K8sClients, driver
 				info.RestartCount,
 				lastRestart,
 				age,
-			)
+			})
 		} else {
-			fmt.Fprintf(w,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
+			t.AppendRow(table.Row{
 				info.DriverName,
 				info.Namespace,
 				info.NodeName,
@@ -286,13 +284,11 @@ func generateCSIInstancesOutput(ctx context.Context, clients *K8sClients, driver
 				info.PodStatus,
 				info.RestartCount,
 				age,
-			)
+			})
 		}
 	}
 
-	w.Flush()
-
-	return output.String(), nil
+	return t.Render() + "\n", nil
 }
 
 // getCSIDriverFromPod extracts the CSI driver name from a pod

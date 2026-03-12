@@ -4,9 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
-	"text/tabwriter"
 
+	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -152,12 +151,9 @@ func generateCSISecretsOutput(ctx context.Context, clients *K8sClients) (string,
 	})
 
 	// Generate table output
-	var output strings.Builder
-	w := tabwriter.NewWriter(&output, 0, 8, 2, ' ', 0)
-
-	// Write header
-	fmt.Fprintln(w, "NAME\tNAMESPACE\tSTORAGECLASS COUNT\tVALID\tDETAIL")
-
+	t := table.NewWriter()
+	styleTableMinimal(t)
+	t.AppendHeader(table.Row{"NAME", "NAMESPACE", "STORAGECLASS COUNT", "VALID", "DETAIL"})
 	// Write rows
 	for _, secret := range secrets {
 		validStatus := "✓"
@@ -170,17 +166,14 @@ func generateCSISecretsOutput(ctx context.Context, clients *K8sClients) (string,
 			detail = secret.ValidationErrors[0]
 		}
 
-		fmt.Fprintf(w,
-			"%s\t%s\t%d\t%s\t%s\n",
+		t.AppendRow(table.Row{
 			secret.Name,
 			secret.Namespace,
 			secret.StorageClassCount,
 			validStatus,
 			detail,
-		)
+		})
 	}
 
-	w.Flush()
-
-	return output.String(), nil
+	return t.Render() + "\n", nil
 }

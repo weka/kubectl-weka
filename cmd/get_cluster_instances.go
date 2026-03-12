@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"text/tabwriter"
 	"time"
 
+	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -111,20 +111,22 @@ func generateClusterInstancesOutput(
 	}
 
 	var output strings.Builder
-	w := tabwriter.NewWriter(&output, 0, 8, 2, ' ', 0)
+	t := table.NewWriter()
+	styleTableMinimal(t)
+	t.SetOutputMirror(&output)
 
 	if !noHeaders {
 		if includeNamespaceColumn {
 			if wide {
-				fmt.Fprintln(w, "NAMESPACE\tWEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID\tAGE\tCPU_UTIL")
+				t.AppendHeader(table.Row{"NAMESPACE", "WEKACLUSTER", "NODE", "WEKACONTAINER", "WC_STATUS", "POD", "MGMT_IP", "CONTAINER_ID", "AGE", "CPU_UTIL"})
 			} else {
-				fmt.Fprintln(w, "NAMESPACE\tWEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID")
+				t.AppendHeader(table.Row{"NAMESPACE", "WEKACLUSTER", "NODE", "WEKACONTAINER", "WC_STATUS", "POD", "MGMT_IP", "CONTAINER_ID"})
 			}
 		} else {
 			if wide {
-				fmt.Fprintln(w, "WEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID\tAGE\tCPU_UTIL")
+				t.AppendHeader(table.Row{"WEKACLUSTER", "NODE", "WEKACONTAINER", "WC_STATUS", "POD", "MGMT_IP", "CONTAINER_ID", "AGE", "CPU_UTIL"})
 			} else {
-				fmt.Fprintln(w, "WEKACLUSTER\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tMGMT_IP\tCONTAINER_ID")
+				t.AppendHeader(table.Row{"WEKACLUSTER", "NODE", "WEKACONTAINER", "WC_STATUS", "POD", "MGMT_IP", "CONTAINER_ID"})
 			}
 		}
 	}
@@ -225,26 +227,22 @@ func generateClusterInstancesOutput(
 					cpuUtil = "<none>"
 				}
 				if includeNamespaceColumn {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						ns, clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil)
+					t.AppendRow(table.Row{ns, clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil})
 				} else {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil)
+					t.AppendRow(table.Row{clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil})
 				}
 			} else {
 				if includeNamespaceColumn {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						ns, clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID)
+					t.AppendRow(table.Row{ns, clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID})
 				} else {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID)
+					t.AppendRow(table.Row{clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID})
 				}
 			}
 		}
 	}
 
-	w.Flush()
-	return output.String(), nil
+	t.Render()
+	return output.String() + "\n", nil
 }
 
 // ---- helpers ----

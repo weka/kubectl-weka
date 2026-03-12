@@ -3,11 +3,10 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
-	"text/tabwriter"
 	"time"
 
+	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -61,7 +60,9 @@ func runGetPolicies(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+	t := table.NewWriter()
+	styleTableMinimal(t)
+
 	if len(list.Items) == 0 {
 		if includeNamespaceColumn {
 			fmt.Printf("No resources found.\n")
@@ -76,15 +77,15 @@ func runGetPolicies(cmd *cobra.Command, args []string) error {
 	if !flagNoHeaders {
 		if includeNamespaceColumn {
 			if flagWide {
-				fmt.Fprintln(w, "NAMESPACE\tNAME\tAGE\tTYPE\tSTATUS\tPROGRESS")
+				t.AppendHeader(table.Row{"NAMESPACE", "NAME", "AGE", "TYPE", "STATUS", "PROGRESS"})
 			} else {
-				fmt.Fprintln(w, "NAMESPACE\tNAME\tAGE\tTYPE\tSTATUS")
+				t.AppendHeader(table.Row{"NAMESPACE", "NAME", "AGE", "TYPE", "STATUS"})
 			}
 		} else {
 			if flagWide {
-				fmt.Fprintln(w, "NAME\tAGE\tTYPE\tSTATUS\tPROGRESS")
+				t.AppendHeader(table.Row{"NAME", "AGE", "TYPE", "STATUS", "PROGRESS"})
 			} else {
-				fmt.Fprintln(w, "NAME\tAGE\tTYPE\tSTATUS")
+				t.AppendHeader(table.Row{"NAME", "AGE", "TYPE", "STATUS"})
 			}
 		}
 	}
@@ -117,20 +118,21 @@ func runGetPolicies(cmd *cobra.Command, args []string) error {
 
 		if !flagWide {
 			if includeNamespaceColumn {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", ns, name, age, pType, pStatus)
+				t.AppendRow(table.Row{ns, name, age, pType, pStatus})
 			} else {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", name, age, pType, pStatus)
+				t.AppendRow(table.Row{name, age, pType, pStatus})
 			}
 			continue
 		}
 
 		if includeNamespaceColumn {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", ns, name, age, pType, pStatus, pProgress)
+			t.AppendRow(table.Row{ns, name, age, pType, pStatus, pProgress})
 		} else {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", name, age, pType, pStatus, pProgress)
+			t.AppendRow(table.Row{name, age, pType, pStatus, pProgress})
 		}
 	}
 
-	w.Flush()
+	fmt.Print(t.Render())
+	fmt.Println() // Add newline after table
 	return nil
 }

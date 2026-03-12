@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+
+	"github.com/jedib0t/go-pretty/v6/table"
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -14,6 +16,37 @@ import (
 	"strings"
 	"time"
 )
+
+// styleTableMinimal configures a table with minimal styling (kubectl-like output)
+func styleTableMinimal(w table.Writer) {
+	w.SetStyle(table.StyleDefault)
+	w.Style().Options.DrawBorder = false
+	w.Style().Options.SeparateRows = false
+	w.Style().Options.SeparateColumns = false
+	w.Style().Options.SeparateFooter = false
+	w.Style().Options.SeparateHeader = false
+}
+
+// indentText indents a block of text by the specified number of spaces
+func indentText(text string, spaces int) string {
+	if spaces <= 0 || text == "" {
+		return text
+	}
+
+	indent := strings.Repeat(" ", spaces)
+	lines := strings.Split(text, "\n")
+
+	var result []string
+	for _, line := range lines {
+		if line == "" {
+			result = append(result, "")
+		} else {
+			result = append(result, indent+line)
+		}
+	}
+
+	return strings.Join(result, "\n")
+}
 
 // -----------------------------
 func humanAge(d time.Duration) string {

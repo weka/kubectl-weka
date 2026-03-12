@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"text/tabwriter"
 
+	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -141,20 +141,22 @@ func generateClientInstancesOutput(
 	})
 
 	var output strings.Builder
-	w := tabwriter.NewWriter(&output, 0, 8, 2, ' ', 0)
+	t := table.NewWriter()
+	styleTableMinimal(t)
+	t.SetOutputMirror(&output)
 
 	if !noHeaders {
 		if includeNamespaceColumn {
 			if wide {
-				fmt.Fprintln(w, "NAMESPACE\tWEKACLIENT\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tJOINED\tCONTAINER_ID\tMGMT_IPS\tACTIVE_MOUNTS\tCPU_UTIL\tNODE_SELECTOR")
+				t.AppendHeader(table.Row{"NAMESPACE", "WEKACLIENT", "NODE", "WEKACONTAINER", "WC_STATUS", "POD", "JOINED", "CONTAINER_ID", "MGMT_IPS", "ACTIVE_MOUNTS", "CPU_UTIL", "NODE_SELECTOR"})
 			} else {
-				fmt.Fprintln(w, "NAMESPACE\tWEKACLIENT\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tJOINED\tCONTAINER_ID\tMGMT_IP\tACTIVE_MOUNTS\tCPU_UTIL")
+				t.AppendHeader(table.Row{"NAMESPACE", "WEKACLIENT", "NODE", "WEKACONTAINER", "WC_STATUS", "POD", "JOINED", "CONTAINER_ID", "MGMT_IP", "ACTIVE_MOUNTS", "CPU_UTIL"})
 			}
 		} else {
 			if wide {
-				fmt.Fprintln(w, "WEKACLIENT\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tJOINED\tCONTAINER_ID\tMGMT_IPS\tACTIVE_MOUNTS\tCPU_UTIL\tNODE_SELECTOR")
+				t.AppendHeader(table.Row{"WEKACLIENT", "NODE", "WEKACONTAINER", "WC_STATUS", "POD", "JOINED", "CONTAINER_ID", "MGMT_IPS", "ACTIVE_MOUNTS", "CPU_UTIL", "NODE_SELECTOR"})
 			} else {
-				fmt.Fprintln(w, "WEKACLIENT\tNODE\tWEKACONTAINER\tWC_STATUS\tPOD\tJOINED\tCONTAINER_ID\tMGMT_IP\tACTIVE_MOUNTS\tCPU_UTIL")
+				t.AppendHeader(table.Row{"WEKACLIENT", "NODE", "WEKACONTAINER", "WC_STATUS", "POD", "JOINED", "CONTAINER_ID", "MGMT_IP", "ACTIVE_MOUNTS", "CPU_UTIL"})
 			}
 		}
 	}
@@ -170,12 +172,18 @@ func generateClientInstancesOutput(
 		nodes, err := k8s.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: selectorStr})
 		if err != nil {
 			// show a single error row for this client
-			if wide {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					clientName, "<nodes?>", clientNS, "<none>", "FAIL", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", selectorStr)
+			if includeNamespaceColumn {
+				if wide {
+					t.AppendRow(table.Row{clientNS, clientName, "<nodes?>", "<none>", "FAIL", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", selectorStr})
+				} else {
+					t.AppendRow(table.Row{clientNS, clientName, "<nodes?>", "<none>", "FAIL", "n/a", "n/a", "n/a", "n/a", "n/a"})
+				}
 			} else {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					clientName, "<nodes?>", clientNS, "<none>", "FAIL", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a")
+				if wide {
+					t.AppendRow(table.Row{clientName, "<nodes?>", "<none>", "FAIL", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a"})
+				} else {
+					t.AppendRow(table.Row{clientName, "<nodes?>", "<none>", "FAIL", "n/a", "n/a", "n/a", "n/a", "n/a"})
+				}
 			}
 			continue
 		}
@@ -231,24 +239,20 @@ func generateClientInstancesOutput(
 			}
 			if includeNamespaceColumn {
 				if wide {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						clientNS, clientName, n.Name, wContName, wContStatus, podPhase, joined, containerID, mgmtIPsAll, activeMounts, cpuUtil, selectorStr)
+					t.AppendRow(table.Row{clientNS, clientName, n.Name, wContName, wContStatus, podPhase, joined, containerID, mgmtIPsAll, activeMounts, cpuUtil, selectorStr})
 				} else {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						clientNS, clientName, n.Name, wContName, wContStatus, podPhase, joined, containerID, mgmtIPShort, activeMounts, cpuUtil)
+					t.AppendRow(table.Row{clientNS, clientName, n.Name, wContName, wContStatus, podPhase, joined, containerID, mgmtIPShort, activeMounts, cpuUtil})
 				}
 			} else {
 				if wide {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						clientName, n.Name, wContName, wContStatus, podPhase, joined, containerID, mgmtIPsAll, activeMounts, cpuUtil, selectorStr)
+					t.AppendRow(table.Row{clientName, n.Name, wContName, wContStatus, podPhase, joined, containerID, mgmtIPsAll, activeMounts, cpuUtil, selectorStr})
 				} else {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						clientName, n.Name, wContName, wContStatus, podPhase, joined, containerID, mgmtIPShort, activeMounts, cpuUtil)
+					t.AppendRow(table.Row{clientName, n.Name, wContName, wContStatus, podPhase, joined, containerID, mgmtIPShort, activeMounts, cpuUtil})
 				}
 			}
 		}
 	}
 
-	w.Flush()
-	return output.String(), nil
+	t.Render()
+	return output.String() + "\n", nil
 }

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"text/tabwriter"
 
+	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -280,21 +280,22 @@ func generateCSIDriversOutput(ctx context.Context, clients *K8sClients, onlyHelm
 
 	// Generate table output
 	var output strings.Builder
-	w := tabwriter.NewWriter(&output, 0, 8, 2, ' ', 0)
+	t := table.NewWriter()
+	styleTableMinimal(t)
+	t.SetOutputMirror(&output)
 
-	// Write header
+	// Set header
 	if wide {
-		fmt.Fprintln(w, "CSI DRIVER\tMANAGED BY\tNAMESPACE\tCONTROLLER\tNODE DAEMONSET\tSTORAGECLASSES\tPVS\tPVCS\tBOUND PVS\tAGE")
+		t.AppendHeader(table.Row{"CSI DRIVER", "MANAGED BY", "NAMESPACE", "CONTROLLER", "NODE DAEMONSET", "STORAGECLASSES", "PVS", "PVCS", "BOUND PVS", "AGE"})
 	} else {
-		fmt.Fprintln(w, "CSI DRIVER\tMANAGED BY\tNAMESPACE\tCONTROLLER\tNODE DAEMONSET\tSTORAGECLASSES\tAGE")
+		t.AppendHeader(table.Row{"CSI DRIVER", "MANAGED BY", "NAMESPACE", "CONTROLLER", "NODE DAEMONSET", "STORAGECLASSES", "AGE"})
 	}
 
-	// Write rows
+	// Append rows
 	for _, info := range deployments {
 		age := humanAge(metav1.Now().Sub(info.CreationTime.Time))
 		if wide {
-			fmt.Fprintf(w,
-				"%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s\n",
+			t.AppendRow(table.Row{
 				info.DriverName,
 				info.ManagedBy,
 				info.Namespace,
@@ -305,10 +306,9 @@ func generateCSIDriversOutput(ctx context.Context, clients *K8sClients, onlyHelm
 				info.PVCCount,
 				info.BoundPVCount,
 				age,
-			)
+			})
 		} else {
-			fmt.Fprintf(w,
-				"%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
+			t.AppendRow(table.Row{
 				info.DriverName,
 				info.ManagedBy,
 				info.Namespace,
@@ -316,17 +316,17 @@ func generateCSIDriversOutput(ctx context.Context, clients *K8sClients, onlyHelm
 				getNameOrNone(info.NodeDaemonsetName),
 				info.StorageClassCount,
 				age,
-			)
+			})
 		}
 	}
 
-	w.Flush()
+	t.Render()
 
 	if len(deployments) == 0 {
 		return "No CSI deployments found.\n", nil
 	}
 
-	return output.String(), nil
+	return output.String() + "\n", nil
 }
 
 // getCSIDriverNameFromDeployment extracts CSI_DRIVER_NAME from deployment's first container
