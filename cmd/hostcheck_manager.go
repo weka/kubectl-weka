@@ -280,7 +280,7 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 }
 
 // GetNodeDrivesFromHostChecks extracts drive information from hostcheck results
-func (hcm HostChecksMap) GetNodeDrivesFromHostChecks(nodeName string) []NVMeDriveInfo {
+func (hcm HostChecksMap) GetNodeDrivesFromHostChecks(nodeName string) []NvmeDrive {
 	if result, exists := hcm[nodeName]; exists {
 		return result.NVMeDrives
 	}

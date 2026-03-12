@@ -176,10 +176,13 @@ type HostChecksResult struct {
 	NVMeDrives      []NVMeDriveInfo `json:"nvme_drives"`
 	NVMeDriveCount  int             `json:"nvme_drive_count"`
 	NVMeDriveDetail string          `json:"nvme_drive_detail"`
+	NVMeDrives     []NvmeDrive `json:"nvme_drives"`
 }
 
 // NVMeDriveInfo contains information about a single NVMe drive
 type NVMeDriveInfo struct {
+// NvmeDrive contains information about a single NVMe drive
+type NvmeDrive struct {
 	DeviceName   string `json:"device_name"` // e.g., "nvme0n1"
 	DevicePath   string `json:"device_path"` // e.g., "/dev/nvme0n1"
 	SerialNumber string `json:"serial"`      // Drive serial number

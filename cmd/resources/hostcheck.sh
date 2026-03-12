@@ -1,4 +1,3 @@
-#!/bin/sh
 set -eu
 
 json_escape() {
@@ -24,53 +23,42 @@ if [ -f /host/etc/os-release ]; then
   fi
 fi
 
-# ----- WEKA dir check (>= 300GB available) -----
+# ----- Check for existency of dedicated WEKA dir -----
 WEKADIR="/host/opt/k8s-weka"
 if [ "$IS_RHCOS" -eq 1 ]; then
   WEKADIR="/host/root/k8s-weka"
 fi
 
-WEKADIR_OK=0
+WEKADIR_EXISTS=0
 WEKADIR_AVAIL_BYTES=0
-WEKADIR_DETAIL=""
 WEKADIR_PATH="${WEKADIR#/host}"
 
 if [ -d "$WEKADIR" ]; then
+  WEKADIR_EXISTS=1
   WEKADIR_AVAIL_BYTES="$(df -PB1 "$WEKADIR" 2>/dev/null | tail -n1 | awk '{print $4}' || echo 0)"
-  MIN_PASS=$((300*1000*1000*1000))
-  if [ "$WEKADIR_AVAIL_BYTES" -ge "$MIN_PASS" ]; then
-    WEKADIR_OK=1
-  fi
-  WEKADIR_DETAIL="ok"
 else
-  WEKADIR_DETAIL="directory does not exist"
+  WEKADIR_AVAIL_BYTES=0
 fi
 
-# ----- XFS installed -----
-XFS_OK=0
-XFS_DETAIL=""
+# ----- XFS tools (check if available) -----
+XFS_FOUND=0
+
 for p in /host/usr/sbin/mkfs.xfs /host/sbin/mkfs.xfs /host/usr/bin/mkfs.xfs /host/bin/mkfs.xfs; do
   if [ -x "$p" ]; then
-    XFS_OK=1
-    XFS_DETAIL="found $p"
+    XFS_FOUND=1
     break
   fi
 done
-if [ "$XFS_OK" -eq 0 ]; then
-  XFS_DETAIL="mkfs.xfs not found (xfsprogs likely missing)"
-fi
 
-# ----- WEKA agent service must not exist -----
-WEKA_CLEAN=1
-WEKA_DETAIL="clean"
+# ----- WEKA agent service check -----
+WEKA_AGENT_SERVICE_EXISTS=0
 
 for u in \
   /host/etc/systemd/system/weka-agent.service \
   /host/usr/lib/systemd/system/weka-agent.service \
   /host/lib/systemd/system/weka-agent.service; do
   if [ -f "$u" ]; then
-    WEKA_CLEAN=0
-    WEKA_DETAIL="weka-agent.service exists"
+    WEKA_AGENT_SERVICE_EXISTS=1
     break
   fi
 done
@@ -918,13 +906,6 @@ for iface_dir in /host-sys/class/net/*; do
   NETWORK_IFACES_COUNT=$((NETWORK_IFACES_COUNT+1))
 done
 
-NETWORK_DETAIL=""
-if [ "$NETWORK_IFACES_COUNT" -gt 0 ]; then
-  NETWORK_DETAIL="found $NETWORK_IFACES_COUNT interface(s)"
-else
-  NETWORK_DETAIL="no network interfaces found"
-fi
-
 # ----- CPU and Memory detection -----
 HT_ENABLED=0
 PHYSICAL_CORES=0
@@ -1048,7 +1029,6 @@ fi
 # Discover NVMe drives by examining /dev and /sys
 NVME_DRIVES_JSON=""
 NVME_DRIVES_COUNT=0
-NVME_DETAIL="no NVMe drives found"
 
 # Function to get NVMe drive PCI address
 get_nvme_pci_addr() {
@@ -1204,10 +1184,6 @@ for nvme_dev in /host/dev/nvme[0-9]n[0-9]; do
   NVME_DRIVES_COUNT=$((NVME_DRIVES_COUNT+1))
 done
 
-if [ "$NVME_DRIVES_COUNT" -gt 0 ]; then
-  NVME_DETAIL="found $NVME_DRIVES_COUNT NVMe drive(s)"
-fi
-
 # ----- CNI Detection -----
 CNI_DETECTED=false
 CNI_POD_CIDR=""
@@ -1228,32 +1204,19 @@ fi
 
 # ----- Routing Configuration Collection -----
 ROUTING_JSON="$(collect_routing_info)"
-# Count custom routing rules (exclude default rules: priority 0, 32766, 32767)
-CUSTOM_RULES="$(echo "$ROUTING_JSON" | grep -o '"priority":[^,}]*' | grep -v '"priority":\(0\|32766\|32767\)' | wc -l)"
-ROUTING_DETAIL="routing configured"
-if [ "$CUSTOM_RULES" -eq 0 ]; then
-  ROUTING_DETAIL="default routing rules only (no custom rules configured)"
-else
-  ROUTING_DETAIL="custom routing rules configured ($CUSTOM_RULES rule(s))"
-fi
 
 # Output JSON (single line)
 printf '{'
 printf '"is_rhcos":%s,' "$([ "$IS_RHCOS" -eq 1 ] && echo true || echo false)"
 printf '"os_release":"%s",' "$(json_escape "$OSR")"
-printf '"weka_dir_ok":%s,' "$([ "$WEKADIR_OK" -eq 1 ] && echo true || echo false)"
+printf '"weka_dir_exists":%s,' "$([ "$WEKADIR_EXISTS" -eq 1 ] && echo true || echo false)"
 printf '"weka_dir_path":"%s",' "$(json_escape "$WEKADIR_PATH")"
-printf '"weka_dir_detail":"%s",' "$(json_escape "$WEKADIR_DETAIL")"
 printf '"weka_dir_avail_bytes":%d,' "$WEKADIR_AVAIL_BYTES"
-printf '"xfs_installed":%s,' "$([ "$XFS_OK" -eq 1 ] && echo true || echo false)"
-printf '"xfs_detail":"%s",' "$(json_escape "$XFS_DETAIL")"
-printf '"weka_client_clean":%s,' "$([ "$WEKA_CLEAN" -eq 1 ] && echo true || echo false)"
-printf '"weka_client_detail":"%s",' "$(json_escape "$WEKA_DETAIL")"
+printf '"xfs_found":%s,' "$([ "$XFS_FOUND" -eq 1 ] && echo true || echo false)"
+printf '"weka_agent_service_exists":%s,' "$([ "$WEKA_AGENT_SERVICE_EXISTS" -eq 1 ] && echo true || echo false)"
 printf '"network_interfaces":[%s],' "$NETWORK_IFACES_JSON"
 printf '"network_interface_count":%d,' "$NETWORK_IFACES_COUNT"
-printf '"network_interface_detail":"%s",' "$(json_escape "$NETWORK_DETAIL")"
 printf '"network_namespace_routing":%s,' "$ROUTING_JSON"
-printf '"routing_detail":"%s",' "$(json_escape "$ROUTING_DETAIL")"
 printf '"cni_detection":{"pod_cidr":"%s","source":"%s","cni_type":"%s","detected":%s},' \
   "$(json_escape "$CNI_POD_CIDR")" \
   "$(json_escape "$CNI_SOURCE")" \
@@ -1271,7 +1234,5 @@ printf '"cpu_family":"%s",' "$(json_escape "$CPU_FAMILY")"
 printf '"cpu_arch":"%s",' "$(json_escape "$CPU_ARCH")"
 printf '"cpu_sockets":%d,' "$CPU_SOCKETS"
 printf '"nvme_drives":[%s],' "$NVME_DRIVES_JSON"
-printf '"nvme_drive_count":%d,' "$NVME_DRIVES_COUNT"
-printf '"nvme_drive_detail":"%s"' "$(json_escape "$NVME_DETAIL")"
+printf '"nvme_drive_count":%d' "$NVME_DRIVES_COUNT"
 printf '}\n'
-
