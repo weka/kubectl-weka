@@ -158,11 +158,26 @@ func (ni *NetworkInterface) GetMaster() *NetworkInterface {
 // NetworkInterface Methods - Device Detection and Capability Checking
 
 // IsSupportedByWekaDpdk checks if the NIC can be used with Weka DPDK.
+// For bonds, returns true only if ALL slaves support DPDK.
 // Optionally validates against a Weka version if forWekaVersion is specified.
 // Note: May require dedicated NIC per Weka process depending on device capabilities
 func (ni *NetworkInterface) IsSupportedByWekaDpdk(forWekaVersion ...string) bool {
 	if ni == nil {
 		return false
+	}
+
+	// For bonds, all slaves must support the feature
+	if ni.IsBond() {
+		slaves := ni.GetSlaves()
+		if len(slaves) == 0 {
+			return false // Bond with no slaves
+		}
+		for _, slave := range slaves {
+			if !slave.IsSupportedByWekaDpdk(forWekaVersion...) {
+				return false
+			}
+		}
+		return true
 	}
 
 	var wekaVersion string
@@ -191,11 +206,26 @@ func (ni *NetworkInterface) IsSupportedByWekaDpdk(forWekaVersion ...string) bool
 }
 
 // IsSupportedByWekaDpdkSingleNic checks if multiple Weka processes can share this NIC.
+// For bonds, returns true only if ALL slaves support single NIC sharing.
 // Optionally validates against a Weka version if forWekaVersion is specified.
 // These are typically high-performance devices like Mellanox that support this mode
 func (ni *NetworkInterface) IsSupportedByWekaDpdkSingleNic(forWekaVersion ...string) bool {
 	if ni == nil {
 		return false
+	}
+
+	// For bonds, all slaves must support the feature
+	if ni.IsBond() {
+		slaves := ni.GetSlaves()
+		if len(slaves) == 0 {
+			return false // Bond with no slaves
+		}
+		for _, slave := range slaves {
+			if !slave.IsSupportedByWekaDpdkSingleNic(forWekaVersion...) {
+				return false
+			}
+		}
+		return true
 	}
 
 	var wekaVersion string
@@ -224,11 +254,26 @@ func (ni *NetworkInterface) IsSupportedByWekaDpdkSingleNic(forWekaVersion ...str
 }
 
 // IsSupportedByWekaForLacpSameCard checks if LACP bonding is supported using 2 ports on the same NIC.
+// For bonds, returns true only if ALL slaves support LACP same card.
 // Optionally validates against a Weka version if forWekaVersion is specified.
 // Currently only certain high-performance devices support this
 func (ni *NetworkInterface) IsSupportedByWekaForLacpSameCard(forWekaVersion ...string) bool {
 	if ni == nil {
 		return false
+	}
+
+	// For bonds, all slaves must support the feature
+	if ni.IsBond() {
+		slaves := ni.GetSlaves()
+		if len(slaves) == 0 {
+			return false // Bond with no slaves
+		}
+		for _, slave := range slaves {
+			if !slave.IsSupportedByWekaForLacpSameCard(forWekaVersion...) {
+				return false
+			}
+		}
+		return true
 	}
 
 	var wekaVersion string
@@ -257,11 +302,26 @@ func (ni *NetworkInterface) IsSupportedByWekaForLacpSameCard(forWekaVersion ...s
 }
 
 // IsSupportedByWekaForLacpDiffCards checks if LACP bonding is supported across different NIC cards.
+// For bonds, returns true only if ALL slaves support LACP different cards.
 // Optionally validates against a Weka version if forWekaVersion is specified.
 // Currently not supported for any devices
 func (ni *NetworkInterface) IsSupportedByWekaForLacpDiffCards(forWekaVersion ...string) bool {
 	if ni == nil {
 		return false
+	}
+
+	// For bonds, all slaves must support the feature
+	if ni.IsBond() {
+		slaves := ni.GetSlaves()
+		if len(slaves) == 0 {
+			return false // Bond with no slaves
+		}
+		for _, slave := range slaves {
+			if !slave.IsSupportedByWekaForLacpDiffCards(forWekaVersion...) {
+				return false
+			}
+		}
+		return true
 	}
 
 	var wekaVersion string
