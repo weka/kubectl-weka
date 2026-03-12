@@ -184,7 +184,6 @@ func NewStandardModuleRegistry() *HostCheckRegistry {
 	_ = registry.RegisterModule(&WekaDirModule{})
 	_ = registry.RegisterModule(&XFSModule{})
 	_ = registry.RegisterModule(&WekaClientModule{})
-	_ = registry.RegisterModule(&NetworkModule{})
 	_ = registry.RegisterModule(&CPUModule{})
 	_ = registry.RegisterModule(&KernelModule{})
 	_ = registry.RegisterModule(&NVMeDrivesModule{})

@@ -798,7 +798,7 @@ collect_routing_info() {
   echo "$routing_obj"
 }
 
-# ----- Generic Network Interfaces Collection (Ethernet + InfiniBand + Bonds) -----
+# ----- Generic Network Interfaces Collection (Ethernet + InfiniBand + Bonds + VLANs) -----
 NETWORK_IFACES_JSON=""
 NETWORK_IFACES_COUNT=0
 
@@ -814,6 +814,39 @@ get_bond_slaves() {
   [ -f "/host-sys/class/net/$bond/bonding/slaves" ] && cat "/host-sys/class/net/$bond/bonding/slaves" 2>/dev/null || echo ""
 }
 
+# Helper function to detect if interface is a VLAN and get its parent and ID
+get_vlan_info() {
+  local ifname="$1"
+  local vlan_id=""
+  local vlan_parent=""
+
+  # Check if this is a VLAN interface (typically named like eth0.100 or eth0:100)
+  if echo "$ifname" | grep -q '\.' || echo "$ifname" | grep -q ':'; then
+    # Try to get VLAN info from /proc/net/vlan/config
+    if [ -f "/host/proc/net/vlan/config" ]; then
+      vlan_info="$(grep "^$ifname" "/host/proc/net/vlan/config" 2>/dev/null)"
+      if [ -n "$vlan_info" ]; then
+        # Format: eth0.100  1     100        eth0
+        vlan_id="$(echo "$vlan_info" | awk '{print $3}')"
+        vlan_parent="$(echo "$vlan_info" | awk '{print $NF}')"
+      fi
+    fi
+
+    # If not found in /proc, try to extract from interface name
+    if [ -z "$vlan_id" ]; then
+      if echo "$ifname" | grep -q '\.'; then
+        vlan_parent="${ifname%.*}"
+        vlan_id="${ifname##*.}"
+      elif echo "$ifname" | grep -q ':'; then
+        vlan_parent="${ifname%:*}"
+        vlan_id="${ifname##*:}"
+      fi
+    fi
+  fi
+
+  echo "$vlan_id|$vlan_parent"
+}
+
 # Scan all network interfaces
 for iface_dir in /host-sys/class/net/*; do
   [ -d "$iface_dir" ] || continue
@@ -821,6 +854,11 @@ for iface_dir in /host-sys/class/net/*; do
 
   # Skip loopback
   [ "$ifname" = "lo" ] && continue
+
+  # Detect if this is a VLAN interface
+  vlan_info="$(get_vlan_info "$ifname")"
+  vlan_id="${vlan_info%%|*}"
+  vlan_parent="${vlan_info##*|}"
 
   # Detect if this is a bond and get its properties
   is_bond=false
@@ -847,6 +885,8 @@ for iface_dir in /host-sys/class/net/*; do
   # Get interface information
   if [ "$is_bond" = "true" ]; then
     iface_type="bond"
+  elif [ -n "$vlan_id" ]; then
+    iface_type="vlan"
   else
     iface_type="$(get_iface_type "$ifname")"
   fi
@@ -885,6 +925,12 @@ for iface_dir in /host-sys/class/net/*; do
   if [ "$is_bond" = "true" ]; then
     obj="$obj\"bond_mode\":\"$(json_escape "$bond_mode")\","
     obj="$obj\"bond_slaves\":$bond_slaves_json,"
+  fi
+
+  # Add VLAN fields only for VLAN interfaces
+  if [ -n "$vlan_id" ]; then
+    obj="$obj\"vlan_parent\":\"$(json_escape "$vlan_parent")\","
+    obj="$obj\"vlan_id\":$vlan_id,"
   fi
 
   obj="$obj\"max_speed\":\"$(json_escape "$max_speed")\","

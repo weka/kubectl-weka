@@ -82,10 +82,10 @@ type NetworkNamespaceRouting struct {
 	TableCount    int                `json:"table_count"`    // Total number of tables
 }
 
-// NetworkInterface represents a generic network interface (Ethernet, InfiniBand, or Bond)
+// NetworkInterface represents a generic network interface (Ethernet, InfiniBand, Bond, or VLAN)
 type NetworkInterface struct {
-	Name             string                   `json:"name"`                      // e.g., "eth0", "ib0", "bond0"
-	Type             string                   `json:"type"`                      // "ethernet", "infiniband", or "bond"
+	Name             string                   `json:"name"`                      // e.g., "eth0", "ib0", "bond0", "eth0.100"
+	Type             string                   `json:"type"`                      // "ethernet", "infiniband", "bond", or "vlan"
 	IP               string                   `json:"ip,omitempty"`              // CIDR notation (e.g., 10.0.0.1/24)
 	MTU              int                      `json:"mtu,omitempty"`             // Maximum Transmission Unit
 	MAC              string                   `json:"mac,omitempty"`             // MAC address
@@ -93,6 +93,8 @@ type NetworkInterface struct {
 	IsBondSlave      bool                     `json:"is_bond_slave"`             // Whether this is a bond slave
 	BondMode         string                   `json:"bond_mode,omitempty"`       // Bond mode (e.g. "802.3ad") - only for bonds
 	BondSlaves       []string                 `json:"bond_slaves,omitempty"`     // Slave interfaces (only for bonds)
+	VLANParent       string                   `json:"vlan_parent,omitempty"`     // Parent interface for VLAN (e.g., "eth0" for "eth0.100")
+	VLANID           int                      `json:"vlan_id,omitempty"`         // VLAN ID (only for VLAN interfaces)
 	MaxSpeed         string                   `json:"max_speed,omitempty"`       // Maximum speed (e.g., "100Gbps")
 	EffectiveSpeed   string                   `json:"effective_speed,omitempty"` // Current speed (e.g., "40Gbps")
 	PCIAddress       string                   `json:"pci_address"`               // PCI address (e.g., "0000:3d:00.0")
@@ -107,26 +109,84 @@ type NetworkInterface struct {
 
 	// Internal reference to parent NetworkInterfaces list (not JSON serialized)
 	// Populated when HostChecksResult is created, allows navigation within interface hierarchy
-	parent *NetworkInterfaces
+	parent *NetworkInterfaces `json:"-"`
 }
 
 // IsBond returns true if this interface is a bond
 func (ni *NetworkInterface) IsBond() bool {
-	return ni.Type == "bond"
+	return ni != nil && ni.Type == "bond"
 }
 
 func (ni *NetworkInterface) IsLACP() bool {
-	return ni.IsBond() && ni.BondMode == "lacp"
+	return ni != nil && ni.IsBond() && ni.BondMode == "lacp"
+}
+
+// IsVlan returns true if this interface is a VLAN interface
+func (ni *NetworkInterface) IsVlan() bool {
+	return ni != nil && ni.Type == "vlan"
+}
+
+// GetParent returns the parent interface for a VLAN or bond slave
+// For VLANs, returns the parent interface (e.g., eth0 for eth0.100)
+// For regular interfaces, returns nil
+func (ni *NetworkInterface) GetParent() *NetworkInterface {
+	if ni == nil || ni.parent == nil {
+		return nil
+	}
+
+	// For VLAN interfaces, get parent by VLANParent name
+	if ni.IsVlan() && ni.VLANParent != "" {
+		for i, iface := range *ni.parent {
+			if iface.Name == ni.VLANParent {
+				return &(*ni.parent)[i]
+			}
+		}
+		return nil
+	}
+
+	return nil
+}
+
+// HasVlans returns true if this interface has VLAN interfaces configured on it
+// Only meaningful for non-VLAN interfaces
+func (ni *NetworkInterface) HasVlans() bool {
+	if ni == nil || ni.IsVlan() || ni.parent == nil {
+		return false
+	}
+
+	// Check if any VLAN has this interface as parent
+	for _, iface := range *ni.parent {
+		if iface.IsVlan() && iface.VLANParent == ni.Name {
+			return true
+		}
+	}
+	return false
+}
+
+// GetVlans returns all VLAN interfaces that are configured on this interface
+// Returns empty slice for non-VLAN interfaces
+func (ni *NetworkInterface) GetVlans() []*NetworkInterface {
+	if ni == nil || ni.IsVlan() || ni.parent == nil {
+		return []*NetworkInterface{}
+	}
+
+	var vlans []*NetworkInterface
+	for i, iface := range *ni.parent {
+		if iface.IsVlan() && iface.VLANParent == ni.Name {
+			vlans = append(vlans, &(*ni.parent)[i])
+		}
+	}
+	return vlans
 }
 
 // IsInfiniBand returns true if this interface is an InfiniBand interface
 func (ni *NetworkInterface) IsInfiniBand() bool {
-	return ni.Type == "infiniband"
+	return ni != nil && ni.Type == "infiniband"
 }
 
 // IsEthernet returns true if this interface is an Ethernet interface
 func (ni *NetworkInterface) IsEthernet() bool {
-	return ni.Type == "ethernet"
+	return ni != nil && ni.Type == "ethernet"
 }
 
 // GetSlaves returns all NetworkInterfaces that are slaves of this bond
@@ -138,9 +198,10 @@ func (ni *NetworkInterface) GetSlaves() []*NetworkInterface {
 
 	var slaves []*NetworkInterface
 	for _, slaveName := range ni.BondSlaves {
-		for _, iface := range *ni.parent {
-			if iface.Name == slaveName {
-				slaves = append(slaves, &iface)
+		for i := range *ni.parent {
+			if (*ni.parent)[i].Name == slaveName {
+				slaves = append(slaves, &(*ni.parent)[i])
+				break
 			}
 		}
 	}
@@ -219,11 +280,25 @@ func (ni *NetworkInterface) IsLacpOnSameCard() bool {
 // IsSupportedByWekaDpdk checks if the NIC can be used with Weka DPDK.
 // Returns (true, nil) if supported, or (false, error) with detailed error message.
 // For bonds, returns true only if ALL slaves support DPDK.
+// For VLANs, delegates to the parent interface.
 // Optionally validates against a Weka version if forWekaVersion is specified.
 // Note: May require dedicated NIC per Weka process depending on device capabilities
 func (ni *NetworkInterface) IsSupportedByWekaDpdk(forWekaVersion ...string) (bool, error) {
 	if ni == nil {
 		return false, fmt.Errorf("interface is nil")
+	}
+
+	// For VLAN interfaces, check the parent interface
+	if ni.IsVlan() {
+		parent := ni.GetParent()
+		if parent == nil {
+			return false, fmt.Errorf("VLAN %s has no parent interface", ni.Name)
+		}
+		supported, err := parent.IsSupportedByWekaDpdk(forWekaVersion...)
+		if !supported {
+			return false, fmt.Errorf("VLAN %s (on %s): %w", ni.Name, parent.Name, err)
+		}
+		return true, nil
 	}
 
 	// For bonds, all slaves must support the feature
@@ -307,11 +382,25 @@ func (ni *NetworkInterface) IsSupportedByWekaDpdk(forWekaVersion ...string) (boo
 // IsSupportedByWekaDpdkSingleNic checks if multiple Weka processes can share this NIC.
 // Returns (true, nil) if supported, or (false, error) with detailed error message.
 // For bonds, returns true only if ALL slaves support single NIC sharing.
+// For VLANs, delegates to the parent interface.
 // Optionally validates against a Weka version if forWekaVersion is specified.
 // These are typically high-performance devices like Mellanox that support this mode
 func (ni *NetworkInterface) IsSupportedByWekaDpdkSingleNic(forWekaVersion ...string) (bool, error) {
 	if ni == nil {
 		return false, fmt.Errorf("interface is nil")
+	}
+
+	// For VLAN interfaces, check the parent interface
+	if ni.IsVlan() {
+		parent := ni.GetParent()
+		if parent == nil {
+			return false, fmt.Errorf("VLAN %s has no parent interface", ni.Name)
+		}
+		supported, err := parent.IsSupportedByWekaDpdkSingleNic(forWekaVersion...)
+		if !supported {
+			return false, fmt.Errorf("VLAN %s (on %s): %w", ni.Name, parent.Name, err)
+		}
+		return true, nil
 	}
 
 	// For bonds, all slaves must support the feature
@@ -380,11 +469,25 @@ func (ni *NetworkInterface) IsSupportedByWekaDpdkSingleNic(forWekaVersion ...str
 // IsSupportedByWekaForLacpSameCard checks if LACP bonding is supported using 2 ports on the same NIC.
 // Returns (true, nil) if supported, or (false, error) with detailed error message.
 // For bonds, returns true only if ALL slaves support LACP same card.
+// For VLANs, delegates to the parent interface.
 // Optionally validates against a Weka version if forWekaVersion is specified.
 // Currently only certain high-performance devices support this
 func (ni *NetworkInterface) IsSupportedByWekaForLacpSameCard(forWekaVersion ...string) (bool, error) {
 	if ni == nil {
 		return false, fmt.Errorf("interface is nil")
+	}
+
+	// For VLAN interfaces, check the parent interface
+	if ni.IsVlan() {
+		parent := ni.GetParent()
+		if parent == nil {
+			return false, fmt.Errorf("VLAN %s has no parent interface", ni.Name)
+		}
+		supported, err := parent.IsSupportedByWekaForLacpSameCard(forWekaVersion...)
+		if !supported {
+			return false, fmt.Errorf("VLAN %s (on %s): %w", ni.Name, parent.Name, err)
+		}
+		return true, nil
 	}
 
 	// For bonds, all slaves must support the feature AND be on same card
@@ -458,11 +561,25 @@ func (ni *NetworkInterface) IsSupportedByWekaForLacpSameCard(forWekaVersion ...s
 // IsSupportedByWekaForLacpDiffCards checks if LACP bonding is supported across different NIC cards.
 // Returns (true, nil) if supported, or (false, error) with detailed error message.
 // For bonds, returns true only if ALL slaves support LACP different cards.
+// For VLANs, delegates to the parent interface.
 // Optionally validates against a Weka version if forWekaVersion is specified.
 // Currently not supported for any devices
 func (ni *NetworkInterface) IsSupportedByWekaForLacpDiffCards(forWekaVersion ...string) (bool, error) {
 	if ni == nil {
 		return false, fmt.Errorf("interface is nil")
+	}
+
+	// For VLAN interfaces, check the parent interface
+	if ni.IsVlan() {
+		parent := ni.GetParent()
+		if parent == nil {
+			return false, fmt.Errorf("VLAN %s has no parent interface", ni.Name)
+		}
+		supported, err := parent.IsSupportedByWekaForLacpDiffCards(forWekaVersion...)
+		if !supported {
+			return false, fmt.Errorf("VLAN %s (on %s): %w", ni.Name, parent.Name, err)
+		}
+		return true, nil
 	}
 
 	// For bonds, all slaves must support the feature
