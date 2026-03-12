@@ -11,12 +11,9 @@ func TestHostChecksResultFields(t *testing.T) {
 		IsRHCOS:           true,
 		OSRelease:         "RHCOS 4.10",
 		KernelVersion:     "5.15.0",
-		WekaDirOK:         true,
 		WekaDirPath:       "/mnt/weka",
 		WekaDirAvailBytes: 1099511627776, // 1TB
-		XFSInstalled:      true,
-		WekaClientClean:   true,
-		Mellanox:          true,
+		XFSFound:          true,
 		PhysicalCores:     32,
 		LogicalCores:      64,
 		MemoryBytes:       274877906944, // 256GB
@@ -39,20 +36,8 @@ func TestHostChecksResultFields(t *testing.T) {
 			check: func() bool { return result.KernelVersion == "5.15.0" },
 		},
 		{
-			name:  "WEKA directory",
-			check: func() bool { return result.WekaDirOK && result.WekaDirPath == "/mnt/weka" },
-		},
-		{
 			name:  "file system",
-			check: func() bool { return result.XFSInstalled },
-		},
-		{
-			name:  "client status",
-			check: func() bool { return result.WekaClientClean },
-		},
-		{
-			name:  "network detection",
-			check: func() bool { return result.Mellanox },
+			check: func() bool { return result.XFSFound },
 		},
 		{
 			name:  "CPU info",
@@ -77,45 +62,99 @@ func TestHostChecksResultFields(t *testing.T) {
 	}
 }
 
-// TestMellanoxIfaceStructure tests MellanoxIface struct
-func TestMellanoxIfaceStructure(t *testing.T) {
-	iface := MellanoxIface{
-		Name:  "ib0",
-		Bond:  "",
-		IP:    "10.0.0.1/24",
-		Model: "CX-7",
-		Speed: "400Gbps",
-	}
-
-	if iface.Name != "ib0" {
-		t.Errorf("Expected name 'ib0', got %q", iface.Name)
-	}
-	if iface.Model != "CX-7" {
-		t.Errorf("Expected model 'CX-7', got %q", iface.Model)
-	}
-	if iface.Speed != "400Gbps" {
-		t.Errorf("Expected speed '400Gbps', got %q", iface.Speed)
-	}
-}
-
-// TestBondInfoStructure tests BondInfo struct
-func TestBondInfoStructure(t *testing.T) {
-	bond := BondInfo{
-		Name:   "bond0",
-		IP:     "10.0.0.5/24",
-		Slaves: []string{"ib0", "ib1"},
-		Mode:   "802.3ad",
-		Speed:  "800Gbps",
+// TestNetworkInterfaceBond tests NetworkInterface as bond
+func TestNetworkInterfaceBond(t *testing.T) {
+	bond := NetworkInterface{
+		Name:       "bond0",
+		Type:       "bond",
+		IP:         "10.0.0.5/24",
+		BondSlaves: []string{"ib0", "ib1"},
+		BondMode:   "802.3ad",
 	}
 
 	if bond.Name != "bond0" {
 		t.Errorf("Expected name 'bond0', got %q", bond.Name)
 	}
-	if len(bond.Slaves) != 2 {
-		t.Errorf("Expected 2 slaves, got %d", len(bond.Slaves))
+	if !bond.IsBond() {
+		t.Errorf("Expected IsBond() to return true, got false")
 	}
-	if bond.Mode != "802.3ad" {
-		t.Errorf("Expected mode '802.3ad', got %q", bond.Mode)
+	if len(bond.BondSlaves) != 2 {
+		t.Errorf("Expected 2 slaves, got %d", len(bond.BondSlaves))
+	}
+	if bond.BondMode != "802.3ad" {
+		t.Errorf("Expected bond mode '802.3ad', got %q", bond.BondMode)
+	}
+}
+
+// TestNetworkInterfaceNotBond tests NetworkInterface for non-bond interfaces
+func TestNetworkInterfaceNotBond(t *testing.T) {
+	iface := NetworkInterface{
+		Name: "eth0",
+		Type: "ethernet",
+	}
+
+	if iface.IsBond() {
+		t.Errorf("Expected IsBond() to return false for ethernet interface, got true")
+	}
+}
+
+// TestHostChecksResultFilterMethods tests GetBonds, GetEthernets, GetInfiniBands, GetVirtualInterfaces
+func TestHostChecksResultFilterMethods(t *testing.T) {
+	hc := &HostChecksResult{
+		NetworkInterfaces: NetworkInterfaces{
+			{Name: "eth0", Type: "ethernet"},
+			{Name: "eth1", Type: "ethernet"},
+			{Name: "ib0", Type: "infiniband"},
+			{Name: "ib1", Type: "infiniband"},
+			{Name: "bond0", Type: "bond"},
+			{Name: "bond1", Type: "bond"},
+		},
+	}
+
+	tests := []struct {
+		name          string
+		method        func() []NetworkInterface
+		expectedCount int
+		expectedType  string
+	}{
+		{
+			name:          "GetBonds",
+			method:        hc.NetworkInterfaces.GetBonds,
+			expectedCount: 2,
+			expectedType:  "bond",
+		},
+		{
+			name:          "GetEthernets",
+			method:        hc.NetworkInterfaces.GetEthernets,
+			expectedCount: 2,
+			expectedType:  "ethernet",
+		},
+		{
+			name:          "GetInfiniBands",
+			method:        hc.NetworkInterfaces.GetInfiniBands,
+			expectedCount: 2,
+			expectedType:  "infiniband",
+		},
+		{
+			name:          "GetVirtualInterfaces",
+			method:        hc.NetworkInterfaces.GetVirtualInterfaces,
+			expectedCount: 2,
+			expectedType:  "bond",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.method()
+			if len(result) != tt.expectedCount {
+				t.Errorf("Expected %d interfaces, got %d", tt.expectedCount, len(result))
+			}
+			for _, iface := range result {
+				if iface.Type != tt.expectedType {
+					t.Errorf("Expected type '%s', got '%s' for interface %s", tt.expectedType, iface.Type, iface.Name)
+				}
+			}
+		})
 	}
 }
 
@@ -156,7 +195,7 @@ func TestNetworkInterface(t *testing.T) {
 		MTU:            1500,
 		MAC:            "52:54:00:12:34:56",
 		BondMaster:     "",
-		BondSlave:      false,
+		IsBondSlave:    false,
 		MaxSpeed:       "10Gbps",
 		EffectiveSpeed: "10Gbps",
 		PCIAddress:     "0000:01:00.0",
@@ -199,7 +238,7 @@ func TestNetworkInterfaceInfiniBand(t *testing.T) {
 		Type:           "infiniband",
 		IP:             "192.168.1.10/24",
 		MTU:            2048,
-		BondSlave:      false,
+		IsBondSlave:    false,
 		MaxSpeed:       "400Gbps",
 		EffectiveSpeed: "400Gbps",
 		PCIAddress:     "0000:3d:00.0",
@@ -344,9 +383,9 @@ func TestNetworkInterfaceWithRouting(t *testing.T) {
 	}
 }
 
-// TestNVMeDriveInfo tests NVMeDriveInfo struct
+// TestNVMeDriveInfo tests NvmeDrive struct
 func TestNVMeDriveInfo(t *testing.T) {
-	drive := NVMeDriveInfo{
+	drive := NvmeDrive{
 		DeviceName:   "nvme0n1",
 		DevicePath:   "/dev/nvme0n1",
 		SerialNumber: "ABC123XYZ",
@@ -890,9 +929,9 @@ func TestNetworkInterfaceMultipleNUMANodes(t *testing.T) {
 	}
 }
 
-// TestNVMeDriveWithNUMANode tests NVMeDriveInfo with NUMA node information
+// TestNVMeDriveWithNUMANode tests NvmeDrive with NUMA node information
 func TestNVMeDriveWithNUMANode(t *testing.T) {
-	drive := NVMeDriveInfo{
+	drive := NvmeDrive{
 		DeviceName: "nvme0n1",
 		DevicePath: "/dev/nvme0n1",
 		Model:      "Samsung 970 EVO",
@@ -945,7 +984,7 @@ func TestNVMeDrivesMultipleNUMANodes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			drive := NVMeDriveInfo{
+			drive := NvmeDrive{
 				DeviceName: tt.devname,
 				PCIAddress: tt.pci,
 				NUMANode:   tt.numa,

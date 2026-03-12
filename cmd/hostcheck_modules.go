@@ -149,7 +149,7 @@ func (m *WekaDirModule) Validate(podOutput string) (interface{}, error) {
 	}
 
 	status := "success"
-	if !hc.WekaDirOK {
+	if !hc.IsWekaDirExists() {
 		status = "error"
 	}
 
@@ -157,11 +157,10 @@ func (m *WekaDirModule) Validate(podOutput string) (interface{}, error) {
 
 	return map[string]interface{}{
 		"Status":     status,
-		"OK":         hc.WekaDirOK,
+		"OK":         hc.IsWekaDirAtLeast(100), // default value
 		"Path":       hc.WekaDirPath,
-		"Detail":     hc.WekaDirDetail,
 		"AvailBytes": hc.WekaDirAvailBytes,
-		"AvailGB":    fmt.Sprintf("%.1f", availGB),
+		"AvailGB":    fmt.Sprintf("%.1d", availGB),
 	}, nil
 }
 
@@ -174,8 +173,8 @@ func (m *WekaDirModule) ValidateWithParams(podOutput string, params map[string]i
 	}
 
 	// Get minimum GB requirement from params
-	minFailGB := int64(100) // default
-	minWarnGB := int64(300) // default
+	minFailGB := int64(300) // default 300GB
+	minWarnGB := int64(500) // default 500GB
 
 	if val, ok := params["wekaDirMinFailGB"].(float64); ok {
 		minFailGB = int64(val)
@@ -198,7 +197,10 @@ func (m *WekaDirModule) ValidateWithParams(podOutput string, params map[string]i
 	status := "success"
 	issue := ""
 
-	if availGB < minFailGB {
+	if !hc.WekaDirExists {
+		status = "error"
+		issue = fmt.Sprintf("Weka directory does not exist: %s", hc.WekaDirPath)
+	} else if availGB < minFailGB {
 		status = "error"
 		issue = fmt.Sprintf("Only %.1f GB available, need at least %d GB", float64(availGB), minFailGB)
 	} else if availGB < minWarnGB {
@@ -258,15 +260,15 @@ func (m *XFSModule) Validate(podOutput string) (interface{}, error) {
 
 	status := "success"
 	detail := "found"
-	if !hc.XFSInstalled {
+	if !hc.HasXFS() {
 		status = "error"
 		detail = "not found"
 	}
 
 	return map[string]interface{}{
-		"Status":    status,
-		"Installed": hc.XFSInstalled,
-		"Detail":    detail,
+		"Status": status,
+		"Found":  hc.HasXFS(),
+		"Detail": detail,
 	}, nil
 }
 
@@ -313,159 +315,23 @@ func (m *WekaClientModule) Validate(podOutput string) (interface{}, error) {
 	}
 
 	status := "success"
-	if !hc.WekaClientClean {
+	detail := "clean (no Weka agent service found)"
+
+	if !hc.IsWekaAgentClean() {
 		status = "warning"
+		detail = "Weka agent service exists - may interfere with installation"
 	}
 
 	return map[string]interface{}{
 		"Status": status,
-		"Clean":  hc.WekaClientClean,
-		"Detail": hc.WekaClientDetail,
+		"Clean":  hc.IsWekaAgentClean(),
+		"Detail": detail,
 	}, nil
 }
 
 // ValidateWithParams implements HostCheckModule - params not used for Weka client validation
 func (m *WekaClientModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
 	return m.Validate(podOutput)
-}
-
-// NetworkModule validates network configuration (Mellanox, bonds, LACP)
-type NetworkModule struct{}
-
-func (m *NetworkModule) Name() string {
-	return "network"
-}
-
-func (m *NetworkModule) FriendlyName() string {
-	return "Network Configuration"
-}
-
-func (m *NetworkModule) Description() string {
-	return "Network interface validation (Mellanox NICs, bond configuration, LACP)"
-}
-
-func (m *NetworkModule) SuccessTemplate() string {
-	return "✅ OK:  {{.FriendlyName}}: {{.Detail}}"
-}
-
-func (m *NetworkModule) WarningTemplate() string {
-	return "⚠️ WARN: {{.FriendlyName}}: {{.Issue}}"
-}
-
-func (m *NetworkModule) ErrorTemplate() string {
-	return "⚠️ {{.FriendlyName}}: {{.Issue}}"
-}
-
-func (m *NetworkModule) SuggestedResolutionTemplate() string {
-	return "On node {{.NodeName}}, verify network configuration: check Mellanox NIC presence and bond setup with: ethtool {{.Interface}}"
-}
-
-func (m *NetworkModule) Validate(podOutput string) (interface{}, error) {
-	var hc HostChecksResult
-	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
-		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
-	}
-
-	// Check if there are actual valid interfaces (not just the Mellanox flag)
-	validIfaces := 0
-	for _, iface := range hc.MlxIfaces {
-		if iface.Name != "" {
-			validIfaces++
-		}
-	}
-
-	status := "success"
-	if validIfaces == 0 {
-		status = "warning"
-	}
-	if !hc.BondLACPOk && validIfaces > 0 {
-		status = "warning"
-	}
-
-	// Build detail string for output
-	detail := ""
-	if validIfaces > 0 {
-		detail = fmt.Sprintf("%d Mellanox interface(s)", validIfaces)
-		if len(hc.MlxBonds) > 0 {
-			detail += fmt.Sprintf(", %d bond(s)", len(hc.MlxBonds))
-		}
-	} else {
-		detail = "No Mellanox interfaces detected"
-	}
-
-	return map[string]interface{}{
-		"Status":         status,
-		"Detail":         detail,
-		"Mellanox":       validIfaces > 0,
-		"MellanoxDetail": hc.MellanoxDetail,
-		"MlxIfaces":      hc.MlxIfaces,
-		"MlxBonds":       hc.MlxBonds,
-		"BondLACPOk":     hc.BondLACPOk,
-		"BondLACPDetail": hc.BondLACPDetail,
-	}, nil
-}
-
-// ValidateWithParams implements HostCheckModule with ethDevice parameter support
-// Params: {"ethDevice": "bond0"} to validate a specific interface
-func (m *NetworkModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
-	var hc HostChecksResult
-	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
-		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
-	}
-
-	// If no ethDevice parameter provided, fall back to generic validation
-	ethDevice, hasEthDevice := params["ethDevice"].(string)
-	if !hasEthDevice || ethDevice == "" {
-		return m.Validate(podOutput)
-	}
-
-	// Validate specific ethDevice
-	status := "success"
-	found := false
-	hasLACP := false
-	var issues []string
-
-	// Check if ethDevice is a regular Mellanox interface
-	for _, iface := range hc.MlxIfaces {
-		if iface.Name == ethDevice {
-			found = true
-			break
-		}
-	}
-
-	// Check if ethDevice is a bond
-	if !found {
-		for _, bond := range hc.MlxBonds {
-			if bond.Name == ethDevice {
-				found = true
-				// Validate LACP if this is a bond
-				if !hc.BondLACPOk {
-					status = "error"
-					issues = append(issues, fmt.Sprintf("Bond not using LACP: %s", hc.BondLACPDetail))
-				} else {
-					hasLACP = true
-				}
-				break
-			}
-		}
-	}
-
-	if !found {
-		status = "error"
-		issues = append(issues, fmt.Sprintf("Interface '%s' not found", ethDevice))
-	}
-
-	return map[string]interface{}{
-		"status":           status,
-		"ethDevice":        ethDevice,
-		"found":            found,
-		"has_lacp":         hasLACP,
-		"issues":           issues,
-		"mlx_ifaces":       hc.MlxIfaces,
-		"mlx_bonds":        hc.MlxBonds,
-		"bond_lacp_ok":     hc.BondLACPOk,
-		"bond_lacp_detail": hc.BondLACPDetail,
-	}, nil
 }
 
 // CPUModule validates CPU and memory resources
@@ -665,18 +531,18 @@ func (m *NVMeDrivesModule) Validate(podOutput string) (interface{}, error) {
 	}
 
 	detail := ""
-	if validDrives == 0 {
+	if !hc.HasNVMeDrives() {
 		detail = "No NVMe drives detected"
 	} else {
 		detail = fmt.Sprintf("%d drive(s) available", validDrives)
 	}
 
 	return map[string]interface{}{
-		"Status":      "success",
-		"Detail":      detail,
-		"Drives":      hc.NVMeDrives,
-		"DriveCount":  validDrives,
-		"DriveDetail": hc.NVMeDriveDetail,
+		"Status":     "success",
+		"Detail":     detail,
+		"Drives":     hc.NVMeDrives,
+		"DriveCount": validDrives,
+		"HasDrives":  hc.HasNVMeDrives(),
 	}, nil
 }
 

@@ -1,5 +1,7 @@
 package cmd
 
+import ds "github.com/weka/kubectl-weka/pkg/device-support"
+
 // CNIDetection contains detected CNI configuration from the node
 type CNIDetection struct {
 	PodCIDR  string `json:"pod_cidr,omitempty"` // Detected Pod CIDR (e.g., "10.244.0.0/24")
@@ -77,20 +79,23 @@ type NetworkNamespaceRouting struct {
 	TableCount    int                `json:"table_count"`    // Total number of tables
 }
 
-// NetworkInterface represents a generic network interface (Ethernet or InfiniBand)
+// NetworkInterface represents a generic network interface (Ethernet, InfiniBand, or Bond)
 type NetworkInterface struct {
-	Name             string                   `json:"name"`                      // e.g., "eth0", "ib0"
-	Type             string                   `json:"type"`                      // "ethernet" or "infiniband"
+	Name             string                   `json:"name"`                      // e.g., "eth0", "ib0", "bond0"
+	Type             string                   `json:"type"`                      // "ethernet", "infiniband", or "bond"
 	IP               string                   `json:"ip,omitempty"`              // CIDR notation (e.g., 10.0.0.1/24)
 	MTU              int                      `json:"mtu,omitempty"`             // Maximum Transmission Unit
 	MAC              string                   `json:"mac,omitempty"`             // MAC address
-	BondMaster       string                   `json:"bond_master,omitempty"`     // Bond interface this is enslaved to
-	BondSlave        bool                     `json:"bond_slave"`                // Whether this is a bond slave
+	BondMaster       string                   `json:"bond_master,omitempty"`     // Bond interface this is enslaved to (for slaves)
+	IsBondSlave      bool                     `json:"is_bond_slave"`             // Whether this is a bond slave
+	BondMode         string                   `json:"bond_mode,omitempty"`       // Bond mode (e.g. "802.3ad") - only for bonds
+	BondSlaves       []string                 `json:"bond_slaves,omitempty"`     // Slave interfaces (only for bonds)
 	MaxSpeed         string                   `json:"max_speed,omitempty"`       // Maximum speed (e.g., "100Gbps")
 	EffectiveSpeed   string                   `json:"effective_speed,omitempty"` // Current speed (e.g., "40Gbps")
 	PCIAddress       string                   `json:"pci_address"`               // PCI address (e.g., "0000:3d:00.0")
 	NUMANode         int                      `json:"numa_node"`                 // NUMA node (-1 if unknown)
 	Model            string                   `json:"model,omitempty"`           // NIC model (e.g., "CX-7")
+	VendorModel      string                   `json:"vendor_model,omitempty"`    // Vendor:Model in format "1234:5678" (e.g., "15b3:1021" for Mellanox CX-7)
 	Metrics          *NetworkInterfaceMetrics `json:"metrics,omitempty"`         // Network statistics
 	Status           string                   `json:"status,omitempty"`          // Interface status (up/down)
 	IsDefaultRoute   bool                     `json:"is_default_route"`          // True if used as default route (0.0.0.0/0)
@@ -98,21 +103,224 @@ type NetworkInterface struct {
 	RouteCount       int                      `json:"route_count"`               // Number of routes using this interface
 }
 
-// MellanoxIface contains Mellanox-specific network interface information
-type MellanoxIface struct {
-	Name  string `json:"name"`
-	Bond  string `json:"bond,omitempty"` // bond name if enslaved
-	IP    string `json:"ip,omitempty"`   // CIDR (e.g. 192.168.1.2/24) when not enslaved
-	Model string `json:"model"`          // e.g. "CX-7" or "unknown (15b3:1023 on 0000:3d:00.0)"
-	Speed string `json:"speed,omitempty"`
+// IsBond returns true if this interface is a bond
+func (ni *NetworkInterface) IsBond() bool {
+	return ni.Type == "bond"
 }
 
-type BondInfo struct {
-	Name   string   `json:"name"`
-	IP     string   `json:"ip,omitempty"` // CIDR
-	Slaves []string `json:"slaves"`
-	Mode   string   `json:"mode,omitempty"` // e.g. "802.3ad"
-	Speed  string   `json:"speed,omitempty"`
+// IsInfiniBand returns true if this interface is an InfiniBand interface
+func (ni *NetworkInterface) IsInfiniBand() bool {
+	return ni.Type == "infiniband"
+}
+
+// IsEthernet returns true if this interface is an Ethernet interface
+func (ni *NetworkInterface) IsEthernet() bool {
+	return ni.Type == "ethernet"
+}
+
+// NetworkInterface Methods - Device Detection and Capability Checking
+
+// IsSupportedByWekaDpdk checks if the NIC can be used with Weka DPDK.
+// Optionally validates against a Weka version if forWekaVersion is specified.
+// Note: May require dedicated NIC per Weka process depending on device capabilities
+func (ni *NetworkInterface) IsSupportedByWekaDpdk(forWekaVersion ...string) bool {
+	if ni == nil {
+		return false
+	}
+
+	var wekaVersion string
+	if len(forWekaVersion) > 0 {
+		wekaVersion = forWekaVersion[0]
+	}
+
+	if ni.VendorModel != "" {
+		caps := ds.GetNICCapabilities(ni.VendorModel)
+		if !caps.SupportedByWekaDpdk {
+			return false
+		}
+
+		// Check version constraints if a Weka version was provided
+		if wekaVersion != "" {
+			devInfo := ds.GetNICInfo(ni.VendorModel)
+			if devInfo != nil && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
+				return false
+			}
+		}
+
+		return true
+	}
+	// Fallback: device not in registry, no support
+	return false
+}
+
+// IsSupportedByWekaDpdkSingleNic checks if multiple Weka processes can share this NIC.
+// Optionally validates against a Weka version if forWekaVersion is specified.
+// These are typically high-performance devices like Mellanox that support this mode
+func (ni *NetworkInterface) IsSupportedByWekaDpdkSingleNic(forWekaVersion ...string) bool {
+	if ni == nil {
+		return false
+	}
+
+	var wekaVersion string
+	if len(forWekaVersion) > 0 {
+		wekaVersion = forWekaVersion[0]
+	}
+
+	if ni.VendorModel != "" {
+		caps := ds.GetNICCapabilities(ni.VendorModel)
+		if !caps.SupportedByWekaDpdkSingleNic {
+			return false
+		}
+
+		// Check version constraints if a Weka version was provided
+		if wekaVersion != "" {
+			devInfo := ds.GetNICInfo(ni.VendorModel)
+			if devInfo != nil && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
+				return false
+			}
+		}
+
+		return true
+	}
+	// Fallback: device not in registry, no support
+	return false
+}
+
+// IsSupportedByWekaForLacpSameCard checks if LACP bonding is supported using 2 ports on the same NIC.
+// Optionally validates against a Weka version if forWekaVersion is specified.
+// Currently only certain high-performance devices support this
+func (ni *NetworkInterface) IsSupportedByWekaForLacpSameCard(forWekaVersion ...string) bool {
+	if ni == nil {
+		return false
+	}
+
+	var wekaVersion string
+	if len(forWekaVersion) > 0 {
+		wekaVersion = forWekaVersion[0]
+	}
+
+	if ni.VendorModel != "" {
+		caps := ds.GetNICCapabilities(ni.VendorModel)
+		if !caps.SupportedByWekaForLacpSameCard {
+			return false
+		}
+
+		// Check version constraints if a Weka version was provided
+		if wekaVersion != "" {
+			devInfo := ds.GetNICInfo(ni.VendorModel)
+			if devInfo != nil && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
+				return false
+			}
+		}
+
+		return true
+	}
+	// Fallback: device not in registry, no support
+	return false
+}
+
+// IsSupportedByWekaForLacpDiffCards checks if LACP bonding is supported across different NIC cards.
+// Optionally validates against a Weka version if forWekaVersion is specified.
+// Currently not supported for any devices
+func (ni *NetworkInterface) IsSupportedByWekaForLacpDiffCards(forWekaVersion ...string) bool {
+	if ni == nil {
+		return false
+	}
+
+	var wekaVersion string
+	if len(forWekaVersion) > 0 {
+		wekaVersion = forWekaVersion[0]
+	}
+
+	if ni.VendorModel != "" {
+		caps := ds.GetNICCapabilities(ni.VendorModel)
+		if !caps.SupportedByWekaForLacpDiffCards {
+			return false
+		}
+
+		// Check version constraints if a Weka version was provided
+		if wekaVersion != "" {
+			devInfo := ds.GetNICInfo(ni.VendorModel)
+			if devInfo != nil && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
+				return false
+			}
+		}
+
+		return true
+	}
+	return false
+}
+
+// GetDeviceInfo returns detailed information about the NIC
+func (ni *NetworkInterface) GetDeviceInfo() *ds.NICInfo {
+	if ni == nil || ni.VendorModel == "" {
+		return nil
+	}
+	return ds.GetNICInfo(ni.VendorModel)
+}
+
+// NetworkInterfaces is a slice of NetworkInterface with helper methods
+type NetworkInterfaces []NetworkInterface
+
+// GetBonds returns all bond interfaces
+func (ni NetworkInterfaces) GetBonds() []NetworkInterface {
+	var bonds []NetworkInterface
+	for _, iface := range ni {
+		if iface.Type == "bond" {
+			bonds = append(bonds, iface)
+		}
+	}
+	return bonds
+}
+
+// GetEthernets returns all ethernet interfaces
+func (ni NetworkInterfaces) GetEthernets() []NetworkInterface {
+	var ethernets []NetworkInterface
+	for _, iface := range ni {
+		if iface.Type == "ethernet" {
+			ethernets = append(ethernets, iface)
+		}
+	}
+	return ethernets
+}
+
+// GetInfiniBands returns all infiniband interfaces
+func (ni NetworkInterfaces) GetInfiniBands() []NetworkInterface {
+	var ib []NetworkInterface
+	for _, iface := range ni {
+		if iface.Type == "infiniband" {
+			ib = append(ib, iface)
+		}
+	}
+	return ib
+}
+
+// GetVirtualInterfaces returns all virtual interfaces (bonds)
+func (ni NetworkInterfaces) GetVirtualInterfaces() []NetworkInterface {
+	return ni.GetBonds()
+}
+
+// NvmeDrive contains information about a single NVMe drive discovered during hostcheck
+type NvmeDrive struct {
+	DeviceName   string `json:"device_name"`            // e.g., "nvme0n1"
+	DevicePath   string `json:"device_path"`            // e.g., "/dev/nvme0n1"
+	SerialNumber string `json:"serial"`                 // Drive serial number
+	Model        string `json:"model"`                  // Drive model
+	Size         int64  `json:"size"`                   // Size in bytes
+	Mounted      bool   `json:"mounted"`                // Is the drive currently mounted?
+	MountPoint   string `json:"mount_point"`            // Mount point if mounted
+	PCIAddress   string `json:"pci_address"`            // PCI address (e.g., "0000:01:00.0")
+	NUMANode     int    `json:"numa_node"`              // NUMA node (-1 if unknown)
+	VendorModel  string `json:"vendor_model,omitempty"` // Vendor:Model in format "1234:5678"
+}
+
+// GetDeviceInfo returns detailed device information from the registry for this drive
+// Uses the VendorModel to look up information in the NvmeRegistry
+func (nd *NvmeDrive) GetDeviceInfo() *ds.NVMeInfo {
+	if nd == nil || nd.VendorModel == "" {
+		return nil
+	}
+	return ds.GetNVMeInfo(nd.VendorModel)
 }
 
 type HostChecksResult struct {
@@ -123,39 +331,23 @@ type HostChecksResult struct {
 	// Kernel version detection via /proc/version
 	KernelVersion string `json:"kernel_version"`
 
-	// Weka directory exists + has >=300GB available
-	WekaDirOK         bool   `json:"weka_dir_ok"`
+	// Weka directory existence and available space
+	WekaDirExists     bool   `json:"weka_dir_exists"`
 	WekaDirPath       string `json:"weka_dir_path"`
-	WekaDirDetail     string `json:"weka_dir_detail"`
 	WekaDirAvailBytes int64  `json:"weka_dir_avail_bytes"`
 
-	// XFS tools
-	XFSInstalled bool   `json:"xfs_installed"`
-	XFSDetail    string `json:"xfs_detail"`
+	// XFS tools availability
+	XFSFound bool `json:"xfs_found"`
 
-	// Weka client presence
-	WekaClientClean  bool   `json:"weka_client_clean"`
-	WekaClientDetail string `json:"weka_client_detail"`
+	// Weka agent service presence
+	WekaAgentServiceExists bool `json:"weka_agent_service_exists"`
 
 	// Generic Network Interfaces (Ethernet + InfiniBand)
-	NetworkInterfaces      []NetworkInterface `json:"network_interfaces"`       // All network interfaces
-	NetworkInterfaceCount  int                `json:"network_interface_count"`  // Total count
-	NetworkInterfaceDetail string             `json:"network_interface_detail"` // Summary details
-
-	// NIC detection
-	Mellanox       bool   `json:"mellanox"`
-	MellanoxDetail string `json:"mellanox_detail"`
-
-	// Mellanox-specific interface inventory + bonds (kept for backward compatibility)
-	MlxIfaces []MellanoxIface `json:"mlx_ifaces"`
-	MlxBonds  []BondInfo      `json:"mlx_bonds"`
-
-	BondLACPOk     bool   `json:"bond_lacp_ok"`
-	BondLACPDetail string `json:"bond_lacp_detail"`
+	NetworkInterfaces     NetworkInterfaces `json:"network_interfaces"`      // All network interfaces
+	NetworkInterfaceCount int               `json:"network_interface_count"` // Total count
 
 	// Routing Configuration (for source-based routing and multi-path verification)
 	NetworkNamespaceRouting *NetworkNamespaceRouting `json:"network_namespace_routing"` // Routing info for default namespace
-	RoutingDetail           string                   `json:"routing_detail"`            // Summary of routing config
 
 	// CNI Detection (detected from node configuration)
 	CNIDetection *CNIDetection `json:"cni_detection,omitempty"` // Detected CNI Pod CIDR configuration
@@ -173,23 +365,52 @@ type HostChecksResult struct {
 	CPUSockets      int    `json:"cpu_sockets"` // Number of CPU sockets
 
 	// NVMe drive detection
-	NVMeDrives      []NVMeDriveInfo `json:"nvme_drives"`
-	NVMeDriveCount  int             `json:"nvme_drive_count"`
-	NVMeDriveDetail string          `json:"nvme_drive_detail"`
 	NVMeDrives     []NvmeDrive `json:"nvme_drives"`
+	NVMeDriveCount int         `json:"nvme_drive_count"`
 }
 
-// NVMeDriveInfo contains information about a single NVMe drive
-type NVMeDriveInfo struct {
-// NvmeDrive contains information about a single NVMe drive
-type NvmeDrive struct {
-	DeviceName   string `json:"device_name"` // e.g., "nvme0n1"
-	DevicePath   string `json:"device_path"` // e.g., "/dev/nvme0n1"
-	SerialNumber string `json:"serial"`      // Drive serial number
-	Model        string `json:"model"`       // Drive model
-	Size         int64  `json:"size"`        // Size in bytes
-	Mounted      bool   `json:"mounted"`     // Is the drive currently mounted?
-	MountPoint   string `json:"mount_point"` // Mount point if mounted
-	PCIAddress   string `json:"pci_address"` // PCI address (e.g., "0000:01:00.0")
-	NUMANode     int    `json:"numa_node"`   // NUMA node (-1 if unknown)
+// Validation helper methods for HostChecksResult
+
+// IsWekaDirExists returns true if the Weka directory exists
+func (hc *HostChecksResult) IsWekaDirExists() bool {
+	return hc.WekaDirExists
+}
+
+// IsWekaDirAtLeast returns true if the Weka directory has at least n bytes available
+func (hc *HostChecksResult) IsWekaDirAtLeast(n int64) bool {
+	return hc.WekaDirExists && hc.WekaDirAvailBytes >= n
+}
+
+// HasXFS returns true if XFS tools are available
+func (hc *HostChecksResult) HasXFS() bool {
+	return hc.XFSFound
+}
+
+// IsWekaAgentClean returns true if Weka agent service is not present
+func (hc *HostChecksResult) IsWekaAgentClean() bool {
+	return !hc.WekaAgentServiceExists
+}
+
+// HasCustomRoutingRules returns true if custom routing rules are configured
+func (hc *HostChecksResult) HasCustomRoutingRules() bool {
+	if hc.NetworkNamespaceRouting == nil {
+		return false
+	}
+	// Count custom rules (exclude default: priority 0, 32766, 32767)
+	for _, rule := range hc.NetworkNamespaceRouting.RoutingRules {
+		if rule.Priority != 0 && rule.Priority != 32766 && rule.Priority != 32767 {
+			return true
+		}
+	}
+	return false
+}
+
+// HasNetworkInterfaces returns true if any network interfaces were detected
+func (hc *HostChecksResult) HasNetworkInterfaces() bool {
+	return hc.NetworkInterfaceCount > 0
+}
+
+// HasNVMeDrives returns true if any NVMe drives were detected
+func (hc *HostChecksResult) HasNVMeDrives() bool {
+	return hc.NVMeDriveCount > 0
 }
