@@ -220,6 +220,7 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 							}
 						} else {
 							hostChecksMap[nodeName] = &hc
+							hc.InitializeBondHierarchy()
 							if opts.Verbose {
 								fmt.Printf("  [%s] ✅ Collected hostcheck data\n", nodeName)
 							}

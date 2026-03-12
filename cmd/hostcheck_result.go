@@ -101,6 +101,10 @@ type NetworkInterface struct {
 	IsDefaultRoute   bool                     `json:"is_default_route"`          // True if used as default route (0.0.0.0/0)
 	AssociatedRoutes []RouteEntry             `json:"associated_routes"`         // Routes using this interface
 	RouteCount       int                      `json:"route_count"`               // Number of routes using this interface
+
+	// Internal reference to parent NetworkInterfaces list (not JSON serialized)
+	// Populated when HostChecksResult is created, allows navigation within interface hierarchy
+	parent *NetworkInterfaces
 }
 
 // IsBond returns true if this interface is a bond
@@ -116,6 +120,39 @@ func (ni *NetworkInterface) IsInfiniBand() bool {
 // IsEthernet returns true if this interface is an Ethernet interface
 func (ni *NetworkInterface) IsEthernet() bool {
 	return ni.Type == "ethernet"
+}
+
+// GetSlaves returns all NetworkInterfaces that are slaves of this bond
+// For non-bond interfaces, returns an empty slice
+func (ni *NetworkInterface) GetSlaves() []*NetworkInterface {
+	if ni == nil || !ni.IsBond() || ni.parent == nil {
+		return []*NetworkInterface{}
+	}
+
+	var slaves []*NetworkInterface
+	for _, slaveName := range ni.BondSlaves {
+		for _, iface := range *ni.parent {
+			if iface.Name == slaveName {
+				slaves = append(slaves, &iface)
+			}
+		}
+	}
+	return slaves
+}
+
+// GetMaster returns the bond interface that has this interface as a slave
+// Returns nil if this interface is not a slave or if the master bond is not found
+func (ni *NetworkInterface) GetMaster() *NetworkInterface {
+	if ni == nil || ni.BondMaster == "" || ni.parent == nil {
+		return nil
+	}
+
+	for i, iface := range *ni.parent {
+		if iface.Name == ni.BondMaster && iface.IsBond() {
+			return &(*ni.parent)[i]
+		}
+	}
+	return nil
 }
 
 // NetworkInterface Methods - Device Detection and Capability Checking
@@ -262,6 +299,18 @@ func (ni *NetworkInterface) GetDeviceInfo() *ds.NICInfo {
 // NetworkInterfaces is a slice of NetworkInterface with helper methods
 type NetworkInterfaces []NetworkInterface
 
+// InitializeParents sets the parent pointer for all interfaces in the slice
+// This must be called after the NetworkInterfaces slice is populated
+// Allows GetSlaves() and GetMaster() methods to work properly
+func (ni *NetworkInterfaces) InitializeParents() {
+	if ni == nil {
+		return
+	}
+	for i := range *ni {
+		(*ni)[i].parent = ni
+	}
+}
+
 // GetBonds returns all bond interfaces
 func (ni NetworkInterfaces) GetBonds() []NetworkInterface {
 	var bonds []NetworkInterface
@@ -370,6 +419,15 @@ type HostChecksResult struct {
 }
 
 // Validation helper methods for HostChecksResult
+
+// InitializeBondHierarchy initializes the parent pointers for all network interfaces
+// This must be called after unmarshalling JSON to enable GetSlaves() and GetMaster() methods
+// Typically called right after json.Unmarshal()
+func (hc *HostChecksResult) InitializeBondHierarchy() {
+	if hc != nil {
+		hc.NetworkInterfaces.InitializeParents()
+	}
+}
 
 // IsWekaDirExists returns true if the Weka directory exists
 func (hc *HostChecksResult) IsWekaDirExists() bool {
