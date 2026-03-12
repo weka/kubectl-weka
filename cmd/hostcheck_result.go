@@ -651,37 +651,74 @@ func (ni *NetworkInterface) IsSupportedByWekaForLacpDiffCards(forWekaVersion ...
 
 // IsSupportedByWekaInUdpMode checks if the NIC can be used with Weka in UDP mode.
 // UDP mode is a fallback mode for older or unsupported NICs.
+// Returns (true, nil) if supported, or (false, error) with detailed error message.
 // Returns true if:
 // 1. Interface is not a bond slave
 // 2. Not supported in DPDK mode (DPDK is preferred, UDP is fallback)
 // 3. SupportedByWekaUdp capability is true
-func (ni *NetworkInterface) IsSupportedByWekaInUdpMode() bool {
+// Optionally validates against a Weka version if forWekaVersion is specified.
+func (ni *NetworkInterface) IsSupportedByWekaInUdpMode(forWekaVersion ...string) (bool, error) {
 	if ni == nil {
-		return false
+		return false, fmt.Errorf("interface is nil")
 	}
 
 	// Bond slaves cannot be used directly
 	if ni.IsBondSlave {
-		return false
+		return false, fmt.Errorf("interface is a bond slave")
 	}
 
 	// If supported in DPDK, use DPDK instead (preferred)
-	dpdkSupported, _ := ni.IsSupportedByWekaDpdk()
+	dpdkSupported, _ := ni.IsSupportedByWekaDpdk(forWekaVersion...)
 	if dpdkSupported {
-		return false
+		return false, fmt.Errorf("interface is supported in DPDK mode (preferred over UDP)")
 	}
 
 	// Check if UDP mode is supported
 	if ni.VendorModel == "" {
-		return false
+		return false, fmt.Errorf("unknown network device (no VendorModel)")
 	}
 
 	caps := ds.GetNICCapabilities(ni.VendorModel)
 	if caps == nil {
-		return false
+		return false, fmt.Errorf("device %s not found in NIC registry", ni.VendorModel)
 	}
 
-	return caps.SupportedByWekaUdp
+	if !caps.SupportedByWekaUdp {
+		// Try to get device model for better error message
+		devInfo := ds.GetNICInfo(ni.VendorModel)
+		deviceModel := ni.VendorModel
+		if devInfo != nil && devInfo.Model != "" {
+			deviceModel = devInfo.Model
+		}
+		return false, fmt.Errorf("device %s (%s) does not support Weka UDP mode", ni.Name, deviceModel)
+	}
+
+	// Check version constraints if a Weka version was provided
+	var wekaVersion string
+	if len(forWekaVersion) > 0 {
+		wekaVersion = forWekaVersion[0]
+	}
+
+	if wekaVersion != "" {
+		devInfo := ds.GetNICInfo(ni.VendorModel)
+		if devInfo != nil {
+			deviceModel := ni.VendorModel
+			if devInfo.Model != "" {
+				deviceModel = devInfo.Model
+			}
+
+			if devInfo.MinSupportedWekaVersion != "" && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
+				if devInfo.MinSupportedWekaVersion != "" && wekaVersion < devInfo.MinSupportedWekaVersion {
+					return false, fmt.Errorf("device %s (%s) requires Weka version %s or later (current: %s)", ni.Name, deviceModel, devInfo.MinSupportedWekaVersion, wekaVersion)
+				}
+				if devInfo.MaxSupportedWekaVersion != "" && wekaVersion > devInfo.MaxSupportedWekaVersion {
+					return false, fmt.Errorf("device %s (%s) is no longer supported after Weka version %s (current: %s)", ni.Name, deviceModel, devInfo.MaxSupportedWekaVersion, wekaVersion)
+				}
+			}
+		}
+	}
+
+	return true, nil
 }
 
 // GetDeviceInfo returns detailed information about the NIC
