@@ -1,6 +1,9 @@
 package cmd
 
-import ds "github.com/weka/kubectl-weka/pkg/device-support"
+import (
+	"fmt"
+	ds "github.com/weka/kubectl-weka/pkg/device-support"
+)
 
 // CNIDetection contains detected CNI configuration from the node
 type CNIDetection struct {
@@ -112,6 +115,10 @@ func (ni *NetworkInterface) IsBond() bool {
 	return ni.Type == "bond"
 }
 
+func (ni *NetworkInterface) IsLACP() bool {
+	return ni.IsBond() && ni.BondMode == "lacp"
+}
+
 // IsInfiniBand returns true if this interface is an InfiniBand interface
 func (ni *NetworkInterface) IsInfiniBand() bool {
 	return ni.Type == "infiniband"
@@ -155,29 +162,99 @@ func (ni *NetworkInterface) GetMaster() *NetworkInterface {
 	return nil
 }
 
+// IsLacpOnSameCard returns true if this is a bond and all slaves are ports on the same NIC card
+// For non-bonds or bonds with no slaves, returns false
+// Slaves are considered on the same card if they share the same PCI address prefix (e.g., 0000:01:00)
+func (ni *NetworkInterface) IsLacpOnSameCard() bool {
+	if ni == nil || !ni.IsBond() {
+		return false
+	}
+
+	slaves := ni.GetSlaves()
+	if len(slaves) == 0 {
+		return false
+	}
+
+	// Extract PCI address prefix (everything before the last dot)
+	// e.g., "0000:01:00.0" -> "0000:01:00"
+	getPciPrefix := func(pciAddr string) string {
+		idx := -1
+		for i := 0; i < len(pciAddr); i++ {
+			if pciAddr[i] == '.' {
+				idx = i
+			}
+		}
+		if idx >= 0 {
+			return pciAddr[:idx]
+		}
+		return pciAddr
+	}
+
+	// Get the prefix from the first slave
+	firstPrefix := ""
+	if len(slaves[0].PCIAddress) > 0 {
+		firstPrefix = getPciPrefix(slaves[0].PCIAddress)
+	}
+
+	if firstPrefix == "" {
+		return false // No valid PCI address to compare
+	}
+
+	// Check that all slaves have the same prefix
+	for _, slave := range slaves {
+		if len(slave.PCIAddress) == 0 {
+			return false // Slave has no PCI address
+		}
+		slavePrefix := getPciPrefix(slave.PCIAddress)
+		if slavePrefix != firstPrefix {
+			return false // Different NIC card
+		}
+	}
+
+	return true
+}
+
 // NetworkInterface Methods - Device Detection and Capability Checking
 
 // IsSupportedByWekaDpdk checks if the NIC can be used with Weka DPDK.
+// Returns (true, nil) if supported, or (false, error) with detailed error message.
 // For bonds, returns true only if ALL slaves support DPDK.
 // Optionally validates against a Weka version if forWekaVersion is specified.
 // Note: May require dedicated NIC per Weka process depending on device capabilities
-func (ni *NetworkInterface) IsSupportedByWekaDpdk(forWekaVersion ...string) bool {
+func (ni *NetworkInterface) IsSupportedByWekaDpdk(forWekaVersion ...string) (bool, error) {
 	if ni == nil {
-		return false
+		return false, fmt.Errorf("interface is nil")
 	}
 
 	// For bonds, all slaves must support the feature
 	if ni.IsBond() {
 		slaves := ni.GetSlaves()
 		if len(slaves) == 0 {
-			return false // Bond with no slaves
+			return false, fmt.Errorf("bond has no slaves")
 		}
-		for _, slave := range slaves {
-			if !slave.IsSupportedByWekaDpdk(forWekaVersion...) {
-				return false
+
+		// Check LACP requirement
+		if !ni.IsLACP() {
+			return false, fmt.Errorf("bond is not using LACP (802.3ad) mode")
+		}
+
+		// Check that all slaves support DPDK
+		for i, slave := range slaves {
+			supported, err := slave.IsSupportedByWekaDpdk(forWekaVersion...)
+			if !supported {
+				return false, fmt.Errorf("slave %d (%s) does not support DPDK: %w", i, slave.Name, err)
 			}
 		}
-		return true
+
+		// Check LACP same card requirement if applicable
+		if ni.IsLacpOnSameCard() {
+			supported, err := ni.IsSupportedByWekaForLacpSameCard(forWekaVersion...)
+			if !supported {
+				return false, fmt.Errorf("bond is on same card but does not support same-card LACP: %w", err)
+			}
+		}
+
+		return true, nil
 	}
 
 	var wekaVersion string
@@ -185,47 +262,72 @@ func (ni *NetworkInterface) IsSupportedByWekaDpdk(forWekaVersion ...string) bool
 		wekaVersion = forWekaVersion[0]
 	}
 
-	if ni.VendorModel != "" {
-		caps := ds.GetNICCapabilities(ni.VendorModel)
-		if !caps.SupportedByWekaDpdk {
-			return false
-		}
+	if ni.VendorModel == "" {
+		return false, fmt.Errorf("unknown network device (no VendorModel)")
+	}
 
-		// Check version constraints if a Weka version was provided
-		if wekaVersion != "" {
-			devInfo := ds.GetNICInfo(ni.VendorModel)
-			if devInfo != nil && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
-				return false
+	caps := ds.GetNICCapabilities(ni.VendorModel)
+	if caps == nil {
+		return false, fmt.Errorf("device %s not found in NIC registry", ni.VendorModel)
+	}
+
+	if !caps.SupportedByWekaDpdk {
+		// Try to get device model for better error message
+		devInfo := ds.GetNICInfo(ni.VendorModel)
+		deviceModel := ni.VendorModel
+		if devInfo != nil && devInfo.Model != "" {
+			deviceModel = devInfo.Model
+		}
+		return false, fmt.Errorf("device %s (%s) does not support Weka DPDK", ni.Name, deviceModel)
+	}
+
+	// Check version constraints if a Weka version was provided
+	if wekaVersion != "" {
+		devInfo := ds.GetNICInfo(ni.VendorModel)
+		if devInfo != nil {
+			deviceModel := ni.VendorModel
+			if devInfo.Model != "" {
+				deviceModel = devInfo.Model
+			}
+
+			if devInfo.MinSupportedWekaVersion != "" && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
+				if devInfo.MinSupportedWekaVersion != "" && wekaVersion < devInfo.MinSupportedWekaVersion {
+					return false, fmt.Errorf("device %s (%s) requires Weka version %s or later (current: %s)", ni.Name, deviceModel, devInfo.MinSupportedWekaVersion, wekaVersion)
+				}
+				if devInfo.MaxSupportedWekaVersion != "" && wekaVersion > devInfo.MaxSupportedWekaVersion {
+					return false, fmt.Errorf("device %s (%s) is no longer supported after Weka version %s (current: %s)", ni.Name, deviceModel, devInfo.MaxSupportedWekaVersion, wekaVersion)
+				}
 			}
 		}
-
-		return true
 	}
-	// Fallback: device not in registry, no support
-	return false
+
+	return true, nil
 }
 
 // IsSupportedByWekaDpdkSingleNic checks if multiple Weka processes can share this NIC.
+// Returns (true, nil) if supported, or (false, error) with detailed error message.
 // For bonds, returns true only if ALL slaves support single NIC sharing.
 // Optionally validates against a Weka version if forWekaVersion is specified.
 // These are typically high-performance devices like Mellanox that support this mode
-func (ni *NetworkInterface) IsSupportedByWekaDpdkSingleNic(forWekaVersion ...string) bool {
+func (ni *NetworkInterface) IsSupportedByWekaDpdkSingleNic(forWekaVersion ...string) (bool, error) {
 	if ni == nil {
-		return false
+		return false, fmt.Errorf("interface is nil")
 	}
 
 	// For bonds, all slaves must support the feature
 	if ni.IsBond() {
 		slaves := ni.GetSlaves()
 		if len(slaves) == 0 {
-			return false // Bond with no slaves
+			return false, fmt.Errorf("bond has no slaves")
 		}
-		for _, slave := range slaves {
-			if !slave.IsSupportedByWekaDpdkSingleNic(forWekaVersion...) {
-				return false
+
+		for i, slave := range slaves {
+			supported, err := slave.IsSupportedByWekaDpdkSingleNic(forWekaVersion...)
+			if !supported {
+				return false, fmt.Errorf("slave %d (%s) does not support single NIC sharing: %w", i, slave.Name, err)
 			}
 		}
-		return true
+		return true, nil
 	}
 
 	var wekaVersion string
@@ -233,47 +335,77 @@ func (ni *NetworkInterface) IsSupportedByWekaDpdkSingleNic(forWekaVersion ...str
 		wekaVersion = forWekaVersion[0]
 	}
 
-	if ni.VendorModel != "" {
-		caps := ds.GetNICCapabilities(ni.VendorModel)
-		if !caps.SupportedByWekaDpdkSingleNic {
-			return false
-		}
+	if ni.VendorModel == "" {
+		return false, fmt.Errorf("unknown network device (no VendorModel)")
+	}
 
-		// Check version constraints if a Weka version was provided
-		if wekaVersion != "" {
-			devInfo := ds.GetNICInfo(ni.VendorModel)
-			if devInfo != nil && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
-				return false
+	caps := ds.GetNICCapabilities(ni.VendorModel)
+	if caps == nil {
+		return false, fmt.Errorf("device %s not found in NIC registry", ni.VendorModel)
+	}
+
+	if !caps.SupportedByWekaDpdkSingleNic {
+		// Try to get device model for better error message
+		devInfo := ds.GetNICInfo(ni.VendorModel)
+		deviceModel := ni.VendorModel
+		if devInfo != nil && devInfo.Model != "" {
+			deviceModel = devInfo.Model
+		}
+		return false, fmt.Errorf("device %s (%s) does not support single NIC sharing (requires dedicated NIC per process)", ni.Name, deviceModel)
+	}
+
+	// Check version constraints if a Weka version was provided
+	if wekaVersion != "" {
+		devInfo := ds.GetNICInfo(ni.VendorModel)
+		if devInfo != nil {
+			deviceModel := ni.VendorModel
+			if devInfo.Model != "" {
+				deviceModel = devInfo.Model
+			}
+
+			if devInfo.MinSupportedWekaVersion != "" && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
+				if devInfo.MinSupportedWekaVersion != "" && wekaVersion < devInfo.MinSupportedWekaVersion {
+					return false, fmt.Errorf("device %s (%s) requires Weka version %s or later (current: %s)", ni.Name, deviceModel, devInfo.MinSupportedWekaVersion, wekaVersion)
+				}
+				if devInfo.MaxSupportedWekaVersion != "" && wekaVersion > devInfo.MaxSupportedWekaVersion {
+					return false, fmt.Errorf("device %s (%s) is no longer supported after Weka version %s (current: %s)", ni.Name, deviceModel, devInfo.MaxSupportedWekaVersion, wekaVersion)
+				}
 			}
 		}
-
-		return true
 	}
-	// Fallback: device not in registry, no support
-	return false
+
+	return true, nil
 }
 
 // IsSupportedByWekaForLacpSameCard checks if LACP bonding is supported using 2 ports on the same NIC.
+// Returns (true, nil) if supported, or (false, error) with detailed error message.
 // For bonds, returns true only if ALL slaves support LACP same card.
 // Optionally validates against a Weka version if forWekaVersion is specified.
 // Currently only certain high-performance devices support this
-func (ni *NetworkInterface) IsSupportedByWekaForLacpSameCard(forWekaVersion ...string) bool {
+func (ni *NetworkInterface) IsSupportedByWekaForLacpSameCard(forWekaVersion ...string) (bool, error) {
 	if ni == nil {
-		return false
+		return false, fmt.Errorf("interface is nil")
 	}
 
-	// For bonds, all slaves must support the feature
+	// For bonds, all slaves must support the feature AND be on same card
 	if ni.IsBond() {
 		slaves := ni.GetSlaves()
 		if len(slaves) == 0 {
-			return false // Bond with no slaves
+			return false, fmt.Errorf("bond has no slaves")
 		}
-		for _, slave := range slaves {
-			if !slave.IsSupportedByWekaForLacpSameCard(forWekaVersion...) {
-				return false
+
+		// Check if all slaves are on the same NIC card
+		if !ni.IsLacpOnSameCard() {
+			return false, fmt.Errorf("bond slaves are located on different NIC cards (not supported for same-card LACP)")
+		}
+
+		for i, slave := range slaves {
+			supported, err := slave.IsSupportedByWekaForLacpSameCard(forWekaVersion...)
+			if !supported {
+				return false, fmt.Errorf("slave %d (%s) does not support LACP same card: %w", i, slave.Name, err)
 			}
 		}
-		return true
+		return true, nil
 	}
 
 	var wekaVersion string
@@ -281,47 +413,72 @@ func (ni *NetworkInterface) IsSupportedByWekaForLacpSameCard(forWekaVersion ...s
 		wekaVersion = forWekaVersion[0]
 	}
 
-	if ni.VendorModel != "" {
-		caps := ds.GetNICCapabilities(ni.VendorModel)
-		if !caps.SupportedByWekaForLacpSameCard {
-			return false
-		}
+	if ni.VendorModel == "" {
+		return false, fmt.Errorf("unknown network device (no VendorModel)")
+	}
 
-		// Check version constraints if a Weka version was provided
-		if wekaVersion != "" {
-			devInfo := ds.GetNICInfo(ni.VendorModel)
-			if devInfo != nil && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
-				return false
+	caps := ds.GetNICCapabilities(ni.VendorModel)
+	if caps == nil {
+		return false, fmt.Errorf("device %s not found in NIC registry", ni.VendorModel)
+	}
+
+	if !caps.SupportedByWekaForLacpSameCard {
+		// Try to get device model for better error message
+		devInfo := ds.GetNICInfo(ni.VendorModel)
+		deviceModel := ni.VendorModel
+		if devInfo != nil && devInfo.Model != "" {
+			deviceModel = devInfo.Model
+		}
+		return false, fmt.Errorf("device %s (%s) does not support LACP on same card", ni.Name, deviceModel)
+	}
+
+	// Check version constraints if a Weka version was provided
+	if wekaVersion != "" {
+		devInfo := ds.GetNICInfo(ni.VendorModel)
+		if devInfo != nil {
+			deviceModel := ni.VendorModel
+			if devInfo.Model != "" {
+				deviceModel = devInfo.Model
+			}
+
+			if devInfo.MinSupportedWekaVersion != "" && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
+				if devInfo.MinSupportedWekaVersion != "" && wekaVersion < devInfo.MinSupportedWekaVersion {
+					return false, fmt.Errorf("device %s (%s) requires Weka version %s or later (current: %s)", ni.Name, deviceModel, devInfo.MinSupportedWekaVersion, wekaVersion)
+				}
+				if devInfo.MaxSupportedWekaVersion != "" && wekaVersion > devInfo.MaxSupportedWekaVersion {
+					return false, fmt.Errorf("device %s (%s) is no longer supported after Weka version %s (current: %s)", ni.Name, deviceModel, devInfo.MaxSupportedWekaVersion, wekaVersion)
+				}
 			}
 		}
-
-		return true
 	}
-	// Fallback: device not in registry, no support
-	return false
+
+	return true, nil
 }
 
 // IsSupportedByWekaForLacpDiffCards checks if LACP bonding is supported across different NIC cards.
+// Returns (true, nil) if supported, or (false, error) with detailed error message.
 // For bonds, returns true only if ALL slaves support LACP different cards.
 // Optionally validates against a Weka version if forWekaVersion is specified.
 // Currently not supported for any devices
-func (ni *NetworkInterface) IsSupportedByWekaForLacpDiffCards(forWekaVersion ...string) bool {
+func (ni *NetworkInterface) IsSupportedByWekaForLacpDiffCards(forWekaVersion ...string) (bool, error) {
 	if ni == nil {
-		return false
+		return false, fmt.Errorf("interface is nil")
 	}
 
 	// For bonds, all slaves must support the feature
 	if ni.IsBond() {
 		slaves := ni.GetSlaves()
 		if len(slaves) == 0 {
-			return false // Bond with no slaves
+			return false, fmt.Errorf("bond has no slaves")
 		}
-		for _, slave := range slaves {
-			if !slave.IsSupportedByWekaForLacpDiffCards(forWekaVersion...) {
-				return false
+
+		for i, slave := range slaves {
+			supported, err := slave.IsSupportedByWekaForLacpDiffCards(forWekaVersion...)
+			if !supported {
+				return false, fmt.Errorf("slave %d (%s) does not support LACP different cards: %w", i, slave.Name, err)
 			}
 		}
-		return true
+		return true, nil
 	}
 
 	var wekaVersion string
@@ -329,23 +486,46 @@ func (ni *NetworkInterface) IsSupportedByWekaForLacpDiffCards(forWekaVersion ...
 		wekaVersion = forWekaVersion[0]
 	}
 
-	if ni.VendorModel != "" {
-		caps := ds.GetNICCapabilities(ni.VendorModel)
-		if !caps.SupportedByWekaForLacpDiffCards {
-			return false
-		}
+	if ni.VendorModel == "" {
+		return false, fmt.Errorf("unknown network device (no VendorModel)")
+	}
 
-		// Check version constraints if a Weka version was provided
-		if wekaVersion != "" {
-			devInfo := ds.GetNICInfo(ni.VendorModel)
-			if devInfo != nil && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
-				return false
+	caps := ds.GetNICCapabilities(ni.VendorModel)
+	if caps == nil {
+		return false, fmt.Errorf("device %s not found in NIC registry", ni.VendorModel)
+	}
+
+	if !caps.SupportedByWekaForLacpDiffCards {
+		// Try to get device model for better error message
+		devInfo := ds.GetNICInfo(ni.VendorModel)
+		deviceModel := ni.VendorModel
+		if devInfo != nil && devInfo.Model != "" {
+			deviceModel = devInfo.Model
+		}
+		return false, fmt.Errorf("device %s (%s) does not support LACP across different cards", ni.Name, deviceModel)
+	}
+
+	// Check version constraints if a Weka version was provided
+	if wekaVersion != "" {
+		devInfo := ds.GetNICInfo(ni.VendorModel)
+		if devInfo != nil {
+			deviceModel := ni.VendorModel
+			if devInfo.Model != "" {
+				deviceModel = devInfo.Model
+			}
+
+			if devInfo.MinSupportedWekaVersion != "" && !ds.IsVersionInRange(wekaVersion, devInfo.MinSupportedWekaVersion, devInfo.MaxSupportedWekaVersion) {
+				if devInfo.MinSupportedWekaVersion != "" && wekaVersion < devInfo.MinSupportedWekaVersion {
+					return false, fmt.Errorf("device %s (%s) requires Weka version %s or later (current: %s)", ni.Name, deviceModel, devInfo.MinSupportedWekaVersion, wekaVersion)
+				}
+				if devInfo.MaxSupportedWekaVersion != "" && wekaVersion > devInfo.MaxSupportedWekaVersion {
+					return false, fmt.Errorf("device %s (%s) is no longer supported after Weka version %s (current: %s)", ni.Name, deviceModel, devInfo.MaxSupportedWekaVersion, wekaVersion)
+				}
 			}
 		}
-
-		return true
 	}
-	return false
+
+	return true, nil
 }
 
 // GetDeviceInfo returns detailed information about the NIC
