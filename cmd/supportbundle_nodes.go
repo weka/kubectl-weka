@@ -123,7 +123,7 @@ func (c *NodesDescriptionCollector) collectNodesTable(ctx context.Context) (stri
 }
 
 // collectHostChecks runs host checks on all nodes and dumps results as JSON
-// Uses the HostCheckRegistry with caching to avoid redundant host check execution
+// Uses the HostCheckModuleRegistry with caching to avoid redundant host check execution
 func (c *NodesDescriptionCollector) collectHostChecks(ctx context.Context, nodes *[]corev1.Node, bundlePath string, logger *slog.Logger) ([]string, []string) {
 	if len(*nodes) == 0 {
 		return []string{}, []string{}

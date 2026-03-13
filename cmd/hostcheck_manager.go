@@ -391,7 +391,7 @@ func (hcm HostChecksMap) FormatSummary() string {
 // - If new nodes are requested, runs hostchecks only on new nodes
 // - Filters out NotReady nodes (they can't run pods)
 // - Thread-safe for concurrent access
-func (r *HostCheckRegistry) GetHostChecksForNodes(
+func (r *HostCheckModuleRegistry) GetHostChecksForNodes(
 	ctx context.Context,
 	nodes []corev1.Node,
 ) (HostChecksMap, error) {
@@ -495,22 +495,22 @@ func (r *HostCheckRegistry) GetHostChecksForNodes(
 
 // ValidateWithModules validates hostcheck results using specified modules
 // params can be used for parameterized validation (e.g., {"ethDevice": "bond0"})
-func (r *HostCheckRegistry) ValidateWithModules(
+func (r *HostCheckModuleRegistry) ValidateWithModules(
 	commandName string,
 	hostChecksMap HostChecksMap,
 	params map[string]interface{},
-) (map[string]map[string]*HostCheckResult, error) {
+) (map[string]map[string]*HostCheckModuleResult, error) {
 
 	config, exists := r.GetCommand(commandName)
 	if !exists {
 		return nil, fmt.Errorf("command '%s' not registered", commandName)
 	}
 
-	// Results: map[nodeName]map[moduleName]*HostCheckResult
-	results := make(map[string]map[string]*HostCheckResult)
+	// Results: map[nodeName]map[moduleName]*HostCheckModuleResult
+	results := make(map[string]map[string]*HostCheckModuleResult)
 
 	for nodeName, hostCheck := range hostChecksMap {
-		nodeResults := make(map[string]*HostCheckResult)
+		nodeResults := make(map[string]*HostCheckModuleResult)
 
 		for _, moduleName := range config.ModuleNames {
 			module, err := r.Get(moduleName)
@@ -522,7 +522,7 @@ func (r *HostCheckRegistry) ValidateWithModules(
 			// Convert hostcheck to JSON for module validation
 			hostCheckJSON, err := json.Marshal(hostCheck)
 			if err != nil {
-				nodeResults[moduleName] = &HostCheckResult{
+				nodeResults[moduleName] = &HostCheckModuleResult{
 					ModuleName: moduleName,
 					Status:     "error",
 					Error:      fmt.Sprintf("Failed to marshal hostcheck: %v", err),
@@ -532,8 +532,18 @@ func (r *HostCheckRegistry) ValidateWithModules(
 
 			// Use ValidateWithParams if parameters are provided
 			var result interface{}
-			if len(params) > 0 {
-				result, err = module.ValidateWithParams(string(hostCheckJSON), params)
+
+			// Create a copy of params to add node-specific data
+			nodeParams := make(map[string]interface{})
+			for k, v := range params {
+				nodeParams[k] = v
+			}
+			// Add node-specific data
+			nodeParams["nodeName"] = nodeName
+			nodeParams["hostChecksResult"] = hostCheck
+
+			if len(nodeParams) > 0 {
+				result, err = module.ValidateWithParams(string(hostCheckJSON), nodeParams)
 			} else {
 				result, err = module.Validate(string(hostCheckJSON))
 			}
@@ -546,7 +556,7 @@ func (r *HostCheckRegistry) ValidateWithModules(
 					errorTemplate = module.ErrorTemplate()
 				}
 
-				nodeResults[moduleName] = &HostCheckResult{
+				nodeResults[moduleName] = &HostCheckModuleResult{
 					ModuleName:    moduleName,
 					Status:        "error",
 					Error:         fmt.Sprintf("Validation error: %v", err),
@@ -575,7 +585,7 @@ func (r *HostCheckRegistry) ValidateWithModules(
 					}
 				}
 
-				nodeResults[moduleName] = &HostCheckResult{
+				nodeResults[moduleName] = &HostCheckModuleResult{
 					ModuleName:                  moduleName,
 					Status:                      resultStatus,
 					Data:                        result,
@@ -596,12 +606,12 @@ func (r *HostCheckRegistry) ValidateWithModules(
 
 // ValidateAll runs all validation modules for a command on cached hostcheck data
 // params can be used for parameterized validation (e.g., {"ethDevice": "bond0"})
-func (r *HostCheckRegistry) ValidateAll(
+func (r *HostCheckModuleRegistry) ValidateAll(
 	ctx context.Context,
 	commandName string,
 	nodes []corev1.Node,
 	params map[string]interface{},
-) (map[string]map[string]*HostCheckResult, error) {
+) (map[string]map[string]*HostCheckModuleResult, error) {
 
 	// Get hostchecks (cached or fresh)
 	hostChecksMap, err := r.GetHostChecksForNodes(ctx, nodes)
@@ -610,7 +620,7 @@ func (r *HostCheckRegistry) ValidateAll(
 	}
 
 	if len(hostChecksMap) == 0 {
-		return make(map[string]map[string]*HostCheckResult), nil
+		return make(map[string]map[string]*HostCheckModuleResult), nil
 	}
 
 	// Validate using registered modules with params
@@ -619,10 +629,10 @@ func (r *HostCheckRegistry) ValidateAll(
 
 // FormatNodeValidationResults formats the validation results for a single node as a string
 // Returns the formatted output and overall status: "success", "partial", or "failure"
-func (r *HostCheckRegistry) FormatNodeValidationResults(
+func (r *HostCheckModuleRegistry) FormatNodeValidationResults(
 	nodeName string,
 	commandName string,
-	moduleResults map[string]*HostCheckResult,
+	moduleResults map[string]*HostCheckModuleResult,
 ) (string, string) {
 	var output strings.Builder
 
@@ -715,10 +725,10 @@ func (r *HostCheckRegistry) FormatNodeValidationResults(
 
 // PrintNodeValidationResults prints the validation results for a single node
 // Returns the overall status: "success", "partial", or "failure"
-func (r *HostCheckRegistry) PrintNodeValidationResults(
+func (r *HostCheckModuleRegistry) PrintNodeValidationResults(
 	nodeName string,
 	commandName string,
-	moduleResults map[string]*HostCheckResult,
+	moduleResults map[string]*HostCheckModuleResult,
 ) string {
 	output, status := r.FormatNodeValidationResults(nodeName, commandName, moduleResults)
 	fmt.Print(output)

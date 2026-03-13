@@ -845,12 +845,17 @@ func (ni NetworkInterfaces) GetCandidateInterfacesForWeka(forWekaVersion ...stri
 			continue
 		}
 
-		// 3. Must have IP address
+		// 3. virtual interface, not vlan and not bond (e.g. cni0 or other interfaces that are virtual bridges)
+		if iface.VendorModel == "" && iface.Type != "vlan" && iface.Type != "bond" {
+			continue
+		}
+
+		// 4. Must have IP address
 		if iface.IP == "" {
 			continue
 		}
 
-		// 4. Check for /32 subnet mask (host-only route)
+		// 5. Check for /32 subnet mask (host-only route)
 		prefix := getCIDRPrefix(iface.IP)
 		if prefix == 32 {
 			continue
