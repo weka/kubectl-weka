@@ -834,6 +834,21 @@ func (ni NetworkInterfaces) GetCandidateInterfacesForWeka(forWekaVersion ...stri
 	for i := range ni {
 		iface := &ni[i]
 
+		// Filter: Exclude interfaces with MaxSpeed < 10Gbps
+		minSpeedGbps := 10
+		speedStr := iface.MaxSpeed
+		speedGbps := 0
+		if len(speedStr) > 0 {
+			var n int
+			_, err := fmt.Sscanf(speedStr, "%dGb/s", &n)
+			if err == nil {
+				speedGbps = n
+			}
+		}
+		if speedGbps < minSpeedGbps {
+			continue
+		}
+
 		// 1. Skip loopback interfaces
 		if isLoopbackInterface(iface.Name) {
 			continue
