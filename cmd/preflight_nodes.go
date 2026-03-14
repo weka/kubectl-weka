@@ -8,9 +8,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
-	ds "github.com/weka/kubectl-weka/pkg/device-support"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -310,11 +308,6 @@ func generatePreflightNodesOutput(
 			// Print all validation results for this node
 			printNodeValidationToOutput(output, nodeName, "preflight_nodes", moduleResults)
 
-			// Print candidate network interfaces for this node
-			if hc, exists := hostChecksMap[nodeName]; exists {
-				printCandidateNetworkInterfacesToOutput(output, hc)
-			}
-
 			output.Println("")
 		}
 
@@ -469,116 +462,9 @@ func printCheckResultToOutput(output *PreflightOutput, msg string, ok bool, deta
 }
 
 // printNodeValidationToOutput prints validation results to PreflightOutput
-func printNodeValidationToOutput(output *PreflightOutput, nodeName, category string, moduleResults map[string]*HostCheckResult) {
+func printNodeValidationToOutput(output *PreflightOutput, nodeName, category string, moduleResults map[string]*HostCheckModuleResult) {
 	// Use the registry's FormatNodeValidationResults to get formatted output as string
 	formattedOutput, _ := GlobalHostCheckRegistry.FormatNodeValidationResults(nodeName, category, moduleResults)
 	// Write to our output instead of stdout
 	output.Println(formattedOutput)
-}
-
-// printCandidateNetworkInterfacesToOutput prints a table of candidate network interfaces for Weka
-func printCandidateNetworkInterfacesToOutput(output *PreflightOutput, hc *HostChecksResult) {
-	if hc == nil || len(hc.NetworkInterfaces) == 0 {
-		return
-	}
-
-	// Get candidate interfaces for Weka
-	candidates := hc.NetworkInterfaces.GetCandidateInterfacesForWeka()
-
-	if len(candidates) == 0 {
-		output.Println("    Network Interfaces: No candidate interfaces found for Weka")
-		return
-	}
-
-	// Print header
-	output.Println("    Network Interfaces (Candidates for Weka):")
-
-	// Create table
-	t := table.NewWriter()
-	t.SetStyle(table.StyleRounded)
-
-	// Add header
-	t.AppendHeader(table.Row{"Name", "Vendor:Model", "Device Model", "Type", "IP Address/CIDR", "Speed", "MTU", "Supported", "Reason"})
-
-	// Add rows for each candidate
-	for _, iface := range candidates {
-		name := iface.Name
-
-		// Get vendor:model code
-		vendorModelCode := iface.VendorModel
-		if vendorModelCode == "" {
-			vendorModelCode = "Unknown"
-		}
-
-		// Get full device model name from registry
-		fullModelName := "Unknown"
-		if iface.VendorModel != "" {
-			devInfo := ds.GetNICInfo(iface.VendorModel)
-			if devInfo != nil && devInfo.Model != "" {
-				fullModelName = devInfo.Model
-			}
-		}
-
-		// Get interface type
-		ifaceType := iface.Type
-		if iface.IsBond() {
-			// Show bond with slave count
-			slaves := iface.GetSlaves()
-			ifaceType = fmt.Sprintf("bond (%d slaves)", len(slaves))
-		}
-
-		// IP address and CIDR
-		ipAddress := iface.IP
-		if ipAddress == "" {
-			ipAddress = "No IP"
-		}
-
-		// Speed
-		speed := iface.EffectiveSpeed
-		if speed == "" {
-			speed = iface.MaxSpeed
-		}
-		if speed == "" {
-			speed = "Unknown"
-		}
-
-		// MTU
-		mtuStr := "Unknown"
-		if iface.MTU > 0 {
-			mtuStr = fmt.Sprintf("%d", iface.MTU)
-		}
-
-		// Determine supported modes and reason
-		supported := "-"
-		reason := ""
-
-		// Try DPDK first (preferred)
-		dpdkSupported, dpdkErr := iface.IsSupportedByWekaDpdk()
-		if dpdkSupported {
-			supported = "DPDK"
-		} else {
-			// Try UDP as fallback
-			udpSupported, udpErr := iface.IsSupportedByWekaInUdpMode()
-			if udpSupported {
-				supported = "UDP"
-			} else {
-				// Not supported - use DPDK error as primary reason, fallback to UDP error
-				if dpdkErr != nil {
-					reason = dpdkErr.Error()
-				} else if udpErr != nil {
-					reason = udpErr.Error()
-				} else {
-					reason = "Not supported"
-				}
-			}
-		}
-
-		// Append row
-		t.AppendRow(table.Row{name, vendorModelCode, fullModelName, ifaceType, ipAddress, speed, mtuStr, supported, reason})
-	}
-
-	// Render and indent table
-	renderedTable := t.Render()
-	indentedTable := indentText(renderedTable, 4)
-	output.Println(indentedTable)
 }
