@@ -54,7 +54,7 @@ func (m *WekaDirModule) Validate(podOutput string) (interface{}, error) {
 		"OK":         hc.IsWekaDirAtLeast(100), // default value
 		"Path":       hc.WekaDirPath,
 		"AvailBytes": hc.WekaDirAvailBytes,
-		"AvailGB":    fmt.Sprintf("%.1d", availGB),
+		"AvailGB":    fmt.Sprintf("%.1f", availGB),
 	}, nil
 }
 

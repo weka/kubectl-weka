@@ -981,10 +981,10 @@ type HostChecksResult struct {
 
 // Validation helper methods for HostChecksResult
 
-// InitializeBondHierarchy initializes the parent pointers for all network interfaces
+// InitializeNetworkInterfaceHierarchy initializes the parent pointers for all network interfaces
 // This must be called after unmarshalling JSON to enable GetSlaves() and GetMaster() methods
 // Typically called right after json.Unmarshal()
-func (hc *HostChecksResult) InitializeBondHierarchy() {
+func (hc *HostChecksResult) InitializeNetworkInterfaceHierarchy() {
 	if hc != nil {
 		hc.NetworkInterfaces.InitializeParents()
 	}

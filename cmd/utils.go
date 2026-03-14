@@ -547,3 +547,36 @@ func GetPodRestartMetrics(pod *v1.Pod) PodRestartMetrics {
 
 	return metrics
 }
+
+// extractFriendlyName is a helper function just for sake of representation
+// gives a better name to module so it can be later embedded in node status checks
+func extractFriendlyName(moduleName string) string {
+	friendlyName := moduleName
+	switch moduleName {
+	case "os":
+		friendlyName = "Operating System"
+	case "kernel":
+		friendlyName = "Kernel"
+	case "cpu_memory":
+		friendlyName = "CPU & Memory"
+	case "weka_dir":
+		friendlyName = "Weka Directory"
+	case "xfs":
+		friendlyName = "XFS Tools"
+	case "weka_client":
+		friendlyName = "Weka Client"
+	case "network_interfaces":
+		friendlyName = "Network Interfaces"
+	case "nvme_drives":
+		friendlyName = "NVMe Drives"
+	}
+	return friendlyName
+}
+
+// truncateString truncates a string to maxLength characters and adds ellipsis if needed
+func truncateString(s string, maxLength int) string {
+	if len(s) <= maxLength {
+		return s
+	}
+	return s[:maxLength] + "..."
+}

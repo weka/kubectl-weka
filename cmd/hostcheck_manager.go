@@ -220,7 +220,7 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 							}
 						} else {
 							hostChecksMap[nodeName] = &hc
-							hc.InitializeBondHierarchy()
+							hc.InitializeNetworkInterfaceHierarchy()
 							if opts.Verbose {
 								fmt.Printf("  [%s] ✅ Collected hostcheck data\n", nodeName)
 							}
@@ -274,7 +274,7 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 				errorDetails.WriteString(fmt.Sprintf("  [%s] %s\n", nodeName, errMsg))
 			}
 		}
-		return nil, fmt.Errorf(errorDetails.String())
+		return nil, fmt.Errorf("%s", errorDetails.String())
 	}
 
 	return hostChecksMap, nil
@@ -669,25 +669,7 @@ func (r *HostCheckModuleRegistry) FormatNodeValidationResults(
 		}
 
 		// Map module name to friendly name
-		friendlyName := moduleName
-		switch moduleName {
-		case "os":
-			friendlyName = "Operating System"
-		case "kernel":
-			friendlyName = "Kernel"
-		case "cpu_memory":
-			friendlyName = "CPU & Memory"
-		case "weka_dir":
-			friendlyName = "Weka Directory"
-		case "xfs":
-			friendlyName = "XFS Tools"
-		case "weka_client":
-			friendlyName = "Weka Client"
-		case "network":
-			friendlyName = "Network Configuration"
-		case "nvme_drives":
-			friendlyName = "NVMe Drives"
-		}
+		friendlyName := extractFriendlyName(moduleName)
 
 		// Create context params for Summary()
 		contextParams := map[string]interface{}{
@@ -706,39 +688,10 @@ func (r *HostCheckModuleRegistry) FormatNodeValidationResults(
 
 		// Use Summary() to format the output
 		displayText := moduleResult.Summary(contextParams)
-
+		displayText = indentText(displayText, 5, 2) // Indent module details for better readability
 		// Handle multiline details (like network configuration)
-		if strings.Contains(displayText, "\n") {
-			lines := strings.Split(displayText, "\n")
-			output.WriteString(fmt.Sprintf("     %s\n", lines[0]))
-			indent := "               "
-			for i := 1; i < len(lines); i++ {
-				output.WriteString(fmt.Sprintf("%s%s\n", indent, lines[i]))
-			}
-		} else {
-			output.WriteString(fmt.Sprintf("     %s\n", displayText))
-		}
+		output.WriteString(displayText + "\n")
 	}
 
 	return output.String(), overallStatus
-}
-
-// PrintNodeValidationResults prints the validation results for a single node
-// Returns the overall status: "success", "partial", or "failure"
-func (r *HostCheckModuleRegistry) PrintNodeValidationResults(
-	nodeName string,
-	commandName string,
-	moduleResults map[string]*HostCheckModuleResult,
-) string {
-	output, status := r.FormatNodeValidationResults(nodeName, commandName, moduleResults)
-	fmt.Print(output)
-	return status
-}
-
-// truncateString truncates a string to maxLength characters and adds ellipsis if needed
-func truncateString(s string, maxLength int) string {
-	if len(s) <= maxLength {
-		return s
-	}
-	return s[:maxLength] + "..."
 }
