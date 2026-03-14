@@ -190,3 +190,82 @@ func TestRandomString(t *testing.T) {
 		})
 	}
 }
+
+func TestIndentText(t *testing.T) {
+	cases := []struct {
+		name            string
+		input           string
+		spaces          int
+		expect          string
+		subsequentSpace int
+		useSubsequent   bool
+	}{
+		{
+			name:   "single line, no newline",
+			input:  "hello",
+			spaces: 2,
+			expect: "  hello",
+		},
+		{
+			name:   "single line, with newline",
+			input:  "hello\n",
+			spaces: 2,
+			expect: "  hello\n",
+		},
+		{
+			name:   "multi-line",
+			input:  "foo\nbar",
+			spaces: 4,
+			expect: "    foo\n    bar",
+		},
+		{
+			name:   "multi-line with trailing newline",
+			input:  "foo\nbar\n",
+			spaces: 3,
+			expect: "   foo\n   bar\n",
+		},
+		{
+			name:   "empty string",
+			input:  "",
+			spaces: 2,
+			expect: "",
+		},
+		{
+			name:   "zero spaces",
+			input:  "hello\nworld",
+			spaces: 0,
+			expect: "hello\nworld",
+		},
+		// New cases for subsequentSpace
+		{
+			name:            "multi-line with subsequentSpace",
+			input:           "foo\nbar\nbaz",
+			spaces:          2,
+			subsequentSpace: 3,
+			useSubsequent:   true,
+			expect:          "  foo\n     bar\n     baz",
+		},
+		{
+			name:            "multi-line with subsequentSpace and trailing newline",
+			input:           "foo\nbar\nbaz\n",
+			spaces:          1,
+			subsequentSpace: 2,
+			useSubsequent:   true,
+			expect:          " foo\n   bar\n   baz\n",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var out string
+			if c.useSubsequent {
+				out = indentText(c.input, c.spaces, c.subsequentSpace)
+			} else {
+				out = indentText(c.input, c.spaces)
+			}
+			if out != c.expect {
+				t.Errorf("indentText(%q, %d, %d) = %q, want %q", c.input, c.spaces, c.subsequentSpace, out, c.expect)
+			}
+		})
+	}
+}

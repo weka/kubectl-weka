@@ -28,18 +28,24 @@ func styleTableMinimal(w table.Writer) {
 }
 
 // indentText indents a block of text by the specified number of spaces
-func indentText(text string, spaces int) string {
+func indentText(text string, spaces int, subsequentSpace ...int) string {
 	if spaces <= 0 || text == "" {
 		return text
 	}
 
 	indent := strings.Repeat(" ", spaces)
+	subIndent := indent
 	lines := strings.Split(text, "\n")
 
+	if subsequentSpace != nil {
+		subIndent = strings.Repeat(" ", subsequentSpace[0]) + subIndent
+	}
 	var result []string
-	for _, line := range lines {
+	for i, line := range lines {
 		if line == "" {
 			result = append(result, "")
+		} else if i > 0 {
+			result = append(result, subIndent+line)
 		} else {
 			result = append(result, indent+line)
 		}
