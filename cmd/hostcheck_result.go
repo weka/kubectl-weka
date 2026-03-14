@@ -667,12 +667,6 @@ func (ni *NetworkInterface) IsSupportedByWekaInUdpMode(forWekaVersion ...string)
 		return false, fmt.Errorf("interface is a bond slave")
 	}
 
-	// If supported in DPDK, use DPDK instead (preferred)
-	dpdkSupported, _ := ni.IsSupportedByWekaDpdk(forWekaVersion...)
-	if dpdkSupported {
-		return false, fmt.Errorf("interface is supported in DPDK mode (preferred over UDP)")
-	}
-
 	// Check if UDP mode is supported
 	if ni.VendorModel == "" {
 		return false, fmt.Errorf("unknown network device (no VendorModel)")

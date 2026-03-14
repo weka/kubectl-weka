@@ -540,61 +540,40 @@ func (r *HostCheckModuleRegistry) ValidateWithModules(
 			}
 			// Add node-specific data
 			nodeParams["nodeName"] = nodeName
-			nodeParams["hostChecksResult"] = hostCheck
 
 			if len(nodeParams) > 0 {
 				result, err = module.ValidateWithParams(string(hostCheckJSON), nodeParams)
 			} else {
 				result, err = module.Validate(string(hostCheckJSON))
 			}
-
+			resultStatus := "success"
 			if err != nil {
-				// Get the module to extract its error template
-				module, _ := r.Get(moduleName)
-				errorTemplate := ""
-				if module != nil {
-					errorTemplate = module.ErrorTemplate()
-				}
+				resultStatus = "error"
+			}
 
-				nodeResults[moduleName] = &HostCheckModuleResult{
-					ModuleName:    moduleName,
-					Status:        "error",
-					Error:         fmt.Sprintf("Validation error: %v", err),
-					ErrorTemplate: errorTemplate,
-					Params:        map[string]interface{}{"NodeName": nodeName},
+			// Extract status from the result data if provided
+			if resultMap, ok := result.(map[string]interface{}); ok {
+				if statusVal, ok := resultMap["Status"].(string); ok {
+					resultStatus = statusVal
 				}
-			} else {
-				// Get the module to extract its templates
-				module, _ := r.Get(moduleName)
-				successTemplate := ""
-				warningTemplate := ""
-				errorTemplate := ""
-				suggestedResolutionTemplate := ""
-				if module != nil {
-					successTemplate = module.SuccessTemplate()
-					warningTemplate = module.WarningTemplate()
-					errorTemplate = module.ErrorTemplate()
-					suggestedResolutionTemplate = module.SuggestedResolutionTemplate()
-				}
+			}
 
-				// Extract status from the result data if provided
-				resultStatus := "success"
-				if resultMap, ok := result.(map[string]interface{}); ok {
-					if statusVal, ok := resultMap["Status"].(string); ok {
-						resultStatus = statusVal
-					}
-				}
+			// fetch those after the module has actually performed the test since they can be dynamic
+			errorTemplate := module.ErrorTemplate()
+			successTemplate := module.SuccessTemplate()
+			warningTemplate := module.WarningTemplate()
+			suggestedResolutionTemplate := module.SuggestedResolutionTemplate()
 
-				nodeResults[moduleName] = &HostCheckModuleResult{
-					ModuleName:                  moduleName,
-					Status:                      resultStatus,
-					Data:                        result,
-					SuccessTemplate:             successTemplate,
-					WarningTemplate:             warningTemplate,
-					ErrorTemplate:               errorTemplate,
-					SuggestedResolutionTemplate: suggestedResolutionTemplate,
-					Params:                      map[string]interface{}{"NodeName": nodeName},
-				}
+			nodeResults[moduleName] = &HostCheckModuleResult{
+				ModuleName:                  moduleName,
+				Status:                      resultStatus,
+				Error:                       fmt.Sprintf("Validation error: %v", err),
+				Data:                        result,
+				SuccessTemplate:             successTemplate,
+				WarningTemplate:             warningTemplate,
+				ErrorTemplate:               errorTemplate,
+				SuggestedResolutionTemplate: suggestedResolutionTemplate,
+				Params:                      map[string]interface{}{"NodeName": nodeName},
 			}
 		}
 
