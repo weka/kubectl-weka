@@ -2,16 +2,16 @@ package cmd
 
 // HostCheckModuleResult represents the result of a single module validation
 type HostCheckModuleResult struct {
-	ModuleName                  string                 `json:"module_name"`
-	Status                      string                 `json:"status"` // "success", "warning", "error"
-	Data                        interface{}            `json:"data,omitempty"`
-	SuccessTemplate             string                 `json:"success_template,omitempty"`
-	WarningTemplate             string                 `json:"warning_template,omitempty"`
-	ErrorTemplate               string                 `json:"error_template,omitempty"`
-	SuggestedResolutionTemplate string                 `json:"suggested_resolution_template,omitempty"`
-	Error                       string                 `json:"error,omitempty"`
-	SuggestedFix                string                 `json:"suggested_fix,omitempty"`
-	Params                      map[string]interface{} `json:"params,omitempty"` // Context params like nodeName, etc
+	ModuleName                  string                  `json:"module_name"`
+	Status                      checkStatus             `json:"status"` // "success", "warning", "error"
+	Data                        HostCheckModuleResponse `json:"data,omitempty"`
+	SuccessTemplate             string                  `json:"success_template,omitempty"`
+	WarningTemplate             string                  `json:"warning_template,omitempty"`
+	ErrorTemplate               string                  `json:"error_template,omitempty"`
+	SuggestedResolutionTemplate string                  `json:"suggested_resolution_template,omitempty"`
+	Error                       string                  `json:"error,omitempty"`
+	SuggestedFix                string                  `json:"suggested_fix,omitempty"`
+	Params                      map[string]interface{}  `json:"params,omitempty"` // Context params like nodeName, etc
 }
 
 // FormatError formats an error message using the module's error template
@@ -38,9 +38,6 @@ func (r *HostCheckModuleResult) FormatWarning(params map[string]interface{}) str
 
 // FormatSuccess formats the success message using the success template
 func (r *HostCheckModuleResult) FormatSuccess(params map[string]interface{}) string {
-	if r.SuccessTemplate == "" {
-		return ""
-	}
 	return interpolateTemplate(r.SuccessTemplate, params)
 }
 
@@ -60,11 +57,11 @@ func (r *HostCheckModuleResult) FormatSuggestedFix(params map[string]interface{}
 func (r *HostCheckModuleResult) Summary(params map[string]interface{}) string {
 	var text string
 	switch r.Status {
-	case "success":
+	case statusPass:
 		text = r.FormatSuccess(params)
-	case "warning":
+	case statusWarn:
 		text = r.FormatWarning(params)
-	case "error":
+	case statusFail:
 		text = r.FormatError(params)
 	default:
 		text = "⚠️ UNKNOWN"

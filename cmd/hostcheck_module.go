@@ -16,13 +16,13 @@ type HostCheckModule interface {
 
 	// Validate performs the validation and returns results
 	// Receives the pod output and should extract/parse what it needs
-	Validate(podOutput string) (interface{}, error)
+	Validate(podOutput string) (HostCheckModuleResponse, error)
 
 	// ValidateWithParams performs parameterized validation
 	// Allows passing custom parameters (e.g., ethDevice for network validation)
 	// Returns same result format as Validate
 	// Default implementation should call Validate and ignore params
-	ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error)
+	ValidateWithParams(podOutput string, params map[string]interface{}) (HostCheckModuleResponse, error)
 
 	// Description returns a human-readable description of what this module checks
 	Description() string
@@ -110,12 +110,52 @@ func (m *HostCheckModuleStub) SuggestedResolutionTemplate() string {
 	return m.resolutionTemplate
 }
 
-func (m *HostCheckModuleStub) Validate(podOutput string) (interface{}, error) {
-	// Placeholder: return success
+// HostCheckModuleResponse defines the interface for validation results returned by modules
+// All modules must return a value implementing this interface
+// Example fields: Status, ModuleName, Details, Error, etc.
+type HostCheckModuleResponse interface {
+	Status() checkStatus
+	ModuleName() string
+	Details() string
+	Error() error
+	Map() map[string]interface{}
+}
+
+// BasicHostCheckModuleResponse is a simple implementation of HostCheckModuleResponse
+// Can be used by stub and custom modules
+// Extend as needed for real modules
+type BasicHostCheckModuleResponse struct {
+	status     checkStatus
+	moduleName string
+	details    string
+	err        error
+}
+
+func (r *BasicHostCheckModuleResponse) Status() checkStatus { return r.status }
+func (r *BasicHostCheckModuleResponse) ModuleName() string  { return r.moduleName }
+func (r *BasicHostCheckModuleResponse) Details() string     { return r.details }
+func (r *BasicHostCheckModuleResponse) Error() error        { return r.err }
+func (r *BasicHostCheckModuleResponse) Map() map[string]interface{} {
 	return map[string]interface{}{
-		"status": "success",
-		"module": m.name,
+		"Status":     r.status,
+		"ModuleName": r.moduleName,
+		"Details":    r.details,
+		"Error":      r.err,
+	}
+}
+
+// Update HostCheckModuleStub to return BasicHostCheckModuleResponse
+func (m *HostCheckModuleStub) Validate(podOutput string) (HostCheckModuleResponse, error) {
+	return &BasicHostCheckModuleResponse{
+		status:     statusPass,
+		moduleName: m.name,
+		details:    "stub validation passed",
+		err:        nil,
 	}, nil
+}
+
+func (m *HostCheckModuleStub) ValidateWithParams(podOutput string, params map[string]interface{}) (HostCheckModuleResponse, error) {
+	return m.Validate(podOutput)
 }
 
 // ============================================================================

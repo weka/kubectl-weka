@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	ds "github.com/weka/kubectl-weka/pkg/device-support"
@@ -9,25 +11,91 @@ import (
 
 // NetworkInterfaceValidation represents validation data for a single network interface
 type NetworkInterfaceValidation struct {
-	Name        string `json:"name"`
-	VendorModel string `json:"vendor_model"`
-	DeviceModel string `json:"device_model"`
-	Type        string `json:"type"`
-	IPAddress   string `json:"ip_address"`
-	Speed       string `json:"speed"`
-	MTU         string `json:"mtu"`
-	Supported   string `json:"supported"` // "DPDK", "UDP", or "-"
-	Reason      string `json:"reason"`    // Error reason if not supported
+	Status      checkStatus `json:"status"`
+	Name        string      `json:"name"`
+	VendorModel string      `json:"vendor_model"`
+	DeviceModel string      `json:"device_model"`
+	Type        string      `json:"type"`
+	IPAddress   string      `json:"ip_address"`
+	Speed       string      `json:"speed"`
+	MTU         string      `json:"mtu"`
+	Supported   string      `json:"supported"` // "DPDK", "UDP", or "-"
+	Reason      string      `json:"reason"`    // Error reason if not supported
+}
+
+// String returns a human-readable summary of the validation result
+func (nv *NetworkInterfaceValidation) String() string {
+	return fmt.Sprintf(
+		"Name: %s, Type: %s, IP: %s, Speed: %s, MTU: %s, Supported: %s, Status: %s, Reason: %s",
+		nv.Name,
+		nv.Type,
+		nv.IPAddress,
+		nv.Speed,
+		nv.MTU,
+		nv.Supported,
+		nv.Status,
+		nv.Reason,
+	)
+}
+
+func (nv *NetworkInterfaceValidation) setStatus(status checkStatus) {
+	switch status {
+	case statusFail:
+		nv.Status = statusFail
+	case statusWarn:
+		if nv.Status != statusFail {
+			nv.Status = statusWarn
+		}
+	case statusPass:
+		if nv.Status != statusFail && nv.Status != statusWarn {
+			nv.Status = statusPass
+		}
+	}
 }
 
 // NetworkInterfacesModuleData represents the validation result data
 type NetworkInterfacesModuleData struct {
-	TotalInterfaces int                          `json:"total_interfaces"`
-	CandidateCount  int                          `json:"candidate_count"`
-	DPDKSupported   int                          `json:"dpdk_supported"`
-	UDPSupported    int                          `json:"udp_supported"`
-	NotSupported    int                          `json:"not_supported"`
-	Interfaces      []NetworkInterfaceValidation `json:"interfaces"`
+	TotalInterfaces int                           `json:"total_interfaces"`
+	CandidateCount  int                           `json:"candidate_count"`
+	DPDKSupported   int                           `json:"dpdk_supported"`
+	UDPSupported    int                           `json:"udp_supported"`
+	NotSupported    int                           `json:"not_supported"`
+	Warnings        int                           `json:"warnings"`
+	Interfaces      []*NetworkInterfaceValidation `json:"interfaces"`
+}
+
+// NetworkInterfacesModuleResponse implements HostCheckModuleResult for network validation
+// Wraps NetworkInterfacesModuleData
+type NetworkInterfacesModuleResponse struct {
+	data       *NetworkInterfacesModuleData
+	status     checkStatus
+	moduleName string
+	details    string
+	err        error
+}
+
+func (r *NetworkInterfacesModuleResponse) Status() checkStatus                { return r.status }
+func (r *NetworkInterfacesModuleResponse) ModuleName() string                 { return r.moduleName }
+func (r *NetworkInterfacesModuleResponse) Details() string                    { return r.details }
+func (r *NetworkInterfacesModuleResponse) Error() error                       { return r.err }
+func (r *NetworkInterfacesModuleResponse) Data() *NetworkInterfacesModuleData { return r.data }
+func (r *NetworkInterfacesModuleResponse) Map() map[string]interface{} {
+	m := map[string]interface{}{
+		"Status":     r.status,
+		"ModuleName": r.moduleName,
+		"Details":    r.details,
+		"Error":      r.err,
+	}
+	if r.data != nil {
+		m["TotalInterfaces"] = r.data.TotalInterfaces
+		m["CandidateCount"] = r.data.CandidateCount
+		m["DPDKSupported"] = r.data.DPDKSupported
+		m["UDPSupported"] = r.data.UDPSupported
+		m["NotSupported"] = r.data.NotSupported
+		m["Warnings"] = r.data.Warnings
+		m["Interfaces"] = r.data.Interfaces
+	}
+	return m
 }
 
 // NetworkInterfacesModule validates network interfaces for Weka support
@@ -43,40 +111,25 @@ func (m *NetworkInterfacesModule) Description() string {
 	return "Validates network interfaces for Weka compatibility (DPDK, UDP, or unsupported)"
 }
 
-func (m *NetworkInterfacesModule) Validate(podOutput string) (interface{}, error) {
-	return m.ValidateWithParams(podOutput, nil)
-}
-
-func (m *NetworkInterfacesModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+func (m *NetworkInterfacesModule) Validate(podOutput string) (HostCheckModuleResponse, error) {
 	// Extract HostChecksResult from params
 	var hc *HostChecksResult
-
-	// Get hostChecksMap and nodeName from params
-	if params != nil {
-		// Try to get from direct hostChecksResult param (if provided)
-		if result, ok := params["hostChecksResult"]; ok {
-			hc, _ = result.(*HostChecksResult)
-		}
-
-		// If not found, try to get from hostChecksMap using nodeName
-		if hc == nil {
-			if hostChecksMap, ok := params["hostChecksMap"]; ok {
-				hcMap, _ := hostChecksMap.(map[string]*HostChecksResult)
-				if nodeName, ok := params["nodeName"]; ok {
-					nodeNameStr, _ := nodeName.(string)
-					if nodeNameStr != "" && len(hcMap) > 0 {
-						hc = hcMap[nodeNameStr]
-					}
-				}
-			}
-		}
+	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
+		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
 	}
 
 	if hc == nil || len(hc.NetworkInterfaces) == 0 {
-		return &NetworkInterfacesModuleData{
+		data := &NetworkInterfacesModuleData{
 			TotalInterfaces: 0,
 			CandidateCount:  0,
-			Interfaces:      []NetworkInterfaceValidation{},
+			Interfaces:      []*NetworkInterfaceValidation{},
+		}
+		return &NetworkInterfacesModuleResponse{
+			data:       data,
+			status:     statusFail,
+			moduleName: m.Name(),
+			details:    "No network interfaces found",
+			err:        nil,
 		}, nil
 	}
 
@@ -86,8 +139,9 @@ func (m *NetworkInterfacesModule) ValidateWithParams(podOutput string, params ma
 	data := &NetworkInterfacesModuleData{
 		TotalInterfaces: len(hc.NetworkInterfaces),
 		CandidateCount:  len(candidates),
-		Interfaces:      []NetworkInterfaceValidation{},
+		Interfaces:      []*NetworkInterfaceValidation{},
 	}
+	m.data = data
 
 	// Validate each candidate interface
 	for _, iface := range candidates {
@@ -103,22 +157,39 @@ func (m *NetworkInterfacesModule) ValidateWithParams(podOutput string, params ma
 		case "-":
 			data.NotSupported++
 		}
-	}
+		if validation.Status == statusWarn {
+			data.Warnings++
+		}
 
+	}
 	// Determine overall status based on support availability
 	// Success if at least one interface is supported
 	// Warning if some interfaces are not supported but at least one is
 	// Error if no interfaces are supported
-	if data.DPDKSupported+data.UDPSupported == 0 {
-		return data, fmt.Errorf("no network interfaces are supported for Weka")
+	status := statusPass
+	if data.NotSupported > 0 {
+		status = statusFail
+	} else if data.Warnings > 0 {
+		status = statusWarn
 	}
-	m.data = data
-	return data, nil
+
+	return &NetworkInterfacesModuleResponse{
+		data:       data,
+		status:     status,
+		moduleName: m.Name(),
+		details:    "Network interface validation complete",
+		err:        nil,
+	}, nil
+}
+
+func (m *NetworkInterfacesModule) ValidateWithParams(podOutput string, params map[string]interface{}) (HostCheckModuleResponse, error) {
+	return m.Validate(podOutput)
 }
 
 // validateInterface validates a single network interface
-func (m *NetworkInterfacesModule) validateInterface(iface *NetworkInterface) NetworkInterfaceValidation {
-	validation := NetworkInterfaceValidation{
+func (m *NetworkInterfacesModule) validateInterface(iface *NetworkInterface) *NetworkInterfaceValidation {
+	reasons := []string{}
+	validation := &NetworkInterfaceValidation{
 		Name:        iface.Name,
 		VendorModel: iface.VendorModel,
 		Type:        iface.Type,
@@ -132,22 +203,27 @@ func (m *NetworkInterfacesModule) validateInterface(iface *NetworkInterface) Net
 	// Set defaults
 	if validation.VendorModel == "" {
 		validation.VendorModel = "Unknown"
+		validation.setStatus(statusFail)
+		reasons = append(reasons, "Unknown device model")
 	}
 
 	if validation.IPAddress == "" {
 		validation.IPAddress = "No IP"
+		validation.setStatus(statusFail)
+		reasons = append(reasons, "No IP address")
 	}
 
 	if validation.Speed == "" {
-		validation.Speed = iface.MaxSpeed
-	}
-
-	if validation.Speed == "" {
-		validation.Speed = "Unknown"
+		validation.setStatus(statusFail)
+		reasons = append(reasons, "Speed is not reported, disconnected?")
 	}
 
 	if iface.MTU > 0 {
 		validation.MTU = fmt.Sprintf("%d", iface.MTU)
+	}
+	if iface.MTU < 8192 {
+		validation.setStatus(statusWarn)
+		reasons = append(reasons, "MTU too small")
 	}
 
 	// Get device model name
@@ -161,49 +237,67 @@ func (m *NetworkInterfacesModule) validateInterface(iface *NetworkInterface) Net
 	} else {
 		validation.DeviceModel = "Unknown"
 	}
+	if validation.DeviceModel == "Unknown" {
+		validation.setStatus(statusFail)
+		reasons = append(reasons, "Unknown device model")
+	}
 
 	// Handle bond interface type
 	if iface.IsBond() {
 		slaves := iface.GetSlaves()
 		validation.Type = fmt.Sprintf("bond (%d slaves)", len(slaves))
+		if len(slaves) != 2 {
+			validation.setStatus(statusFail)
+			reasons = append(reasons, "Bond must have 2 interfaces")
+		}
+		if !iface.IsLACP() {
+			validation.setStatus(statusFail)
+			reasons = append(reasons, "Bond mode is not LACP")
+		}
 	}
 
-	// Determine supported modes and reason
-	dpdkSupported, dpdkErr := iface.IsSupportedByWekaDpdk()
-	if dpdkSupported {
-		validation.Supported = "DPDK"
-		return validation
-	}
-
-	// Try UDP as fallback
+	// Try UDP first as a bare minimum
 	udpSupported, udpErr := iface.IsSupportedByWekaInUdpMode()
 	if udpSupported {
 		validation.Supported = "UDP"
+	} else {
+		if udpErr != nil {
+			reasons = append(reasons, udpErr.Error())
+		} else {
+			reasons = append(reasons, "Not supported")
+		}
+		validation.setStatus(statusFail)
+		validation.Reason = strings.Join(reasons, "\n")
 		return validation
 	}
 
-	// Not supported - set reason from error
-	if dpdkErr != nil {
-		validation.Reason = dpdkErr.Error()
-	} else if udpErr != nil {
-		validation.Reason = udpErr.Error()
+	// if UDP is supported, check if DPDK is supported for optimal performance
+	dpdkSupported, dpdkErr := iface.IsSupportedByWekaDpdk()
+	if dpdkSupported {
+		validation.Supported = "DPDK"
 	} else {
-		validation.Reason = "Not supported"
+		if dpdkErr != nil {
+			reasons = append(reasons, dpdkErr.Error())
+		} else {
+			reasons = append(reasons, "No DPDK support")
+		}
+		validation.setStatus(statusWarn)
 	}
-
+	validation.Reason = strings.Join(reasons, "\n")
+	validation.setStatus(statusPass) // will set only if empty
 	return validation
 }
 
 func (m *NetworkInterfacesModule) SuccessTemplate() string {
-	return "✅ OK: Network interfaces validation passed\n" + indentText(FormatNetworkInterfacesTable(m.data), 5)
+	return "✅ OK:  {{.FriendlyName}}: Network interfaces validation passed\n" + FormatNetworkInterfacesTable(m.data, nil)
 }
 
 func (m *NetworkInterfacesModule) WarningTemplate() string {
-	return "⚠️ WARNING: Some network interfaces are not supported for optimal Weka performance\n" + indentText(FormatNetworkInterfacesTable(m.data), 5)
+	return "⚠️ WARNING: {{.FriendlyName}}: Some network interfaces are not supported for optimal Weka performance\n" + FormatNetworkInterfacesTable(m.data, nil)
 }
 
 func (m *NetworkInterfacesModule) ErrorTemplate() string {
-	return "❌ ERROR: {{.Issue}} \n" + indentText(FormatNetworkInterfacesTable(m.data), 5)
+	return "❌ ERROR: {{.FriendlyName}}: {{.Issue}} \n" + FormatNetworkInterfacesTable(m.data, nil)
 }
 
 func (m *NetworkInterfacesModule) SuggestedResolutionTemplate() string {
@@ -212,16 +306,14 @@ func (m *NetworkInterfacesModule) SuggestedResolutionTemplate() string {
 
 // FormatNetworkInterfacesTable formats the network interfaces data as a pretty table
 // This replaces the old printCandidateNetworkInterfacesToOutput function
-func FormatNetworkInterfacesTable(data *NetworkInterfacesModuleData) string {
+func FormatNetworkInterfacesTable(data *NetworkInterfacesModuleData, visibleColumns []string) string {
 	if data == nil || len(data.Interfaces) == 0 {
 		return ""
 	}
 
-	t := table.NewWriter()
-	t.SetStyle(table.StyleRounded)
-
-	// Add header
-	t.AppendHeader(table.Row{
+	// Build TableData
+	allColumns := []string{
+		"Status",
 		"Name",
 		"Vendor:Model",
 		"Device Model",
@@ -231,23 +323,37 @@ func FormatNetworkInterfacesTable(data *NetworkInterfacesModuleData) string {
 		"MTU",
 		"Supported",
 		"Reason",
-	})
-
-	// Add rows for each interface
-	for _, iface := range data.Interfaces {
-		t.AppendRow(table.Row{
-			iface.Name,
-			iface.VendorModel,
-			iface.DeviceModel,
-			iface.Type,
-			iface.IPAddress,
-			iface.Speed,
-			iface.MTU,
-			iface.Supported,
-			iface.Reason,
-		})
 	}
 
-	// Render and indent
-	return t.Render()
+	var headers []string
+	if len(visibleColumns) > 0 {
+		headers = visibleColumns
+	} else {
+		headers = allColumns
+	}
+
+	tableRows := []map[string]interface{}{}
+	for _, iface := range data.Interfaces {
+		row := map[string]interface{}{
+			"Status":          iface.Status,
+			"Name":            iface.Name,
+			"Vendor:Model":    iface.VendorModel,
+			"Device Model":    iface.DeviceModel,
+			"Type":            iface.Type,
+			"IP Address/CIDR": iface.IPAddress,
+			"Speed":           iface.Speed,
+			"MTU":             iface.MTU,
+			"Supported":       iface.Supported,
+			"Reason":          iface.Reason,
+		}
+		tableRows = append(tableRows, row)
+	}
+
+	tableData := TableData{
+		Headers: headers,
+		Rows:    tableRows,
+	}
+
+	// Use RenderTable with default style and indent
+	return RenderTable(tableData, 0, table.StyleRounded)
 }

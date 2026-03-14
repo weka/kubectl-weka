@@ -2,11 +2,33 @@ package cmd
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
 // XFSModule validates XFS tools installation
 type XFSModule struct{}
+
+// XFSModuleResponse implements HostCheckModuleResponse for XFS validation
+type XFSModuleResponse struct {
+	status     checkStatus
+	Found      bool
+	Detail     string
+	moduleName string
+	err        error
+}
+
+func (r *XFSModuleResponse) Status() checkStatus { return r.status }
+func (r *XFSModuleResponse) ModuleName() string  { return r.moduleName }
+func (r *XFSModuleResponse) Details() string     { return r.Detail }
+func (r *XFSModuleResponse) Error() error        { return r.err }
+func (r *XFSModuleResponse) Map() map[string]interface{} {
+	return map[string]interface{}{
+		"Status":     r.status,
+		"Found":      r.Found,
+		"Detail":     r.Detail,
+		"ModuleName": r.moduleName,
+		"Error":      r.err,
+	}
+}
 
 func (m *XFSModule) Name() string {
 	return "xfs"
@@ -36,27 +58,30 @@ func (m *XFSModule) SuggestedResolutionTemplate() string {
 	return "On node {{.NodeName}}, install XFS tools: sudo apt-get install xfsprogs (Ubuntu) or sudo yum install xfsprogs (RHEL/CentOS)"
 }
 
-func (m *XFSModule) Validate(podOutput string) (interface{}, error) {
+func (m *XFSModule) Validate(podOutput string) (HostCheckModuleResponse, error) {
 	var hc HostChecksResult
 	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
-		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
+		return &XFSModuleResponse{status: statusFail, moduleName: m.Name(), err: err}, err
 	}
 
-	status := "success"
+	status := statusPass
 	detail := "found"
-	if !hc.HasXFS() {
-		status = "error"
+	found := hc.HasXFS()
+	if !found {
+		status = statusFail
 		detail = "not found"
 	}
 
-	return map[string]interface{}{
-		"Status": status,
-		"Found":  hc.HasXFS(),
-		"Detail": detail,
+	return &XFSModuleResponse{
+		status:     status,
+		Found:      found,
+		Detail:     detail,
+		moduleName: m.Name(),
+		err:        nil,
 	}, nil
 }
 
 // ValidateWithParams implements HostCheckModule - params not used for XFS validation
-func (m *XFSModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+func (m *XFSModule) ValidateWithParams(podOutput string, params map[string]interface{}) (HostCheckModuleResponse, error) {
 	return m.Validate(podOutput)
 }

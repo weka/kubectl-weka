@@ -524,14 +524,14 @@ func (r *HostCheckModuleRegistry) ValidateWithModules(
 			if err != nil {
 				nodeResults[moduleName] = &HostCheckModuleResult{
 					ModuleName: moduleName,
-					Status:     "error",
+					Status:     statusFail,
 					Error:      fmt.Sprintf("Failed to marshal hostcheck: %v", err),
 				}
 				continue
 			}
 
 			// Use ValidateWithParams if parameters are provided
-			var result interface{}
+			var result HostCheckModuleResponse
 
 			// Create a copy of params to add node-specific data
 			nodeParams := make(map[string]interface{})
@@ -546,17 +546,19 @@ func (r *HostCheckModuleRegistry) ValidateWithModules(
 			} else {
 				result, err = module.Validate(string(hostCheckJSON))
 			}
-			resultStatus := "success"
+			resultStatus := statusPass
 			if err != nil {
-				resultStatus = "error"
+				resultStatus = statusFail
 			}
 
-			// Extract status from the result data if provided
-			if resultMap, ok := result.(map[string]interface{}); ok {
-				if statusVal, ok := resultMap["Status"].(string); ok {
-					resultStatus = statusVal
-				}
-			}
+			//// Extract status from the result data if provided
+			//if resultMap, ok := result; ok {
+			//	if statusVal, ok := resultMap["Status"].(checkStatus); ok {
+			//		resultStatus = statusVal
+			//	}
+			//}
+
+			resultStatus = result.Status()
 
 			// fetch those after the module has actually performed the test since they can be dynamic
 			errorTemplate := module.ErrorTemplate()
@@ -568,7 +570,7 @@ func (r *HostCheckModuleRegistry) ValidateWithModules(
 				ModuleName:                  moduleName,
 				Status:                      resultStatus,
 				Error:                       fmt.Sprintf("Validation error: %v", err),
-				Data:                        result,
+				Data:                        result.(HostCheckModuleResponse),
 				SuccessTemplate:             successTemplate,
 				WarningTemplate:             warningTemplate,
 				ErrorTemplate:               errorTemplate,
@@ -579,7 +581,6 @@ func (r *HostCheckModuleRegistry) ValidateWithModules(
 
 		results[nodeName] = nodeResults
 	}
-
 	return results, nil
 }
 
@@ -621,9 +622,9 @@ func (r *HostCheckModuleRegistry) FormatNodeValidationResults(
 	hasError := false
 
 	for _, mr := range moduleResults {
-		if mr.Status == "error" {
+		if mr.Status == statusFail {
 			hasError = true
-		} else if mr.Status == "warning" {
+		} else if mr.Status == statusWarn {
 			hasWarning = true
 		}
 	}
@@ -658,16 +659,20 @@ func (r *HostCheckModuleRegistry) FormatNodeValidationResults(
 
 		// Add any additional data from the module result
 		if moduleResult.Data != nil {
-			if dataMap, ok := moduleResult.Data.(map[string]interface{}); ok {
-				for k, v := range dataMap {
-					contextParams[k] = v
-				}
+			resp := moduleResult.Data
+			contextParams["Status"] = resp.Status()
+			contextParams["ModuleName"] = resp.ModuleName()
+			contextParams["Details"] = resp.Details()
+			contextParams["Error"] = resp.Error()
+			for k, v := range moduleResult.Data.Map() {
+				contextParams[k] = v
 			}
+			// Add more fields if needed for specific modules (e.g., KernelVersion, OSRelease, etc.)
 		}
 
 		// Use Summary() to format the output
 		displayText := moduleResult.Summary(contextParams)
-		displayText = indentText(displayText, 5, 2) // Indent module details for better readability
+		displayText = indentText(displayText, 5, 3) // Indent module details for better readability
 		// Handle multiline details (like network configuration)
 		output.WriteString(displayText + "\n")
 	}

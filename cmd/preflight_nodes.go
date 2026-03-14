@@ -198,17 +198,16 @@ func generatePreflightNodesOutput(
 		var issuesForNode []string
 
 		for moduleName, mr := range moduleResults {
+			dataMap := mr.Data.Map()
 			if mr.Status == "error" {
 				hasError = true
 				errorMsg := ""
 				if mr.Error != "" {
 					errorMsg = mr.Error
 					issuesForNode = append(issuesForNode, fmt.Sprintf("%s: %s", moduleName, mr.Error))
-				} else if dataMap, ok := mr.Data.(map[string]interface{}); ok {
-					if issue, ok := dataMap["Issue"].(string); ok && issue != "" {
-						errorMsg = issue
-						issuesForNode = append(issuesForNode, fmt.Sprintf("%s: %s", moduleName, issue))
-					}
+				} else if mr.Data.Error() != nil {
+					errorMsg = mr.Data.Error().Error()
+					issuesForNode = append(issuesForNode, fmt.Sprintf("%s: %s", moduleName, mr.Data.Error()))
 				}
 
 				// Get suggested fix from module using template interpolation
@@ -219,10 +218,8 @@ func generatePreflightNodesOutput(
 						"NodeName": nodeName,
 					}
 					// Add all data from the module result
-					if dataMap, ok := mr.Data.(map[string]interface{}); ok {
-						for k, v := range dataMap {
-							fixParams[k] = v
-						}
+					for k, v := range dataMap {
+						fixParams[k] = v
 					}
 					suggestedFix = mr.FormatSuggestedFix(fixParams)
 				}
@@ -238,14 +235,12 @@ func generatePreflightNodesOutput(
 
 				// Extract warning message from module data
 				warningMsg := ""
-				if dataMap, ok := mr.Data.(map[string]interface{}); ok {
-					if warning, ok := dataMap["Warning"].(string); ok && warning != "" {
-						warningMsg = warning
-					} else if issue, ok := dataMap["Issue"].(string); ok && issue != "" {
-						warningMsg = issue
-					} else if detail, ok := dataMap["Detail"].(string); ok && detail != "" {
-						warningMsg = detail
-					}
+				if warning, ok := dataMap["Warning"].(string); ok && warning != "" {
+					warningMsg = warning
+				} else if issue, ok := dataMap["Issue"].(string); ok && issue != "" {
+					warningMsg = issue
+				} else if detail, ok := dataMap["Detail"].(string); ok && detail != "" {
+					warningMsg = detail
 				}
 
 				if warningMsg != "" {

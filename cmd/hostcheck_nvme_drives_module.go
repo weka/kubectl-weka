@@ -9,6 +9,33 @@ import (
 // NVMeDrivesModule validates NVMe drive availability and status
 type NVMeDrivesModule struct{}
 
+// NVMeDrivesModuleResponse implements HostCheckModuleResponse for NVMe validation
+type NVMeDrivesModuleResponse struct {
+	status     checkStatus
+	Detail     string
+	Drives     []NvmeDrive
+	DriveCount int
+	HasDrives  bool
+	moduleName string
+	err        error
+}
+
+func (r *NVMeDrivesModuleResponse) Status() checkStatus { return r.status }
+func (r *NVMeDrivesModuleResponse) ModuleName() string  { return r.moduleName }
+func (r *NVMeDrivesModuleResponse) Details() string     { return r.Detail }
+func (r *NVMeDrivesModuleResponse) Error() error        { return r.err }
+func (r *NVMeDrivesModuleResponse) Map() map[string]interface{} {
+	return map[string]interface{}{
+		"Status":     r.status,
+		"Detail":     r.Detail,
+		"Drives":     r.Drives,
+		"DriveCount": r.DriveCount,
+		"HasDrives":  r.HasDrives,
+		"ModuleName": r.moduleName,
+		"Error":      r.err,
+	}
+}
+
 func (m *NVMeDrivesModule) Name() string {
 	return "nvme_drives"
 }
@@ -37,39 +64,40 @@ func (m *NVMeDrivesModule) SuggestedResolutionTemplate() string {
 	return "On node {{.NodeName}}: {{.Resolution}}"
 }
 
-func (m *NVMeDrivesModule) Validate(podOutput string) (interface{}, error) {
+func (m *NVMeDrivesModule) Validate(podOutput string) (HostCheckModuleResponse, error) {
 	var hc HostChecksResult
 	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
-		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
+		return &NVMeDrivesModuleResponse{status: statusFail, moduleName: m.Name(), err: err}, err
 	}
 
-	// Build detail string
-	// Count only valid NVMe drives with serial numbers (exclude partitions and drives without serial)
 	validDrives := 0
 	for _, drive := range hc.NVMeDrives {
-		// Only count drives with serial numbers (not empty), and exclude partitions (device names like nvme0n1p1)
 		if drive.SerialNumber != "" && !strings.Contains(drive.DeviceName, "p") {
 			validDrives++
 		}
 	}
 
 	detail := ""
+	status := statusPass
 	if !hc.HasNVMeDrives() {
 		detail = "No NVMe drives detected"
+		status = statusFail
 	} else {
 		detail = fmt.Sprintf("%d drive(s) available", validDrives)
 	}
 
-	return map[string]interface{}{
-		"Status":     "success",
-		"Detail":     detail,
-		"Drives":     hc.NVMeDrives,
-		"DriveCount": validDrives,
-		"HasDrives":  hc.HasNVMeDrives(),
+	return &NVMeDrivesModuleResponse{
+		status:     status,
+		Detail:     detail,
+		Drives:     hc.NVMeDrives,
+		DriveCount: validDrives,
+		HasDrives:  hc.HasNVMeDrives(),
+		moduleName: m.Name(),
+		err:        nil,
 	}, nil
 }
 
 // ValidateWithParams implements HostCheckModule - params not used for NVMe drives validation
-func (m *NVMeDrivesModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+func (m *NVMeDrivesModule) ValidateWithParams(podOutput string, params map[string]interface{}) (HostCheckModuleResponse, error) {
 	return m.Validate(podOutput)
 }

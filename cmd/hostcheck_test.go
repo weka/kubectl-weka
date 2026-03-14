@@ -5,6 +5,93 @@ import (
 	"testing"
 )
 
+// TestValidateInterface tests NetworkInterfacesModule.validateInterface
+func TestValidateInterface(t *testing.T) {
+	// Mock NetworkInterfacesModule with minimal dependencies
+	m := &NetworkInterfacesModule{}
+
+	// Helper: create interface with all fields
+	iface := &NetworkInterface{
+		Name:           "eth0",
+		Type:           "ethernet",
+		IP:             "192.168.1.10",
+		VendorModel:    "15b3:1021",
+		EffectiveSpeed: "100Gbps",
+		MTU:            9000,
+	}
+	// Normal case
+	v := m.validateInterface(iface)
+	if v.Status != statusPass {
+		t.Errorf("Expected statusPass, got %v", v.Status)
+	}
+	if v.Name != "eth0" {
+		t.Errorf("Expected Name 'eth0', got %v", v.Name)
+	}
+
+	// Missing VendorModel
+	ifaceMissingModel := &NetworkInterface{
+		Name: "eth1", Type: "ethernet", IP: "192.168.1.11", EffectiveSpeed: "100Gbps", MTU: 9000,
+	}
+	v = m.validateInterface(ifaceMissingModel)
+	if v.Status != statusFail {
+		t.Errorf("Expected statusFail for missing VendorModel, got %v", v.Status)
+	}
+	if !strings.Contains(v.Reason, "Unknown device model") {
+		t.Errorf("Expected reason to mention 'Unknown device model', got %v", v.Reason)
+	}
+
+	// Missing IP
+	ifaceMissingIP := &NetworkInterface{
+		Name: "eth2", Type: "ethernet", VendorModel: "15b3:1021", EffectiveSpeed: "100Gbps", MTU: 9000,
+	}
+	v = m.validateInterface(ifaceMissingIP)
+	if v.Status != statusFail {
+		t.Errorf("Expected statusFail for missing IP, got %v", v.Status)
+	}
+	if !strings.Contains(v.Reason, "No IP address") {
+		t.Errorf("Expected reason to mention 'No IP address', got %v", v.Reason)
+	}
+
+	// Missing Speed
+	ifaceMissingSpeed := &NetworkInterface{
+		Name: "eth3", Type: "ethernet", VendorModel: "15b3:1021", IP: "192.168.1.12", MTU: 9000,
+	}
+	v = m.validateInterface(ifaceMissingSpeed)
+	if v.Status != statusFail {
+		t.Errorf("Expected statusFail for missing Speed, got %v", v.Status)
+	}
+	if !strings.Contains(v.Reason, "Speed is not reported") {
+		t.Errorf("Expected reason to mention 'Speed is not reported', got %v", v.Reason)
+	}
+
+	// MTU too small
+	ifaceSmallMTU := &NetworkInterface{
+		Name: "eth4", Type: "ethernet", VendorModel: "15b3:1021", IP: "192.168.1.13", EffectiveSpeed: "100Gbps", MTU: 1500,
+	}
+	v = m.validateInterface(ifaceSmallMTU)
+	if v.Status != statusWarn {
+		t.Errorf("Expected statusWarn for small MTU, got %v", v.Status)
+	}
+	if !strings.Contains(v.Reason, "MTU too small") {
+		t.Errorf("Expected reason to mention 'MTU too small', got %v", v.Reason)
+	}
+
+	// Bond interface with wrong slave count
+	bondIface := &NetworkInterface{
+		Name: "bond0", Type: "bond", VendorModel: "15b3:1021", IP: "192.168.1.14", EffectiveSpeed: "100Gbps", MTU: 9000,
+		BondSlaves: []string{"eth0"},
+	}
+	v = m.validateInterface(bondIface)
+	if v.Status != statusFail {
+		t.Errorf("Expected statusFail for bond with 1 slave, got %v", v.Status)
+	}
+	if !strings.Contains(v.Reason, "Bond must have 2 interfaces") {
+		t.Errorf("Expected reason to mention 'Bond must have 2 interfaces', got %v", v.Reason)
+	}
+
+	// UDP/DPDK support: these require ds mock, so skip unless dependency is injected
+}
+
 // TestHostChecksResultFields tests that HostChecksResult has expected fields
 func TestHostChecksResultFields(t *testing.T) {
 	result := &HostChecksResult{

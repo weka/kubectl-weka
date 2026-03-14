@@ -37,19 +37,62 @@ func (m *CPUModule) SuggestedResolutionTemplate() string {
 	return "Node {{.NodeName}} has insufficient resources. Check current allocation with: free -h && lscpu"
 }
 
-func (m *CPUModule) Validate(podOutput string) (interface{}, error) {
+// CPUModuleResponse implements HostCheckModuleResult for CPU validation
+type CPUModuleResponse struct {
+	status          checkStatus
+	Detail          string
+	Warning         string
+	HTEnabled       bool
+	PhysicalCores   int
+	LogicalCores    int
+	MemoryBytes     int64
+	FreeMemoryBytes int64
+	HugepagesFree   int64
+	CPUModel        string
+	CPUFamily       string
+	CPUArch         string
+	CPUSockets      int
+	moduleName      string
+	err             error
+}
+
+func (r *CPUModuleResponse) Status() checkStatus { return r.status }
+func (r *CPUModuleResponse) ModuleName() string  { return r.moduleName }
+func (r *CPUModuleResponse) Details() string     { return r.Detail }
+func (r *CPUModuleResponse) Error() error        { return r.err }
+func (r *CPUModuleResponse) Map() map[string]interface{} {
+	return map[string]interface{}{
+		"Status":          r.status,
+		"Detail":          r.Detail,
+		"Warning":         r.Warning,
+		"HTEnabled":       r.HTEnabled,
+		"PhysicalCores":   r.PhysicalCores,
+		"LogicalCores":    r.LogicalCores,
+		"MemoryBytes":     r.MemoryBytes,
+		"FreeMemoryBytes": r.FreeMemoryBytes,
+		"HugepagesFree":   r.HugepagesFree,
+		"CPUModel":        r.CPUModel,
+		"CPUFamily":       r.CPUFamily,
+		"CPUArch":         r.CPUArch,
+		"CPUSockets":      r.CPUSockets,
+		"ModuleName":      r.moduleName,
+		"Error":           r.err,
+	}
+}
+
+// Validate validates the CPU and memory resources of a node
+func (m *CPUModule) Validate(podOutput string) (HostCheckModuleResponse, error) {
 	var hc HostChecksResult
 	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
-		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
+		return &CPUModuleResponse{status: statusFail, moduleName: m.Name(), err: err}, err
 	}
 
-	// Determine status based on CPU configuration
-	status := "success"
+	status := statusPass
 	var warningMsg string
 
 	// Check for dual-socket AMD - not recommended for WEKA
 	if hc.CPUSockets == 2 && strings.ToLower(hc.CPUFamily) == "amd" {
-		status = "warning"
+		status = statusWarn
 		warningMsg = "Dual-socket AMD architecture detected! This architecture does not provide best performance with WEKA"
 	}
 
@@ -81,24 +124,26 @@ func (m *CPUModule) Validate(podOutput string) (interface{}, error) {
 		displayDetail = detail + "\n     " + warningMsg
 	}
 
-	return map[string]interface{}{
-		"Status":          status,
-		"Detail":          displayDetail,
-		"Warning":         warningMsg,
-		"HTEnabled":       hc.HTEnabled,
-		"PhysicalCores":   hc.PhysicalCores,
-		"LogicalCores":    hc.LogicalCores,
-		"MemoryBytes":     hc.MemoryBytes,
-		"FreeMemoryBytes": hc.FreeMemoryBytes,
-		"HugepagesFree":   hc.HugepagesFree,
-		"CPUModel":        hc.CPUModel,
-		"CPUFamily":       hc.CPUFamily,
-		"CPUArch":         hc.CPUArch,
-		"CPUSockets":      hc.CPUSockets,
+	return &CPUModuleResponse{
+		status:          status,
+		Detail:          displayDetail,
+		Warning:         warningMsg,
+		HTEnabled:       hc.HTEnabled,
+		PhysicalCores:   hc.PhysicalCores,
+		LogicalCores:    hc.LogicalCores,
+		MemoryBytes:     hc.MemoryBytes,
+		FreeMemoryBytes: hc.FreeMemoryBytes,
+		HugepagesFree:   hc.HugepagesFree,
+		CPUModel:        hc.CPUModel,
+		CPUFamily:       hc.CPUFamily,
+		CPUArch:         hc.CPUArch,
+		CPUSockets:      hc.CPUSockets,
+		moduleName:      m.Name(),
+		err:             nil,
 	}, nil
 }
 
 // ValidateWithParams implements HostCheckModule - params not used for CPU validation
-func (m *CPUModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+func (m *CPUModule) ValidateWithParams(podOutput string, params map[string]interface{}) (HostCheckModuleResponse, error) {
 	return m.Validate(podOutput)
 }

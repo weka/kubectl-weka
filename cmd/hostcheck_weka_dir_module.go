@@ -8,6 +8,41 @@ import (
 // WekaDirModule validates Weka directory availability
 type WekaDirModule struct{}
 
+// WekaDirModuleResponse implements HostCheckModuleResponse for Weka directory validation
+type WekaDirModuleResponse struct {
+	status     checkStatus
+	OK         bool
+	Path       string
+	Issue      string
+	AvailBytes int64
+	AvailGB    string
+	MinFailGB  int64
+	MinWarnGB  int64
+	MinGB      int64
+	moduleName string
+	err        error
+}
+
+func (r *WekaDirModuleResponse) Status() checkStatus { return r.status }
+func (r *WekaDirModuleResponse) ModuleName() string  { return r.moduleName }
+func (r *WekaDirModuleResponse) Details() string     { return r.Issue }
+func (r *WekaDirModuleResponse) Error() error        { return r.err }
+func (r *WekaDirModuleResponse) Map() map[string]interface{} {
+	return map[string]interface{}{
+		"Status":     r.status,
+		"OK":         r.OK,
+		"Path":       r.Path,
+		"Issue":      r.Issue,
+		"AvailBytes": r.AvailBytes,
+		"AvailGB":    r.AvailGB,
+		"MinFailGB":  r.MinFailGB,
+		"MinWarnGB":  r.MinWarnGB,
+		"MinGB":      r.MinGB,
+		"ModuleName": r.moduleName,
+		"Error":      r.err,
+	}
+}
+
 func (m *WekaDirModule) Name() string {
 	return "weka_dir"
 }
@@ -36,40 +71,55 @@ func (m *WekaDirModule) SuggestedResolutionTemplate() string {
 	return "Ensure {{.Path}} has at least {{.MinGB}}GB free space. Use: df -h {{.Path}}"
 }
 
-func (m *WekaDirModule) Validate(podOutput string) (interface{}, error) {
+func (m *WekaDirModule) Validate(podOutput string) (HostCheckModuleResponse, error) {
 	var hc HostChecksResult
 	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
-		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
+		return &WekaDirModuleResponse{status: statusFail, moduleName: m.Name(), err: err}, err
 	}
 
-	status := "success"
-	if !hc.IsWekaDirExists() {
-		status = "error"
-	}
-
+	status := statusPass
+	issue := ""
+	minFailGB := int64(300)
+	minWarnGB := int64(500)
 	availGB := float64(hc.WekaDirAvailBytes) / (1024 * 1024 * 1024)
+	ok := hc.IsWekaDirAtLeast(100)
 
-	return map[string]interface{}{
-		"Status":     status,
-		"OK":         hc.IsWekaDirAtLeast(100), // default value
-		"Path":       hc.WekaDirPath,
-		"AvailBytes": hc.WekaDirAvailBytes,
-		"AvailGB":    fmt.Sprintf("%.1f", availGB),
+	if !hc.WekaDirExists {
+		status = statusFail
+		issue = fmt.Sprintf("Weka directory does not exist: %s", hc.WekaDirPath)
+	} else if int64(availGB) < minFailGB {
+		status = statusFail
+		issue = fmt.Sprintf("Only %.1f GB available, need at least %d GB", availGB, minFailGB)
+	} else if int64(availGB) < minWarnGB {
+		status = statusWarn
+		issue = fmt.Sprintf("Only %.1f GB available, recommended at least %d GB", availGB, minWarnGB)
+	}
+
+	return &WekaDirModuleResponse{
+		status:     status,
+		OK:         ok,
+		Path:       hc.WekaDirPath,
+		Issue:      issue,
+		AvailBytes: hc.WekaDirAvailBytes,
+		AvailGB:    fmt.Sprintf("%.1f", availGB),
+		MinFailGB:  minFailGB,
+		MinWarnGB:  minWarnGB,
+		MinGB:      minFailGB,
+		moduleName: m.Name(),
+		err:        nil,
 	}, nil
 }
 
 // ValidateWithParams implements HostCheckModule with min GB parameter support
 // Params: {"wekaDirMinFailGB": 800} to set minimum GB requirement for failure
-func (m *WekaDirModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+func (m *WekaDirModule) ValidateWithParams(podOutput string, params map[string]interface{}) (HostCheckModuleResponse, error) {
 	var hc HostChecksResult
 	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
-		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
+		return &WekaDirModuleResponse{status: statusFail, moduleName: m.Name(), err: err}, err
 	}
 
-	// Get minimum GB requirement from params
-	minFailGB := int64(300) // default 300GB
-	minWarnGB := int64(500) // default 500GB
-
+	minFailGB := int64(300)
+	minWarnGB := int64(500)
 	if val, ok := params["wekaDirMinFailGB"].(float64); ok {
 		minFailGB = int64(val)
 	} else if val, ok := params["wekaDirMinFailGB"].(int64); ok {
@@ -77,7 +127,6 @@ func (m *WekaDirModule) ValidateWithParams(podOutput string, params map[string]i
 	} else if val, ok := params["wekaDirMinFailGB"].(int); ok {
 		minFailGB = int64(val)
 	}
-
 	if val, ok := params["wekaDirMinWarnGB"].(float64); ok {
 		minWarnGB = int64(val)
 	} else if val, ok := params["wekaDirMinWarnGB"].(int64); ok {
@@ -86,31 +135,33 @@ func (m *WekaDirModule) ValidateWithParams(podOutput string, params map[string]i
 		minWarnGB = int64(val)
 	}
 
-	availGB := hc.WekaDirAvailBytes / (1024 * 1024 * 1024)
-
-	status := "success"
+	availGB := float64(hc.WekaDirAvailBytes) / (1024 * 1024 * 1024)
+	status := statusPass
 	issue := ""
+	ok := hc.IsWekaDirAtLeast(100)
 
 	if !hc.WekaDirExists {
-		status = "error"
+		status = statusFail
 		issue = fmt.Sprintf("Weka directory does not exist: %s", hc.WekaDirPath)
-	} else if availGB < minFailGB {
-		status = "error"
-		issue = fmt.Sprintf("Only %.1f GB available, need at least %d GB", float64(availGB), minFailGB)
-	} else if availGB < minWarnGB {
-		status = "warning"
-		issue = fmt.Sprintf("Only %.1f GB available, recommended at least %d GB", float64(availGB), minWarnGB)
+	} else if int64(availGB) < minFailGB {
+		status = statusFail
+		issue = fmt.Sprintf("Only %.1f GB available, need at least %d GB", availGB, minFailGB)
+	} else if int64(availGB) < minWarnGB {
+		status = statusWarn
+		issue = fmt.Sprintf("Only %.1f GB available, recommended at least %d GB", availGB, minWarnGB)
 	}
 
-	return map[string]interface{}{
-		"Status":     status,
-		"OK":         status == "success",
-		"Path":       hc.WekaDirPath,
-		"Issue":      issue,
-		"AvailBytes": hc.WekaDirAvailBytes,
-		"AvailGB":    fmt.Sprintf("%.1f", float64(availGB)),
-		"MinFailGB":  minFailGB,
-		"MinWarnGB":  minWarnGB,
-		"MinGB":      minFailGB, // For template use
+	return &WekaDirModuleResponse{
+		status:     status,
+		OK:         ok,
+		Path:       hc.WekaDirPath,
+		Issue:      issue,
+		AvailBytes: hc.WekaDirAvailBytes,
+		AvailGB:    fmt.Sprintf("%.1f", availGB),
+		MinFailGB:  minFailGB,
+		MinWarnGB:  minWarnGB,
+		MinGB:      minFailGB,
+		moduleName: m.Name(),
+		err:        nil,
 	}, nil
 }

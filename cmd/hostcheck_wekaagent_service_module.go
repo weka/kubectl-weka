@@ -2,11 +2,33 @@ package cmd
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
 // WekaAgentServiceModuleModule validates Weka client cleanup
 type WekaAgentServiceModuleModule struct{}
+
+// WekaAgentServiceModuleResponse implements HostCheckModuleResponse for Weka client validation
+type WekaAgentServiceModuleResponse struct {
+	status     checkStatus
+	Clean      bool
+	Detail     string
+	moduleName string
+	err        error
+}
+
+func (r *WekaAgentServiceModuleResponse) Status() checkStatus { return r.status }
+func (r *WekaAgentServiceModuleResponse) ModuleName() string  { return r.moduleName }
+func (r *WekaAgentServiceModuleResponse) Details() string     { return r.Detail }
+func (r *WekaAgentServiceModuleResponse) Error() error        { return r.err }
+func (r *WekaAgentServiceModuleResponse) Map() map[string]interface{} {
+	return map[string]interface{}{
+		"Status":     r.status,
+		"Clean":      r.Clean,
+		"Detail":     r.Detail,
+		"ModuleName": r.moduleName,
+		"Error":      r.err,
+	}
+}
 
 func (m *WekaAgentServiceModuleModule) Name() string {
 	return "weka_client"
@@ -36,28 +58,30 @@ func (m *WekaAgentServiceModuleModule) SuggestedResolutionTemplate() string {
 	return "On node {{.NodeName}}, clean up old Weka client: sudo apt-get remove weka-client (Ubuntu) or sudo yum remove weka-client (RHEL/CentOS)"
 }
 
-func (m *WekaAgentServiceModuleModule) Validate(podOutput string) (interface{}, error) {
+func (m *WekaAgentServiceModuleModule) Validate(podOutput string) (HostCheckModuleResponse, error) {
 	var hc HostChecksResult
 	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
-		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
+		return &WekaAgentServiceModuleResponse{status: statusFail, moduleName: m.Name(), err: err}, err
 	}
 
-	status := "success"
+	status := statusPass
 	detail := "clean (no Weka agent service found)"
-
-	if !hc.IsWekaAgentClean() {
-		status = "warning"
+	clean := hc.IsWekaAgentClean()
+	if !clean {
+		status = statusWarn
 		detail = "Weka agent service exists - may interfere with installation"
 	}
 
-	return map[string]interface{}{
-		"Status": status,
-		"Clean":  hc.IsWekaAgentClean(),
-		"Detail": detail,
+	return &WekaAgentServiceModuleResponse{
+		status:     status,
+		Clean:      clean,
+		Detail:     detail,
+		moduleName: m.Name(),
+		err:        nil,
 	}, nil
 }
 
 // ValidateWithParams implements HostCheckModule - params not used for Weka client validation
-func (m *WekaAgentServiceModuleModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+func (m *WekaAgentServiceModuleModule) ValidateWithParams(podOutput string, params map[string]interface{}) (HostCheckModuleResponse, error) {
 	return m.Validate(podOutput)
 }

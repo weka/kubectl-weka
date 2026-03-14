@@ -7,6 +7,31 @@ import (
 )
 
 // OSModule validates OS compatibility
+
+// OsModuleResponse implements HostCheckModuleResponse for OS validation
+type OsModuleResponse struct {
+	status     checkStatus
+	IsRHCOS    bool
+	OSRelease  string
+	moduleName string
+	err        error
+}
+
+func (r *OsModuleResponse) Status() checkStatus { return r.status }
+func (r *OsModuleResponse) ModuleName() string  { return r.moduleName }
+func (r *OsModuleResponse) Details() string     { return r.OSRelease }
+func (r *OsModuleResponse) Error() error        { return r.err }
+func (r *OsModuleResponse) Map() map[string]interface{} {
+	return map[string]interface{}{
+		"Status":     r.status,
+		"IsRHCOS":    r.IsRHCOS,
+		"OSRelease":  r.OSRelease,
+		"ModuleName": r.moduleName,
+		"Error":      r.err,
+	}
+}
+
+// OSModule validates OS compatibility
 type OSModule struct{}
 
 func (m *OSModule) Name() string {
@@ -37,34 +62,23 @@ func (m *OSModule) SuggestedResolutionTemplate() string {
 	return "Please ensure node {{.NodeName}} is running a supported Linux distribution (Ubuntu, RHEL/CentOS, RHCOS, etc.)"
 }
 
-func (m *OSModule) Validate(podOutput string) (interface{}, error) {
+func (m *OSModule) Validate(podOutput string) (HostCheckModuleResponse, error) {
 	var hc HostChecksResult
 	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
-		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
+		return &OsModuleResponse{status: statusFail, moduleName: m.Name(), err: err}, err
 	}
-
-	// Parse OSRelease to extract NAME and VERSION_ID
-	// The OSRelease is a concatenated string from /etc/os-release with newlines converted to spaces
-	// e.g., "PRETTY_NAME=\"Ubuntu 22.04.5 LTS\" NAME=\"Ubuntu\" VERSION_ID=\"22.04\" ..."
 
 	name := ""
 	versionID := ""
 	prettyName := ""
-
-	// Split by space to get individual key=value pairs
-	// But we need to be careful with quoted values that might contain spaces
 	parts := strings.Fields(hc.OSRelease)
 	for _, part := range parts {
-		// Each part looks like KEY=VALUE or KEY="VALUE"
 		if strings.Contains(part, "=") {
 			kv := strings.SplitN(part, "=", 2)
 			if len(kv) == 2 {
 				key := kv[0]
 				value := kv[1]
-
-				// Remove surrounding quotes
 				value = strings.Trim(value, `"`)
-
 				switch key {
 				case "NAME":
 					name = value
@@ -76,16 +90,12 @@ func (m *OSModule) Validate(podOutput string) (interface{}, error) {
 			}
 		}
 	}
-
-	// Build osDisplay with fallback chain
 	osDisplay := ""
 	if name != "" && versionID != "" {
 		osDisplay = fmt.Sprintf("%s %s", name, versionID)
 	} else if name != "" {
 		osDisplay = name
 	} else if prettyName != "" {
-		// Extract just the OS name from PRETTY_NAME (e.g., "Ubuntu 22.04.5 LTS" -> best effort)
-		// Remove the distribution name in parentheses if present
 		if idx := strings.Index(prettyName, "("); idx > 0 {
 			osDisplay = strings.TrimSpace(prettyName[:idx])
 		} else {
@@ -95,14 +105,18 @@ func (m *OSModule) Validate(podOutput string) (interface{}, error) {
 		osDisplay = "Unknown OS"
 	}
 
-	return map[string]interface{}{
-		"IsRHCOS":   hc.IsRHCOS,
-		"OSRelease": osDisplay,
-		"Status":    "success",
+	status := statusPass // Always pass unless parsing fails
+
+	return &OsModuleResponse{
+		status:     status,
+		IsRHCOS:    hc.IsRHCOS,
+		OSRelease:  osDisplay,
+		moduleName: m.Name(),
+		err:        nil,
 	}, nil
 }
 
 // ValidateWithParams implements HostCheckModule - params not used for OS validation
-func (m *OSModule) ValidateWithParams(podOutput string, params map[string]interface{}) (interface{}, error) {
+func (m *OSModule) ValidateWithParams(podOutput string, params map[string]interface{}) (HostCheckModuleResponse, error) {
 	return m.Validate(podOutput)
 }
