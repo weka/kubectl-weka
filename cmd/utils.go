@@ -607,3 +607,10 @@ func GetNamespaceFromFlags(allNamespaces bool, namespace string) (string, bool, 
 	}
 	return ns, false, nil
 }
+
+func boolToOkError(v bool) string {
+	if v {
+		return "OK"
+	}
+	return "ERROR"
+}

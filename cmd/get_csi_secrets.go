@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
-	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,13 +38,12 @@ func init() {
 func runGetCSISecrets(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	// Generate the output
-	output, err := generateCSISecretsOutput(ctx, KubeClients)
+	printer, _ := GetPrinterFromFlags(flagOutput, true, nil, false, 0, TableStyleMinimal)
+	output, err := generateCSISecretsOutput(ctx, KubeClients, printer)
 	if err != nil {
 		return err
 	}
 
-	// Print the output
 	fmt.Print(output)
 	return nil
 }
@@ -59,7 +58,7 @@ type SecretInfo struct {
 }
 
 // generateCSISecretsOutput generates the CSI secrets table as a string
-func generateCSISecretsOutput(ctx context.Context, clients *K8sClients) (string, error) {
+func generateCSISecretsOutput(ctx context.Context, clients *K8sClients, printer ResourcePrinter) (string, error) {
 	crClient := clients.CRClient
 
 	// Get all WEKA CSI drivers
@@ -150,30 +149,35 @@ func generateCSISecretsOutput(ctx context.Context, clients *K8sClients) (string,
 		return secrets[i].Name < secrets[j].Name
 	})
 
-	// Generate table output
-	t := table.NewWriter()
-	styleTableMinimal(t)
-	t.AppendHeader(table.Row{"NAME", "NAMESPACE", "STORAGECLASS COUNT", "VALID", "DETAIL"})
-	// Write rows
-	for _, secret := range secrets {
-		validStatus := "✓"
-		if !secret.Valid {
-			validStatus = "✗"
-		}
-
-		detail := ""
-		if len(secret.ValidationErrors) > 0 {
-			detail = secret.ValidationErrors[0]
-		}
-
-		t.AppendRow(table.Row{
-			secret.Name,
-			secret.Namespace,
-			secret.StorageClassCount,
-			validStatus,
-			detail,
-		})
+	// Define columns
+	columns := []TableColumn{
+		{Name: "NAME", VisibleInWide: false},
+		{Name: "NAMESPACE", VisibleInWide: false},
+		{Name: "STORAGECLASS COUNT", VisibleInWide: false},
+		{Name: "VALIDITY", VisibleInWide: false},
+		{Name: "DETAIL", VisibleInWide: false},
 	}
 
-	return t.Render() + "\n", nil
+	// Build rows
+	var rows []TableRow
+	for _, secret := range secrets {
+		row := TableRow{Values: map[string]interface{}{
+			"NAME":               secret.Name,
+			"NAMESPACE":          secret.Namespace,
+			"STORAGECLASS COUNT": secret.StorageClassCount,
+			"VALIDITY":           boolToOkError(secret.Valid),
+			"DETAIL": func() string {
+				if len(secret.ValidationErrors) > 0 {
+					return secret.ValidationErrors[0]
+				}
+				return ""
+			}(),
+		}}
+		rows = append(rows, row)
+	}
+
+	// Render output
+	var sb strings.Builder
+	_ = printer.Print(columns, rows, &sb)
+	return sb.String() + "\n", nil
 }
