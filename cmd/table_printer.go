@@ -45,11 +45,19 @@ func (tp *TablePrinter) Print(columns []TableColumn, rows []TableRow, w io.Write
 		visibleCols = append(visibleCols, col)
 	}
 	tw := table.NewWriter()
-	tw.SetStyle(table.StyleLight)
-	tw.Style().Options.SeparateRows = false
-	tw.Style().Options.SeparateColumns = false
-	tw.Style().Options.DrawBorder = false
-	tw.Style().Options.SeparateHeader = false
+	switch tp.opts.TableStyle {
+	case TableStyleMinimal:
+		tw.SetStyle(table.StyleLight)
+		tw.Style().Options.DrawBorder = false
+		tw.Style().Options.SeparateRows = false
+		tw.Style().Options.SeparateColumns = false
+		tw.Style().Options.SeparateHeader = false
+		tw.Style().Box.PaddingLeft = ""
+		tw.Style().Box.PaddingRight = "  "
+	case TableStyleRoundedBox:
+		tw.SetStyle(table.StyleRounded)
+	}
+
 	if opts.HideEmptyColumns && len(rows) > 0 {
 		filteredCols := make([]TableColumn, 0, len(visibleCols))
 		for _, col := range visibleCols {

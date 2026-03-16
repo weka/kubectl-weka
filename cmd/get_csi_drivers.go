@@ -63,6 +63,9 @@ func init() {
 
 func runGetCSIDrivers(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
+	if strings.Contains(flagCSIDriversOutput, "wide") {
+		getCSIDriversWide = true
+	}
 
 	// Extract optional driver name argument
 	var driverName string
@@ -300,8 +303,8 @@ func generateCSIDriversOutput(ctx context.Context, clients *K8sClients, onlyHelm
 		row.Values["CSI DRIVER"] = info.DriverName
 		row.Values["MANAGED BY"] = info.ManagedBy
 		row.Values["NAMESPACE"] = info.Namespace
-		row.Values["CONTROLLER"] = getNameOrNone(info.ControllerName)
-		row.Values["NODE DAEMONSET"] = getNameOrNone(info.NodeDaemonsetName)
+		row.Values["CONTROLLER"] = info.ControllerName
+		row.Values["NODE DAEMONSET"] = info.NodeDaemonsetName
 		row.Values["STORAGECLASSES"] = info.StorageClassCount
 		row.Values["AGE"] = info.CreationTime.Time
 		row.Values["PVS"] = info.PVCount
@@ -309,8 +312,7 @@ func generateCSIDriversOutput(ctx context.Context, clients *K8sClients, onlyHelm
 		row.Values["BOUND PVS"] = info.BoundPVCount
 		rows = append(rows, row)
 	}
-
-	printer, _ := GetPrinterFromFlags("", true, nil, wide, 0)
+	printer, _ := GetPrinterFromFlags(flagCSIDriversOutput, !flagCSIDriversNoHeaders, nil, wide, 0, TableStyleMinimal)
 	var sb strings.Builder
 	err := printer.Print(columns, rows, &sb)
 	if err != nil {

@@ -74,8 +74,7 @@ func runGetPolicies(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Select printer
-	var hideColumnsList []string
-	printer, _ := GetPrinterFromFlags(flagOutput, !flagNoHeaders, hideColumnsList, false, 0)
+	printer, _ := GetPrinterFromFlags(flagOutput, !flagNoHeaders, nil, false, 0, TableStyleMinimal)
 
 	err = printer.Print(columns, rows, cmd.OutOrStdout())
 	if err != nil {

@@ -5,7 +5,7 @@ import (
 )
 
 // GetPrinterFromFlags parses output flag and other options, returns configured ResourcePrinter and columnsList
-func GetPrinterFromFlags(outputFlag string, showHeader bool, hideColumnsList []string, hideEmptyColumns bool, indentByNumSpaces int) (ResourcePrinter, []string) {
+func GetPrinterFromFlags(outputFlag string, showHeader bool, hideColumnsList []string, hideEmptyColumns bool, indentByNumSpaces int, tableStyle TableStyle) (ResourcePrinter, []string) {
 	output := strings.ToLower(strings.TrimSpace(outputFlag))
 	wideOutput := false
 	columnsList := []string{}
@@ -30,6 +30,7 @@ func GetPrinterFromFlags(outputFlag string, showHeader bool, hideColumnsList []s
 		HideColumnsList:   hideColumnsList,
 		HideEmptyColumns:  hideEmptyColumns,
 		IndentByNumSpaces: indentByNumSpaces,
+		TableStyle:        tableStyle,
 	}
 
 	var printer ResourcePrinter
