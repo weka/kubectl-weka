@@ -55,7 +55,18 @@ func indentText(text string, spaces int, subsequentSpace ...int) string {
 }
 
 // -----------------------------
-func humanAge(d time.Duration) string {
+func humanAge(t interface{}) string {
+	var d time.Duration
+	switch v := t.(type) {
+	case time.Time:
+		d = time.Since(v)
+	case metav1.Time:
+		d = time.Since(v.Time)
+	case time.Duration:
+		d = v
+	default:
+		return "invalid time"
+	}
 	if d < 0 {
 		d = -d
 	}
@@ -579,4 +590,20 @@ func truncateString(s string, maxLength int) string {
 		return s
 	}
 	return s[:maxLength] + "..."
+}
+
+// GetNamespaceFromFlags centralizes logic for namespace selection based on flags.
+// Returns: namespace string, allNamespaces bool, error
+func GetNamespaceFromFlags(allNamespaces bool, namespace string) (string, bool, error) {
+	if allNamespaces {
+		return "", true, nil
+	}
+	if namespace != "" {
+		return namespace, false, nil
+	}
+	ns, err := GetKubeNamespace()
+	if err != nil {
+		return "", false, err
+	}
+	return ns, false, nil
 }

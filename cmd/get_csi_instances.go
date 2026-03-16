@@ -256,12 +256,12 @@ func generateCSIInstancesOutput(ctx context.Context, clients *K8sClients, driver
 
 	// Append rows
 	for _, info := range instances {
-		age := humanAge(metav1.Now().Sub(info.CreatedTime.Time))
+		age := humanAge(info.CreatedTime.Time)
 
 		if wide {
 			lastRestart := "N/A"
 			if info.LastRestartTime != nil {
-				lastRestart = humanAge(metav1.Now().Sub(info.LastRestartTime.Time))
+				lastRestart = humanAge(info.LastRestartTime.Time)
 			}
 			t.AppendRow(table.Row{
 				info.DriverName,

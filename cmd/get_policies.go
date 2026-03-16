@@ -3,16 +3,14 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"strings"
-	"time"
-
-	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"strings"
 
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 )
 
+var flagOutput string
 var getPoliciesCmd = &cobra.Command{
 	Use:   "policies",
 	Short: "List WekaPolicy custom resources",
@@ -25,114 +23,64 @@ func init() {
 	getPoliciesCmd.Flags().BoolVarP(&flagAllNamespaces, "all-namespaces", "A", false, "If present, list WekaPolicy resources across all namespaces")
 	getPoliciesCmd.Flags().StringVarP(&flagNamespace, "namespace", "n", "", "Namespace. Defaults to current kubeconfig namespace")
 	getPoliciesCmd.Flags().BoolVar(&flagNoHeaders, "no-headers", false, "Don't print headers")
-	getPoliciesCmd.Flags().BoolVar(&flagWide, "wide", false, "Wide output (adds PROGRESS column)")
+	getPoliciesCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "Output format. Supported: json, yaml, wide, custom-columns=<COLS...>")
 	getPoliciesCmd.SilenceUsage = true
 }
 
-func runGetPolicies(cmd *cobra.Command, args []string) error {
+func runGetPolicies(cmd *cobra.Command, _ []string) error {
 	ctx := context.Background()
 
 	crClient := KubeClients.CRClient
 
-	includeNamespaceColumn := false
-
 	// List policies according to scope/flags
 	var list wekaapi.WekaPolicyList
-	listOpts := []crclient.ListOption{}
+	var listOpts []crclient.ListOption
 
-	var err error
-	if flagAllNamespaces {
-		includeNamespaceColumn = true
-		if err = crClient.List(ctx, &list); err != nil {
-			return err
-		}
-	} else {
-		ns := flagNamespace
-		if ns == "" {
-			ns, err = GetKubeNamespace()
-			if err != nil {
-				return err
-			}
-		}
+	ns, _, err := GetNamespaceFromFlags(flagAllNamespaces, flagNamespace)
+	if err != nil {
+		return err
+	}
+	if !flagAllNamespaces {
 		listOpts = append(listOpts, crclient.InNamespace(ns))
-		if err := crClient.List(ctx, &list, listOpts...); err != nil {
-			return err
-		}
 	}
 
-	t := table.NewWriter()
-	styleTableMinimal(t)
-
-	if len(list.Items) == 0 {
-		if includeNamespaceColumn {
-			fmt.Printf("No resources found.\n")
-		} else if flagNamespace != "" {
-			fmt.Printf("No resources found in namespace %q.\n", flagNamespace)
-		} else {
-			fmt.Printf("No resources found in default namespace.\n")
-		}
-		return nil
+	if err := crClient.List(ctx, &list, listOpts...); err != nil {
+		return err
 	}
 
-	if !flagNoHeaders {
-		if includeNamespaceColumn {
-			if flagWide {
-				t.AppendHeader(table.Row{"NAMESPACE", "NAME", "AGE", "TYPE", "STATUS", "PROGRESS"})
-			} else {
-				t.AppendHeader(table.Row{"NAMESPACE", "NAME", "AGE", "TYPE", "STATUS"})
-			}
-		} else {
-			if flagWide {
-				t.AppendHeader(table.Row{"NAME", "AGE", "TYPE", "STATUS", "PROGRESS"})
-			} else {
-				t.AppendHeader(table.Row{"NAME", "AGE", "TYPE", "STATUS"})
-			}
-		}
+	// Build columns
+	var columns []TableColumn
+	columns = []TableColumn{
+		{Name: "NAMESPACE", VisibleInWide: false},
+		{Name: "NAME", VisibleInWide: false},
+		{Name: "AGE", VisibleInWide: false, TableFormatFunctions: []func(interface{}) string{humanAge}},
+		{Name: "TYPE", VisibleInWide: false},
+		{Name: "STATUS", VisibleInWide: false},
+		{Name: "PROGRESS", VisibleInWide: true},
 	}
 
-	now := time.Now()
+	// Build rows
+	var rows []TableRow
 	for i := range list.Items {
 		p := &list.Items[i]
-		ns := p.GetNamespace()
-		name := p.GetName()
-		age := humanAge(now.Sub(p.GetCreationTimestamp().Time))
-
-		pType := strings.TrimSpace(p.Spec.Type)
-		if pType == "" {
-			pType = "<none>"
-		}
-
-		pStatus := strings.TrimSpace(p.Status.Status)
-		if pStatus == "" {
-			pStatus = "<none>"
-		}
-
-		pProgress := strings.TrimSpace(p.Status.Progress)
-		if pProgress == "" {
-			pProgress = "<none>"
-		}
-
-		// NOTE: for typed resources we no longer print the raw spec blob by default,
-		// because it can be large and not stable across versions.
-		// If you want it back, we can add --wide-json or similar.
-
-		if !flagWide {
-			if includeNamespaceColumn {
-				t.AppendRow(table.Row{ns, name, age, pType, pStatus})
-			} else {
-				t.AppendRow(table.Row{name, age, pType, pStatus})
-			}
-			continue
-		}
-
-		if includeNamespaceColumn {
-			t.AppendRow(table.Row{ns, name, age, pType, pStatus, pProgress})
-		} else {
-			t.AppendRow(table.Row{name, age, pType, pStatus, pProgress})
-		}
+		row := TableRow{Values: map[string]interface{}{}}
+		row.Values["NAMESPACE"] = p.GetNamespace()
+		row.Values["NAME"] = p.GetName()
+		row.Values["AGE"] = p.GetCreationTimestamp().Time
+		row.Values["TYPE"] = strings.TrimSpace(p.Spec.Type)
+		row.Values["STATUS"] = strings.TrimSpace(p.Status.Status)
+		row.Values["PROGRESS"] = strings.TrimSpace(p.Status.Progress)
+		rows = append(rows, row)
 	}
 
-	fmt.Print(t.Render())
-	fmt.Println() // Add newline after table
+	// Select printer
+	var hideColumnsList []string
+	printer, _ := GetPrinterFromFlags(flagOutput, !flagNoHeaders, hideColumnsList, false, 0)
+
+	err = printer.Print(columns, rows, cmd.OutOrStdout())
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(cmd.OutOrStdout()) // Add newline after table
 	return nil
 }

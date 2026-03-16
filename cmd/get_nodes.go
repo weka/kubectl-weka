@@ -9,7 +9,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sort"
-	"time"
 )
 
 var (
@@ -126,7 +125,7 @@ func printNodeRow(w table.Writer, n *corev1.Node, hugepageAllocations map[string
 				// Calculate uptime
 				uptime := "unknown"
 				if n.Status.NodeInfo.BootID != "" {
-					uptime = humanAge(time.Since(condition.LastTransitionTime.Time))
+					uptime = humanAge(condition.LastTransitionTime.Time)
 				}
 				status = fmt.Sprintf("Ready (%s)", uptime)
 			}

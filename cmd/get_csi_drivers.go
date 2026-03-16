@@ -293,7 +293,7 @@ func generateCSIDriversOutput(ctx context.Context, clients *K8sClients, onlyHelm
 
 	// Append rows
 	for _, info := range deployments {
-		age := humanAge(metav1.Now().Sub(info.CreationTime.Time))
+		age := humanAge(info.CreationTime.Time)
 		if wide {
 			t.AppendRow(table.Row{
 				info.DriverName,

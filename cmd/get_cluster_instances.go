@@ -3,10 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strings"
-	"time"
-
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -14,6 +10,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sort"
+	"strings"
 
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 )
@@ -159,8 +157,6 @@ func generateClusterInstancesOutput(
 		nsToPods[ns] = m
 	}
 
-	now := time.Now()
-
 	// Sort stable by ns/name
 	sort.Slice(clusters, func(i, j int) bool {
 		if clusters[i].GetNamespace() != clusters[j].GetNamespace() {
@@ -219,7 +215,7 @@ func generateClusterInstancesOutput(
 			}
 
 			if wide {
-				age := humanAge(now.Sub(wc.GetCreationTimestamp().Time))
+				age := humanAge(wc.GetCreationTimestamp().Time)
 				cpuUtil := ""
 				if wc.Status.Stats != nil {
 					cpuUtil = string(wc.Status.Stats.CpuUsage)
