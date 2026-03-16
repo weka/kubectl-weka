@@ -102,15 +102,7 @@ func (c *NodesDescriptionCollector) collectNodesTable(ctx context.Context) (stri
 
 	logger.Debug("Collecting nodes table", "nodeSelector", c.NodeSelector)
 
-	printer := &TablePrinter{opts: PrinterOptions{
-		ShowHeader:        true,
-		WideOutput:        true,
-		ColumnsList:       nil,
-		HideColumnsList:   nil,
-		HideEmptyColumns:  false,
-		IndentByNumSpaces: 0,
-		TableStyle:        TableStyleMinimal,
-	}}
+	printer := NewSupportBundlePrinter()
 
 	// Generate nodes table output with node selector
 	output, err := generateNodesOutput(ctx, clients, printer, c.NodeSelector)

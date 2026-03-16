@@ -193,11 +193,7 @@ func (c *ClientResourcesCollector) collectClientInstances(ctx context.Context, c
 
 	logger.Debug("Collecting client instances", "client", client.Name, "namespace", client.Namespace)
 
-	printer := &TablePrinter{opts: PrinterOptions{
-		ShowHeader: true,
-		WideOutput: true,
-		TableStyle: TableStyleMinimal,
-	}}
+	printer := NewSupportBundlePrinter()
 
 	output, err := generateClientInstancesOutput(
 		ctx,

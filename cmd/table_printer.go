@@ -119,3 +119,12 @@ func (tp *TablePrinter) Print(columns []TableColumn, rows []TableRow, w io.Write
 	_, err := io.WriteString(w, tableStr)
 	return err
 }
+
+func NewSupportBundlePrinter() ResourcePrinter {
+	printer := &TablePrinter{opts: PrinterOptions{
+		ShowHeader: true,
+		WideOutput: true,
+		TableStyle: TableStyleMinimal,
+	}}
+	return printer
+}

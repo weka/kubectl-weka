@@ -57,6 +57,9 @@ func indentText(text string, spaces int, subsequentSpace ...int) string {
 // -----------------------------
 func humanAge(t interface{}) string {
 	var d time.Duration
+	if t == nil {
+		return "-"
+	}
 	switch v := t.(type) {
 	case time.Time:
 		d = time.Since(v)
@@ -64,8 +67,10 @@ func humanAge(t interface{}) string {
 		d = time.Since(v.Time)
 	case time.Duration:
 		d = v
+	case string:
+		return v
 	default:
-		return "invalid time"
+		return "-"
 	}
 	if d < 0 {
 		d = -d

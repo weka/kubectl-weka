@@ -101,7 +101,8 @@ func (c *CSIResourcesCollector) Collect(ctx context.Context) CollectorResult {
 
 	// Collect CSI instances (pods) information
 	logger.Debug("Collecting CSI instances")
-	instancesOutput, err := generateCSIInstancesOutput(ctx, KubeClients, "", "", "", false, false)
+	printer := NewSupportBundlePrinter()
+	instancesOutput, err := generateCSIInstancesOutput(ctx, KubeClients, "", "", "", false, printer)
 	if err != nil {
 		errors = append(errors, fmt.Sprintf("failed to get CSI instances: %v", err))
 		logger.Warn("Failed to collect CSI instances", "error", err)
@@ -118,7 +119,7 @@ func (c *CSIResourcesCollector) Collect(ctx context.Context) CollectorResult {
 
 	// Collect unhealthy CSI instances in wide view
 	logger.Debug("Collecting unhealthy CSI instances")
-	unhealthyOutput, err := generateCSIInstancesOutput(ctx, KubeClients, "", "", "", true, true)
+	unhealthyOutput, err := generateCSIInstancesOutput(ctx, KubeClients, "", "", "", true, printer)
 	if err != nil {
 		errors = append(errors, fmt.Sprintf("failed to get unhealthy CSI instances: %v", err))
 		logger.Warn("Failed to collect unhealthy CSI instances", "error", err)

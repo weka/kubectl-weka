@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
-	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -16,7 +16,6 @@ import (
 var (
 	getCSIInstancesNamespace string
 	getCSIInstancesRole      string
-	getCSIInstancesWide      bool
 	getCSIInstancesUnhealthy bool
 )
 
@@ -31,7 +30,7 @@ Arguments:
 Flags:
   -n, --namespace <string>  Filter by Kubernetes namespace (shows all namespaces if not set)
   -r, --role <string>       Filter by pod role: 'controller' or 'node' (shows both if not set)
-  -w, --wide                Show additional column: last restart time
+  -o, --output <string>     Output format. Supported: json, yaml, wide, custom-columns=<COLS...>
   --unhealthy              Show only pods with frequent restarts (>1 restart in last 5 minutes)
 
 Output Columns (default):
@@ -55,12 +54,12 @@ func init() {
 
 	getCSIInstancesCmd.Flags().StringVarP(&getCSIInstancesNamespace, "namespace", "n", "", "Filter by Kubernetes namespace")
 	getCSIInstancesCmd.Flags().StringVarP(&getCSIInstancesRole, "role", "r", "", "Filter by pod role (controller or node)")
-	getCSIInstancesCmd.Flags().BoolVarP(&getCSIInstancesWide, "wide", "w", false, "Show additional columns (last restart time)")
+	getCSIInstancesCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "Output format. Supported: json, yaml, wide, custom-columns=<COLS...>")
 	getCSIInstancesCmd.Flags().BoolVar(&getCSIInstancesUnhealthy, "unhealthy", false, "Show only pods with frequent restarts (>1 restart in last 5 minutes)")
 	getCSIInstancesCmd.SilenceUsage = true
 }
 
-func runGetCSIInstances(cmd *cobra.Command, args []string) error {
+func runGetCSIInstances(_ *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	// Extract optional driver name argument
@@ -74,8 +73,8 @@ func runGetCSIInstances(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid role: must be 'controller' or 'node'")
 	}
 
-	// Generate the output
-	output, err := generateCSIInstancesOutput(ctx, KubeClients, driverName, getCSIInstancesNamespace, getCSIInstancesRole, getCSIInstancesWide, getCSIInstancesUnhealthy)
+	printer, _ := GetPrinterFromFlags(flagOutput, true, nil, false, 0, TableStyleMinimal)
+	output, err := generateCSIInstancesOutput(ctx, KubeClients, driverName, getCSIInstancesNamespace, getCSIInstancesRole, getCSIInstancesUnhealthy, printer)
 	if err != nil {
 		return err
 	}
@@ -99,7 +98,7 @@ type CSIInstanceInfo struct {
 }
 
 // generateCSIInstancesOutput generates the CSI instances table as a string
-func generateCSIInstancesOutput(ctx context.Context, clients *K8sClients, driverName, namespace, roleFilter string, wide, unhealthy bool) (string, error) {
+func generateCSIInstancesOutput(ctx context.Context, clients *K8sClients, driverName, namespace, roleFilter string, unhealthy bool, printer ResourcePrinter) (string, error) {
 	crClient := clients.CRClient
 
 	// List all CSIDriver resources (cluster-wide, non-namespaced)
@@ -203,10 +202,6 @@ func generateCSIInstancesOutput(ctx context.Context, clients *K8sClients, driver
 		})
 	}
 
-	if len(instances) == 0 {
-		return "No CSI instances found.\n", nil
-	}
-
 	// Apply unhealthy filter (>1 restart in last 5 minutes)
 	if unhealthy {
 		var healthyInstances []CSIInstanceInfo
@@ -243,52 +238,45 @@ func generateCSIInstancesOutput(ctx context.Context, clients *K8sClients, driver
 		return instances[i].PodName < instances[j].PodName
 	})
 
-	// Generate table output
-	t := table.NewWriter()
-	styleTableMinimal(t)
-
-	// Set header
-	if wide {
-		t.AppendHeader(table.Row{"CSI DRIVER", "NAMESPACE", "NODE", "ROLE", "POD NAME", "STATUS", "RESTARTS", "LAST RESTART", "AGE"})
-	} else {
-		t.AppendHeader(table.Row{"CSI DRIVER", "NAMESPACE", "NODE", "ROLE", "POD NAME", "STATUS", "RESTARTS", "AGE"})
+	// Define columns
+	columns := []TableColumn{
+		{Name: "CSI DRIVER", VisibleInWide: false},
+		{Name: "NAMESPACE", VisibleInWide: false},
+		{Name: "NODE", VisibleInWide: false},
+		{Name: "ROLE", VisibleInWide: false},
+		{Name: "POD NAME", VisibleInWide: false},
+		{Name: "STATUS", VisibleInWide: false},
+		{Name: "RESTARTS", VisibleInWide: true},
+		{Name: "LAST RESTART", VisibleInWide: true, TableFormatFunctions: []func(interface{}) string{humanAge}},
+		{Name: "AGE", VisibleInWide: false, TableFormatFunctions: []func(interface{}) string{humanAge}},
 	}
 
-	// Append rows
+	// Build rows
+	var rows []TableRow
 	for _, info := range instances {
-		age := humanAge(info.CreatedTime.Time)
-
-		if wide {
-			lastRestart := "N/A"
-			if info.LastRestartTime != nil {
-				lastRestart = humanAge(info.LastRestartTime.Time)
-			}
-			t.AppendRow(table.Row{
-				info.DriverName,
-				info.Namespace,
-				info.NodeName,
-				info.Role,
-				info.PodName,
-				info.PodStatus,
-				info.RestartCount,
-				lastRestart,
-				age,
-			})
-		} else {
-			t.AppendRow(table.Row{
-				info.DriverName,
-				info.Namespace,
-				info.NodeName,
-				info.Role,
-				info.PodName,
-				info.PodStatus,
-				info.RestartCount,
-				age,
-			})
+		var lastRestart time.Time
+		if info.LastRestartTime != nil {
+			lastRestart = info.LastRestartTime.Time
 		}
+		age := info.CreatedTime.Time
+		row := TableRow{Values: map[string]interface{}{
+			"CSI DRIVER":   info.DriverName,
+			"NAMESPACE":    info.Namespace,
+			"NODE":         info.NodeName,
+			"ROLE":         info.Role,
+			"POD NAME":     info.PodName,
+			"STATUS":       info.PodStatus,
+			"RESTARTS":     info.RestartCount,
+			"LAST RESTART": lastRestart,
+			"AGE":          age,
+		}}
+		rows = append(rows, row)
 	}
 
-	return t.Render() + "\n", nil
+	// Render output
+	var sb strings.Builder
+	_ = printer.Print(columns, rows, &sb)
+	return sb.String(), nil
 }
 
 // getCSIDriverFromPod extracts the CSI driver name from a pod
