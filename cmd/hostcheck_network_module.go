@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jedib0t/go-pretty/v6/table"
 	ds "github.com/weka/kubectl-weka/pkg/device-support"
 )
 
@@ -311,30 +310,40 @@ func FormatNetworkInterfacesTable(data *NetworkInterfacesModuleData, visibleColu
 		return ""
 	}
 
-	// Build TableData
-	allColumns := []string{
-		"Status",
-		"Name",
-		"Vendor:Model",
-		"Device Model",
-		"Type",
-		"IP Address/CIDR",
-		"Speed",
-		"MTU",
-		"Supported",
-		"Reason",
+	// Define all columns
+	allColumns := []TableColumn{
+		{Name: "Status", VisibleInWide: false},
+		{Name: "Name", VisibleInWide: false},
+		{Name: "Vendor:Model", VisibleInWide: false},
+		{Name: "Device Model", VisibleInWide: false},
+		{Name: "Type", VisibleInWide: false},
+		{Name: "IP Address/CIDR", VisibleInWide: false},
+		{Name: "Speed", VisibleInWide: false},
+		{Name: "MTU", VisibleInWide: false},
+		{Name: "Supported", VisibleInWide: false},
+		{Name: "Reason", VisibleInWide: false},
 	}
 
-	var headers []string
+	// Select columns to show
+	var columns []TableColumn
 	if len(visibleColumns) > 0 {
-		headers = visibleColumns
+		colSet := map[string]struct{}{}
+		for _, name := range visibleColumns {
+			colSet[name] = struct{}{}
+		}
+		for _, col := range allColumns {
+			if _, ok := colSet[col.Name]; ok {
+				columns = append(columns, col)
+			}
+		}
 	} else {
-		headers = allColumns
+		columns = allColumns
 	}
 
-	tableRows := []map[string]interface{}{}
+	// Build rows
+	var rows []TableRow
 	for _, iface := range data.Interfaces {
-		row := map[string]interface{}{
+		row := TableRow{Values: map[string]interface{}{
 			"Status":          iface.Status,
 			"Name":            iface.Name,
 			"Vendor:Model":    iface.VendorModel,
@@ -345,15 +354,17 @@ func FormatNetworkInterfacesTable(data *NetworkInterfacesModuleData, visibleColu
 			"MTU":             iface.MTU,
 			"Supported":       iface.Supported,
 			"Reason":          iface.Reason,
-		}
-		tableRows = append(tableRows, row)
+		}}
+		rows = append(rows, row)
 	}
 
-	tableData := TableData{
-		Headers: headers,
-		Rows:    tableRows,
-	}
-
-	// Use RenderTable with default style and indent
-	return RenderTable(tableData, 0, table.StyleRounded)
+	// Render using TablePrinter
+	printer := &TablePrinter{}
+	printer.SetOptions(PrinterOptions{
+		ShowHeader: true,
+		TableStyle: TableStyleRoundedBox,
+	})
+	var sb strings.Builder
+	_ = printer.Print(columns, rows, &sb)
+	return sb.String()
 }
