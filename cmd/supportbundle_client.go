@@ -193,16 +193,21 @@ func (c *ClientResourcesCollector) collectClientInstances(ctx context.Context, c
 
 	logger.Debug("Collecting client instances", "client", client.Name, "namespace", client.Namespace)
 
-	// Generate client instances output directly using the function
+	printer := &TablePrinter{opts: PrinterOptions{
+		ShowHeader: true,
+		WideOutput: true,
+		TableStyle: TableStyleMinimal,
+	}}
+
 	output, err := generateClientInstancesOutput(
 		ctx,
 		clients,
 		client.Namespace,
 		false, // allNamespaces = false (we want this specific client only)
 		client.Name,
-		false, // noHeaders = false (include headers)
-		false, // wide = false (standard output)
+		printer,
 	)
+
 	if err != nil {
 		warning := fmt.Sprintf("failed to collect client instances for %s/%s: %v", client.Namespace, client.Name, err)
 		logger.Debug("⚠️  Failed to collect client instances", "client", client.Name, "namespace", client.Namespace, "error", err)
