@@ -102,8 +102,18 @@ func (c *NodesDescriptionCollector) collectNodesTable(ctx context.Context) (stri
 
 	logger.Debug("Collecting nodes table", "nodeSelector", c.NodeSelector)
 
+	printer := &TablePrinter{opts: PrinterOptions{
+		ShowHeader:        true,
+		WideOutput:        true,
+		ColumnsList:       nil,
+		HideColumnsList:   nil,
+		HideEmptyColumns:  false,
+		IndentByNumSpaces: 0,
+		TableStyle:        TableStyleMinimal,
+	}}
+
 	// Generate nodes table output with node selector
-	output, err := generateNodesOutput(ctx, clients, false, false, c.NodeSelector)
+	output, err := generateNodesOutput(ctx, clients, printer, c.NodeSelector)
 	if err != nil {
 		warning := fmt.Sprintf("failed to collect nodes table: %v", err)
 		logger.Debug("⚠️  Failed to collect nodes table", "error", err)

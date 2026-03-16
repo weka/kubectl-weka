@@ -3,12 +3,11 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
-	"sort"
+	"strings"
 )
 
 var (
@@ -24,28 +23,27 @@ var getNodesCmd = &cobra.Command{
 func init() {
 	getCmd.AddCommand(getNodesCmd)
 	getNodesCmd.Flags().BoolVar(&flagNoHeaders, "no-headers", false, "Don't print headers")
-	getNodesCmd.Flags().BoolVar(&flagWide, "wide", false, "Wide output (adds allocatable and allocated resources)")
+	getNodesCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "Output format. Supported: json, yaml, wide, custom-columns=<COLS...>")
 	getNodesCmd.Flags().StringVar(&getNodesSelector, "node-selector", "", "Label selector to filter nodes (e.g., role=storage)")
 	getNodesCmd.SilenceUsage = true
 }
 
 // runGetNodes executes the get nodes command
-func runGetNodes(cmd *cobra.Command, args []string) error {
+func runGetNodes(_ *cobra.Command, _ []string) error {
 	ctx := context.Background()
 
-	// Generate the output
-	output, err := generateNodesOutput(ctx, KubeClients, flagNoHeaders, flagWide, getNodesSelector)
+	printer, _ := GetPrinterFromFlags(flagOutput, !flagNoHeaders, nil, false, 0, TableStyleMinimal)
+	output, err := generateNodesOutput(ctx, KubeClients, printer, getNodesSelector)
 	if err != nil {
 		return err
 	}
 
-	// Print the output
 	fmt.Println(output)
 	return nil
 }
 
 // generateNodesOutput generates the nodes information table as a string
-func generateNodesOutput(ctx context.Context, clients *K8sClients, noHeaders, wide bool, nodeSelector string) (string, error) {
+func generateNodesOutput(ctx context.Context, clients *K8sClients, printer ResourcePrinter, nodeSelector string) (string, error) {
 	crClient := clients.CRClient
 
 	// List nodes using the cached client, optionally filtered by label selector
@@ -71,128 +69,102 @@ func generateNodesOutput(ctx context.Context, clients *K8sClients, noHeaders, wi
 	coreAllocations := calculateResourceAllocations(&podList, corev1.ResourceCPU)
 	ramAllocations := calculateResourceAllocations(&podList, corev1.ResourceMemory)
 
-	// Sort nodes by name (numeric aware: node1, node2, node11, etc.)
-	sort.Slice(nodeList.Items, func(i, j int) bool {
-		return compareNodeNames(nodeList.Items[i].Name, nodeList.Items[j].Name) < 0
-	})
-
-	w := table.NewWriter()
-	w.SetStyle(table.StyleDefault)
-	w.Style().Options.DrawBorder = false
-	w.Style().Options.SeparateRows = false
-	w.Style().Options.SeparateColumns = false
-	w.Style().Options.SeparateFooter = false
-	w.Style().Options.SeparateHeader = false
-
-	if !noHeaders {
-		if wide {
-			w.AppendHeader(table.Row{
-				"NAME", "IP", "OS", "ARCH", "KERNEL", "STATUS",
-				"HP_ALLOCATABLE", "HP_ALLOCATED", "HP_FREE",
-				"CORES_ALLOCATABLE", "CORES_ALLOCATED", "CORES_FREE",
-				"RAM_ALLOCATABLE", "RAM_ALLOCATED", "RAM_FREE",
-				"CLTROLE", "BKNDROLE",
-			})
-		} else {
-			w.AppendHeader(table.Row{
-				"NAME", "IP", "OS", "ARCH", "KERNEL", "STATUS",
-				"HP_FREE", "CORES_FREE", "RAM_FREE",
-				"CLTROLE", "BKNDROLE",
-			})
-		}
+	// Define columns slice (single, with VisibleInWide)
+	cols := []TableColumn{
+		{Name: "NAME", VisibleInWide: false},
+		{Name: "IP", VisibleInWide: false},
+		{Name: "OS", VisibleInWide: false},
+		{Name: "ARCH", VisibleInWide: false},
+		{Name: "KERNEL", VisibleInWide: false},
+		{Name: "STATUS", VisibleInWide: false},
+		{Name: "HP2MI_ALLOCATABLE", VisibleInWide: true, TableFormatFunctions: []func(interface{}) string{formatQuantityToGB}},
+		{Name: "HP2MI_ALLOCATED", VisibleInWide: true, TableFormatFunctions: []func(interface{}) string{formatQuantityToGB}},
+		{Name: "HP2MI_FREE", VisibleInWide: false, TableFormatFunctions: []func(interface{}) string{formatQuantityToGB}},
+		{Name: "CORES_ALLOCATABLE", VisibleInWide: true, TableFormatFunctions: []func(interface{}) string{formatQuantityToGB}},
+		{Name: "CORES_ALLOCATED", VisibleInWide: true, TableFormatFunctions: []func(interface{}) string{formatQuantityToGB}},
+		{Name: "CORES_FREE", VisibleInWide: false, TableFormatFunctions: []func(interface{}) string{formatQuantityToGB}},
+		{Name: "RAM_ALLOCATABLE", VisibleInWide: true, TableFormatFunctions: []func(interface{}) string{formatQuantityToGB}},
+		{Name: "RAM_ALLOCATED", VisibleInWide: true, TableFormatFunctions: []func(interface{}) string{formatQuantityToGB}},
+		{Name: "RAM_FREE", VisibleInWide: false, TableFormatFunctions: []func(interface{}) string{formatQuantityToGB}},
 	}
 
+	var rows []TableRow
 	for i := range nodeList.Items {
-		printNodeRow(w, &nodeList.Items[i], hugepageAllocations, coreAllocations, ramAllocations, wide)
-	}
-
-	output := w.Render()
-	return output, nil
-}
-
-func printNodeRow(w table.Writer, n *corev1.Node, hugepageAllocations map[string]corev1.ResourceList, coreAllocations map[string]corev1.ResourceList, ramAllocations map[string]corev1.ResourceList, wide bool) {
-	name := n.Name
-	ip := firstInternalIP(n)
-	osImage := n.Status.NodeInfo.OSImage
-	arch := n.Status.NodeInfo.Architecture
-	kernel := n.Status.NodeInfo.KernelVersion
-
-	// Calculate node status (Ready/NotReady with uptime)
-	status := "NotReady"
-	for _, condition := range n.Status.Conditions {
-		if condition.Type == corev1.NodeReady {
-			if condition.Status == corev1.ConditionTrue {
-				// Calculate uptime
-				uptime := "unknown"
-				if n.Status.NodeInfo.BootID != "" {
-					uptime = humanAge(condition.LastTransitionTime.Time)
+		n := &nodeList.Items[i]
+		row := TableRow{Values: map[string]interface{}{}}
+		row.Values["NAME"] = n.Name
+		row.Values["IP"] = firstInternalIP(n)
+		row.Values["OS"] = n.Status.NodeInfo.OSImage
+		row.Values["ARCH"] = n.Status.NodeInfo.Architecture
+		row.Values["KERNEL"] = n.Status.NodeInfo.KernelVersion
+		row.Values["STATUS"] = func() string {
+			status := "NotReady"
+			for _, condition := range n.Status.Conditions {
+				if condition.Type == corev1.NodeReady {
+					if condition.Status == corev1.ConditionTrue {
+						uptime := "unknown"
+						if n.Status.NodeInfo.BootID != "" {
+							uptime = humanAge(condition.LastTransitionTime.Time)
+						}
+						status = fmt.Sprintf("Ready (%s)", uptime)
+					}
+					break
 				}
-				status = fmt.Sprintf("Ready (%s)", uptime)
 			}
-			break
+			return status
+		}()
+		row.Values["HP2MI_ALLOCATABLE"] = n.Status.Allocatable["hugepages-2Mi"]
+		row.Values["HP2MI_ALLOCATED"] = hugepageAllocations[n.Name]["hugepages-2Mi"]
+		row.Values["HP2MI_FREE"] = func() resource.Quantity {
+			free := n.Status.Allocatable["hugepages-2Mi"].DeepCopy()
+			free.Sub(hugepageAllocations[n.Name]["hugepages-2Mi"])
+			return free
+		}()
+		row.Values["CORES_ALLOCATABLE"] = n.Status.Allocatable[corev1.ResourceCPU]
+		row.Values["CORES_ALLOCATED"] = coreAllocations[n.Name][corev1.ResourceCPU]
+		row.Values["CORES_FREE"] = func() resource.Quantity {
+			free := n.Status.Allocatable[corev1.ResourceCPU].DeepCopy()
+			free.Sub(coreAllocations[n.Name][corev1.ResourceCPU])
+			return free
+		}()
+		row.Values["RAM_ALLOCATABLE"] = n.Status.Allocatable[corev1.ResourceMemory]
+		row.Values["RAM_ALLOCATED"] = ramAllocations[n.Name][corev1.ResourceMemory]
+		row.Values["RAM_FREE"] = func() resource.Quantity {
+			free := n.Status.Allocatable[corev1.ResourceMemory].DeepCopy()
+			free.Sub(ramAllocations[n.Name][corev1.ResourceMemory])
+			return free
+		}()
+		cltRole := n.Labels["weka.io/supports-clients"]
+		bkndRole := n.Labels["weka.io/supports-backends"]
+		if cltRole == "" {
+			cltRole = "<none>"
 		}
+		if bkndRole == "" {
+			bkndRole = "<none>"
+		}
+		rows = append(rows, row)
 	}
 
-	// Hugepages
-	hpCapacity := n.Status.Allocatable["hugepages-2Mi"]
-	hpAllocated := hugepageAllocations[name]["hugepages-2Mi"]
-	hpFree := hpCapacity.DeepCopy()
-	hpFree.Sub(hpAllocated)
-
-	// Cores
-	coresCapacity := n.Status.Allocatable[corev1.ResourceCPU]
-	coresAllocated := coreAllocations[name][corev1.ResourceCPU]
-	coresFree := coresCapacity.DeepCopy()
-	coresFree.Sub(coresAllocated)
-
-	// RAM
-	ramCapacity := n.Status.Allocatable[corev1.ResourceMemory]
-	ramAllocated := ramAllocations[name][corev1.ResourceMemory]
-	ramFree := ramCapacity.DeepCopy()
-	ramFree.Sub(ramAllocated)
-
-	cltRole := n.Labels["weka.io/supports-clients"]
-	bkndRole := n.Labels["weka.io/supports-backends"]
-
-	if cltRole == "" {
-		cltRole = "<none>"
+	// Render output
+	var buf strings.Builder
+	if err := printer.Print(cols, rows, &buf); err != nil {
+		return "", err
 	}
-	if bkndRole == "" {
-		bkndRole = "<none>"
-	}
-
-	// Format values
-	nameStr := name
-	hpCapacityStr := formatQuantityToGB(hpCapacity)
-	hpAllocatedStr := formatQuantityToGB(hpAllocated)
-	hpFreeStr := formatQuantityToGB(hpFree)
-	coreCapacityStr := formatQuantityToGB(coresCapacity)
-	coreAllocatedStr := formatQuantityToGB(coresAllocated)
-	coreFreeStr := formatQuantityToGB(coresFree)
-	ramCapacityStr := formatQuantityToGB(ramCapacity)
-	ramAllocatedStr := formatQuantityToGB(ramAllocated)
-	ramFreeStr := formatQuantityToGB(ramFree)
-
-	if wide {
-		w.AppendRow(table.Row{
-			nameStr, ip, osImage, arch, kernel, status,
-			hpCapacityStr, hpAllocatedStr, hpFreeStr,
-			coreCapacityStr, coreAllocatedStr, coreFreeStr,
-			ramCapacityStr, ramAllocatedStr, ramFreeStr,
-			cltRole, bkndRole,
-		})
-	} else {
-		w.AppendRow(table.Row{
-			nameStr, ip, osImage, arch, kernel, status,
-			hpFreeStr, coreFreeStr, ramFreeStr,
-			cltRole, bkndRole,
-		})
-	}
+	return buf.String(), nil
 }
 
 // formatQuantityToGB converts a resource quantity to human-readable format in the largest appropriate unit
 // e.g., 2000Mi -> "2GB", 2500Mi -> "2.4GB", 512Mi -> "512MB", 512Ki -> "512KB"
-func formatQuantityToGB(qty resource.Quantity) string {
+func formatQuantityToGB(val interface{}) string {
+	qty, ok := val.(resource.Quantity)
+	if !ok {
+		// Try pointer
+		if ptr, ok := val.(*resource.Quantity); ok && ptr != nil {
+			qty = *ptr
+		} else {
+			return "-"
+		}
+	}
 
 	// Get the value in bytes (canonical form)
 	bytes := qty.Value()
