@@ -53,7 +53,7 @@ func runGetPolicies(cmd *cobra.Command, _ []string) error {
 	columns = []TableColumn{
 		{Name: "NAMESPACE", VisibleInWide: false},
 		{Name: "NAME", VisibleInWide: false},
-		{Name: "AGE", VisibleInWide: false, TableFormatFunctions: []func(interface{}) string{humanAge}},
+		{Name: "AGE", VisibleInWide: false, formatFuncs: TableFormatFunctions{humanAge}},
 		{Name: "TYPE", VisibleInWide: false},
 		{Name: "STATUS", VisibleInWide: false},
 		{Name: "PROGRESS", VisibleInWide: true},

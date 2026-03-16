@@ -3,15 +3,15 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/jedib0t/go-pretty/v6/table"
+	"sort"
+	"strings"
+
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
-	"sort"
-	"strings"
 
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 )
@@ -19,8 +19,6 @@ import (
 var (
 	getClusterInstancesAllNamespaces bool
 	getClusterInstancesNamespace     string
-	getClusterInstancesNoHeaders     bool
-	getClusterInstancesWide          bool
 )
 
 var getClusterInstancesCmd = &cobra.Command{
@@ -35,46 +33,31 @@ func init() {
 
 	getClusterInstancesCmd.Flags().BoolVarP(&getClusterInstancesAllNamespaces, "all-namespaces", "A", false, "If present, list WekaCluster resources across all namespaces")
 	getClusterInstancesCmd.Flags().StringVarP(&getClusterInstancesNamespace, "namespace", "n", "", "Namespace. Defaults to current kubeconfig namespace")
-	getClusterInstancesCmd.Flags().BoolVar(&getClusterInstancesNoHeaders, "no-headers", false, "Don't print headers")
-	getClusterInstancesCmd.Flags().BoolVar(&getClusterInstancesWide, "wide", false, "Wide output (adds AGE and CPU_UTIL)")
+	getClusterInstancesCmd.Flags().BoolVar(&flagNoHeaders, "no-headers", false, "Don't print headers")
+	getClusterInstancesCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "Output format. Supported: json, yaml, wide, custom-columns=<COLS...>")
 
 	getClusterInstancesCmd.SilenceUsage = true
 }
 
-func runGetClusterInstances(cmd *cobra.Command, args []string) error {
+func runGetClusterInstances(_ *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	currentNS, err := GetKubeNamespace()
-	if err != nil {
-		return err
-	}
-	if getClusterInstancesNamespace != "" {
-		currentNS = getClusterInstancesNamespace
-	}
-
+	currentNS, _, err := GetNamespaceFromFlags(getClusterInstancesAllNamespaces, getClusterInstancesNamespace)
 	var targetCluster string
-	if len(args) == 1 {
-		targetCluster = args[0]
-		if getClusterInstancesAllNamespaces {
-			return fmt.Errorf("cannot use -A/--all-namespaces when specifying a WekaCluster name; use -n to choose namespace")
-		}
-	}
 
-	// Generate the output
+	printer, _ := GetPrinterFromFlags(flagOutput, !flagNoHeaders, nil, false, 0, TableStyleMinimal)
 	output, err := generateClusterInstancesOutput(
 		ctx,
 		KubeClients,
 		currentNS,
 		getClusterInstancesAllNamespaces,
 		targetCluster,
-		getClusterInstancesNoHeaders,
-		getClusterInstancesWide,
+		printer,
 	)
 	if err != nil {
 		return err
 	}
 
-	// Print the output
 	fmt.Print(output)
 	return nil
 }
@@ -86,47 +69,14 @@ func generateClusterInstancesOutput(
 	namespace string,
 	allNamespaces bool,
 	targetCluster string,
-	noHeaders bool,
-	wide bool,
+	printer ResourcePrinter,
 ) (string, error) {
-	includeNamespaceColumn := allNamespaces
-
 	k8s := clients.Clientset
 	crClient := clients.CRClient
 
 	clusters, err := getWekaClustersTyped(ctx, crClient, namespace, allNamespaces, targetCluster)
 	if err != nil {
 		return "", err
-	}
-	if len(clusters) == 0 {
-		if targetCluster != "" {
-			return fmt.Sprintf("WekaCluster %q not found.\n", targetCluster), nil
-		} else if allNamespaces {
-			return "No WekaCluster resources found.\n", nil
-		} else {
-			return fmt.Sprintf("No WekaCluster resources found in namespace %q.\n", namespace), nil
-		}
-	}
-
-	var output strings.Builder
-	t := table.NewWriter()
-	styleTableMinimal(t)
-	t.SetOutputMirror(&output)
-
-	if !noHeaders {
-		if includeNamespaceColumn {
-			if wide {
-				t.AppendHeader(table.Row{"NAMESPACE", "WEKACLUSTER", "NODE", "WEKACONTAINER", "WC_STATUS", "POD", "MGMT_IP", "CONTAINER_ID", "AGE", "CPU_UTIL"})
-			} else {
-				t.AppendHeader(table.Row{"NAMESPACE", "WEKACLUSTER", "NODE", "WEKACONTAINER", "WC_STATUS", "POD", "MGMT_IP", "CONTAINER_ID"})
-			}
-		} else {
-			if wide {
-				t.AppendHeader(table.Row{"WEKACLUSTER", "NODE", "WEKACONTAINER", "WC_STATUS", "POD", "MGMT_IP", "CONTAINER_ID", "AGE", "CPU_UTIL"})
-			} else {
-				t.AppendHeader(table.Row{"WEKACLUSTER", "NODE", "WEKACONTAINER", "WC_STATUS", "POD", "MGMT_IP", "CONTAINER_ID"})
-			}
-		}
 	}
 
 	// Preload WekaContainers + Pods per namespace once
@@ -157,7 +107,7 @@ func generateClusterInstancesOutput(
 		nsToPods[ns] = m
 	}
 
-	// Sort stable by ns/name
+	// Sort clusters stable by ns/name
 	sort.Slice(clusters, func(i, j int) bool {
 		if clusters[i].GetNamespace() != clusters[j].GetNamespace() {
 			return clusters[i].GetNamespace() < clusters[j].GetNamespace()
@@ -165,6 +115,23 @@ func generateClusterInstancesOutput(
 		return clusters[i].GetName() < clusters[j].GetName()
 	})
 
+	// Define columns - include NAMESPACE only if showing all namespaces
+	var columns []TableColumn
+	columns = []TableColumn{
+		{Name: "NAMESPACE", VisibleInWide: false},
+		{Name: "WEKACLUSTER", VisibleInWide: false},
+		{Name: "NODE", VisibleInWide: false},
+		{Name: "WEKACONTAINER", VisibleInWide: false},
+		{Name: "WC_STATUS", VisibleInWide: false},
+		{Name: "POD_STATUS", VisibleInWide: false},
+		{Name: "MGMT_IP", VisibleInWide: false},
+		{Name: "CONTAINER_ID", VisibleInWide: false},
+		{Name: "CPU_UTIL", VisibleInWide: true},
+		{Name: "AGE", VisibleInWide: true, formatFuncs: TableFormatFunctions{humanAge}},
+	}
+
+	// Build rows
+	var rows []TableRow
 	for i := range clusters {
 		cluster := &clusters[i]
 		clusterName := cluster.GetName()
@@ -214,31 +181,31 @@ func generateClusterInstancesOutput(
 				}
 			}
 
-			if wide {
-				age := humanAge(wc.GetCreationTimestamp().Time)
-				cpuUtil := ""
-				if wc.Status.Stats != nil {
-					cpuUtil = string(wc.Status.Stats.CpuUsage)
-				} else {
-					cpuUtil = "<none>"
-				}
-				if includeNamespaceColumn {
-					t.AppendRow(table.Row{ns, clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil})
-				} else {
-					t.AppendRow(table.Row{clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID, age, cpuUtil})
-				}
-			} else {
-				if includeNamespaceColumn {
-					t.AppendRow(table.Row{ns, clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID})
-				} else {
-					t.AppendRow(table.Row{clusterName, nodeName, wcName, wcStatus, podPhase, mgmtIP, containerID})
-				}
+			age := wc.GetCreationTimestamp().Time
+			cpuUtil := "<none>"
+			if wc.Status.Stats != nil {
+				cpuUtil = string(wc.Status.Stats.CpuUsage)
 			}
+
+			row := TableRow{Values: map[string]interface{}{}}
+			row.Values["NAMESPACE"] = ns
+			row.Values["WEKACLUSTER"] = clusterName
+			row.Values["NODE"] = nodeName
+			row.Values["WEKACONTAINER"] = wcName
+			row.Values["WC_STATUS"] = wcStatus
+			row.Values["POD_STATUS"] = podPhase
+			row.Values["MGMT_IP"] = mgmtIP
+			row.Values["CONTAINER_ID"] = containerID
+			row.Values["AGE"] = age
+			row.Values["CPU_UTIL"] = cpuUtil
+			rows = append(rows, row)
 		}
 	}
 
-	t.Render()
-	return output.String() + "\n", nil
+	// Render output
+	var sb strings.Builder
+	_ = printer.Print(columns, rows, &sb)
+	return sb.String(), nil
 }
 
 // ---- helpers ----

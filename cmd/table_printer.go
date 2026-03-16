@@ -65,8 +65,8 @@ func (tp *TablePrinter) Print(columns []TableColumn, rows []TableRow, w io.Write
 			for _, row := range rows {
 				val := row.Values[col.Name]
 				strVal := fmt.Sprintf("%v", val)
-				if col.TableFormatFunctions != nil && len(col.TableFormatFunctions) > 0 {
-					for _, fn := range col.TableFormatFunctions {
+				if col.formatFuncs != nil && len(col.formatFuncs) > 0 {
+					for _, fn := range col.formatFuncs {
 						strVal = fn(val)
 					}
 				}
@@ -97,8 +97,8 @@ func (tp *TablePrinter) Print(columns []TableColumn, rows []TableRow, w io.Write
 		for _, col := range visibleCols {
 			val := row.Values[col.Name]
 			strVal := fmt.Sprintf("%v", val)
-			if col.TableFormatFunctions != nil && len(col.TableFormatFunctions) > 0 {
-				for _, fn := range col.TableFormatFunctions {
+			if col.formatFuncs != nil && len(col.formatFuncs) > 0 {
+				for _, fn := range col.formatFuncs {
 					strVal = fn(val)
 				}
 			}

@@ -247,10 +247,9 @@ func generateCSIInstancesOutput(ctx context.Context, clients *K8sClients, driver
 		{Name: "POD NAME", VisibleInWide: false},
 		{Name: "STATUS", VisibleInWide: false},
 		{Name: "RESTARTS", VisibleInWide: true},
-		{Name: "LAST RESTART", VisibleInWide: true, TableFormatFunctions: []func(interface{}) string{humanAge}},
-		{Name: "AGE", VisibleInWide: false, TableFormatFunctions: []func(interface{}) string{humanAge}},
+		{Name: "LAST RESTART", VisibleInWide: true, formatFuncs: TableFormatFunctions{humanAge}},
+		{Name: "AGE", VisibleInWide: false, formatFuncs: TableFormatFunctions{humanAge}},
 	}
-
 	// Build rows
 	var rows []TableRow
 	for _, info := range instances {

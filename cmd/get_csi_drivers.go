@@ -293,7 +293,7 @@ func generateCSIDriversOutput(ctx context.Context, clients *K8sClients, onlyHelm
 		{Name: "PVS", VisibleInWide: true},
 		{Name: "PVCS", VisibleInWide: true},
 		{Name: "BOUND PVS", VisibleInWide: true},
-		{Name: "AGE", VisibleInWide: false, TableFormatFunctions: []func(interface{}) string{humanAge}},
+		{Name: "AGE", VisibleInWide: false, formatFuncs: TableFormatFunctions{humanAge}},
 	}
 
 	// Build rows

@@ -4,10 +4,13 @@ import (
 	"io"
 )
 
+type TableFormatFunc func(interface{}) string
+type TableFormatFunctions []TableFormatFunc
+
 type TableColumn struct {
-	Name                 string
-	VisibleInWide        bool
-	TableFormatFunctions []func(interface{}) string // functions to refine for table view
+	Name          string
+	VisibleInWide bool
+	formatFuncs   TableFormatFunctions // functions to refine for table view
 }
 
 type TableRow struct {
