@@ -220,9 +220,14 @@ func (m *NetworkInterfacesModule) validateInterface(iface *NetworkInterface) *Ne
 	if iface.MTU > 0 {
 		validation.MTU = fmt.Sprintf("%d", iface.MTU)
 	}
-	if iface.MTU < 8192 {
+	if iface.MTU < 8000 && iface.IsEthernet() {
 		validation.setStatus(statusWarn)
-		reasons = append(reasons, "MTU too small")
+		reasons = append(reasons, "ETH MTU too small")
+	}
+
+	if iface.MTU < 4000 && iface.IsInfiniBand() {
+		validation.setStatus(statusWarn)
+		reasons = append(reasons, "IB subnet MTU too small")
 	}
 
 	// Get device model name

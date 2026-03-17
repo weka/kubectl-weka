@@ -200,7 +200,7 @@ func (c *CSISecretsCollector) collectSecret(ctx context.Context, baseDir, driver
 	}
 
 	// Validate and process secret data
-	secretFile := filepath.Join(secretDir, fmt.Sprintf("Secret-%s-%s.yaml", sanitizeName(secretRef.Namespace), sanitizeName(secretRef.Name)))
+	secretFile := filepath.Join(secretDir, fmt.Sprintf("Secret_%s-%s.yaml", sanitizeName(secretRef.Namespace), sanitizeName(secretRef.Name)))
 	var content string
 	var validationErrors []string
 
