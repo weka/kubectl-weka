@@ -101,3 +101,5 @@ func (m *NVMeDrivesModule) Validate(podOutput string) (HostCheckModuleResponse, 
 func (m *NVMeDrivesModule) ValidateWithParams(podOutput string, params map[string]interface{}) (HostCheckModuleResponse, error) {
 	return m.Validate(podOutput)
 }
+
+// TODO: add actual validation of NVMe models etc.
