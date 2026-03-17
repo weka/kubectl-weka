@@ -648,8 +648,8 @@ func (r *HostCheckModuleRegistry) FormatNodeValidationResults(
 			continue
 		}
 
-		// Map module name to friendly name
-		friendlyName := extractFriendlyName(moduleName)
+		module := r.modules[moduleName]
+		friendlyName := module.FriendlyName()
 
 		// Create context params for Summary()
 		contextParams := map[string]interface{}{
