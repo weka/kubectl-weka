@@ -134,6 +134,27 @@ func (c *CSIResourcesCollector) Collect(ctx context.Context) CollectorResult {
 		}
 	}
 
+	// Collect CSI secrets (respecting include-sensitive-data flag)
+	logger.Debug("Collecting CSI secrets", "include_sensitive", supportBundleIncludeSensitive)
+	secretsOutput, err := generateCSISecretsOutput(ctx, KubeClients, printer)
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("failed to get CSI secrets: %v", err))
+		logger.Warn("Failed to collect CSI secrets", "error", err)
+	} else {
+		secretsFile := filepath.Join(csiDir, "csi-secrets.txt")
+		if err := os.WriteFile(secretsFile, []byte(secretsOutput), 0644); err != nil {
+			errors = append(errors, fmt.Sprintf("failed to write CSI secrets file: %v", err))
+			logger.Warn("Failed to write CSI secrets file", "error", err)
+		} else {
+			filesCreated = append(filesCreated, secretsFile)
+			if supportBundleIncludeSensitive {
+				logger.Warn("Collected CSI secrets (unredacted)", "file", secretsFile)
+			} else {
+				logger.Debug("Collected CSI secrets (redacted)", "file", secretsFile)
+			}
+		}
+	}
+
 	// Determine overall status
 	status := StatusSuccess
 	if len(errors) > 0 {
