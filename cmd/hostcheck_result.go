@@ -126,6 +126,24 @@ func (ni *NetworkInterface) IsVlan() bool {
 	return ni != nil && ni.Type == "vlan"
 }
 
+// IsLogicalInterface returns true if the interface is a VLAN or bond
+func (ni *NetworkInterface) IsLogicalInterface() bool {
+	if ni != nil {
+		return ni.IsVlan() || ni.IsBond()
+	}
+	return false
+}
+
+// IsNetworkAdapter returns true if the interface is a NIC (Eth/IB)
+// even virtual NICs are counted (e.g. VXNET3)
+// but virtual bridges interfaces (e.g. cni0) are not
+func (ni *NetworkInterface) IsNetworkAdapter() bool {
+	if ni != nil {
+		return ni.IsEthernet() || ni.IsInfiniBand()
+	}
+	return false
+}
+
 // GetParent returns the parent interface for a VLAN or bond slave
 // For VLANs, returns the parent interface (e.g., eth0 for eth0.100)
 // For regular interfaces, returns nil
@@ -834,7 +852,7 @@ func (ni NetworkInterfaces) GetCandidateInterfacesForWeka(forWekaVersion ...stri
 		speedGbps := 0
 		if len(speedStr) > 0 {
 			var n int
-			_, err := fmt.Sscanf(speedStr, "%dGb/s", &n)
+			_, err := fmt.Sscanf(speedStr, "%dGbps", &n)
 			if err == nil {
 				speedGbps = n
 			}
@@ -849,13 +867,12 @@ func (ni NetworkInterfaces) GetCandidateInterfacesForWeka(forWekaVersion ...stri
 		}
 
 		// 2. Check type is vlan, ethernet, infiniband, or bond
-		if iface.Type != "vlan" && iface.Type != "ethernet" &&
-			iface.Type != "infiniband" && iface.Type != "bond" {
+		if !iface.IsLogicalInterface() && !iface.IsNetworkAdapter() {
 			continue
 		}
 
 		// 3. virtual interface, not vlan and not bond (e.g. cni0 or other interfaces that are virtual bridges)
-		if iface.VendorModel == "" && iface.Type != "vlan" && iface.Type != "bond" {
+		if iface.VendorModel == "" && !iface.IsLogicalInterface() {
 			continue
 		}
 
