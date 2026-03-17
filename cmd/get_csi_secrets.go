@@ -179,5 +179,5 @@ func generateCSISecretsOutput(ctx context.Context, clients *K8sClients, printer 
 	// Render output
 	var sb strings.Builder
 	_ = printer.Print(columns, rows, &sb)
-	return sb.String() + "\n", nil
+	return sb.String(), nil
 }
