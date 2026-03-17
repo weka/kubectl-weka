@@ -200,7 +200,7 @@ func TestHostChecksResultFilterMethods(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		method        func() []NetworkInterface
+		method        func() []*NetworkInterface
 		expectedCount int
 		expectedType  string
 	}{

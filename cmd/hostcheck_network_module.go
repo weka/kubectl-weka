@@ -17,7 +17,7 @@ type NetworkInterfaceValidation struct {
 	Type        string      `json:"type"`
 	IPAddress   string      `json:"ip_address"`
 	Speed       string      `json:"speed"`
-	MTU         string      `json:"mtu"`
+	MTU         int         `json:"mtu"`
 	Supported   string      `json:"supported"` // "DPDK", "UDP", or "-"
 	Reason      string      `json:"reason"`    // Error reason if not supported
 }
@@ -25,7 +25,7 @@ type NetworkInterfaceValidation struct {
 // String returns a human-readable summary of the validation result
 func (nv *NetworkInterfaceValidation) String() string {
 	return fmt.Sprintf(
-		"Name: %s, Type: %s, IP: %s, Speed: %s, MTU: %s, Supported: %s, Status: %s, Reason: %s",
+		"Name: %s, Type: %s, IP: %s, Speed: %s, MTU: %d, Supported: %s, Status: %s, Reason: %s",
 		nv.Name,
 		nv.Type,
 		nv.IPAddress,
@@ -120,6 +120,7 @@ func (m *NetworkInterfacesModule) Validate(podOutput string) (HostCheckModuleRes
 	if err := json.Unmarshal([]byte(podOutput), &hc); err != nil {
 		return nil, fmt.Errorf("failed to parse hostcheck JSON: %v", err)
 	}
+	hc.InitializeNetworkInterfaceHierarchy()
 
 	if hc == nil || len(hc.NetworkInterfaces) == 0 {
 		data := &NetworkInterfacesModuleData{
@@ -146,6 +147,16 @@ func (m *NetworkInterfacesModule) Validate(podOutput string) (HostCheckModuleRes
 	}
 	m.data = data
 
+	if data.CandidateCount == 0 {
+		return &NetworkInterfacesModuleResponse{
+			data:       data,
+			status:     statusFail,
+			moduleName: m.Name(),
+			details:    "No suitable network interfaces found",
+			err:        nil,
+		}, nil
+	}
+
 	// Validate each candidate interface
 	for _, iface := range candidates {
 		validation := m.validateInterface(iface)
@@ -163,16 +174,18 @@ func (m *NetworkInterfacesModule) Validate(podOutput string) (HostCheckModuleRes
 		if validation.Status == statusWarn {
 			data.Warnings++
 		}
-
 	}
-	// Determine overall status based on support availability
+	// Determine overall status based on support availability and validation failures
+	// Fail if any interface validation failed (e.g., bond with wrong config)
 	// Success if at least one interface is supported
 	// Warning if some interfaces are not supported but at least one is
 	// Error if no interfaces are supported
+	var err error
 	status := statusPass
-	if data.NotSupported > 0 {
+	if data.NotSupported == len(candidates) {
 		status = statusFail
-	} else if data.Warnings > 0 {
+		err = fmt.Errorf("no supported interfaces found")
+	} else if data.Warnings > 0 || data.NotSupported > 0 {
 		status = statusWarn
 	}
 
@@ -181,7 +194,7 @@ func (m *NetworkInterfacesModule) Validate(podOutput string) (HostCheckModuleRes
 		status:     status,
 		moduleName: m.Name(),
 		details:    "Network interface validation complete",
-		err:        nil,
+		err:        err,
 	}, nil
 }
 
@@ -198,18 +211,12 @@ func (m *NetworkInterfacesModule) validateInterface(iface *NetworkInterface) *Ne
 		Type:        iface.Type,
 		IPAddress:   iface.IP,
 		Speed:       iface.EffectiveSpeed,
-		MTU:         "Unknown",
+		MTU:         iface.MTU,
 		Supported:   "-",
 		Reason:      "",
 	}
 
 	// Set defaults
-	if validation.VendorModel == "" {
-		validation.VendorModel = "Unknown"
-		validation.setStatus(statusFail)
-		reasons = append(reasons, "Unknown device model")
-	}
-
 	if validation.IPAddress == "" {
 		validation.IPAddress = "No IP"
 		validation.setStatus(statusFail)
@@ -222,7 +229,7 @@ func (m *NetworkInterfacesModule) validateInterface(iface *NetworkInterface) *Ne
 	}
 
 	if iface.MTU > 0 {
-		validation.MTU = fmt.Sprintf("%d", iface.MTU)
+		validation.MTU = iface.MTU
 	}
 	if iface.MTU < 8000 && iface.IsEthernet() {
 		validation.setStatus(statusWarn)
@@ -242,10 +249,8 @@ func (m *NetworkInterfacesModule) validateInterface(iface *NetworkInterface) *Ne
 		} else {
 			validation.DeviceModel = "Unknown"
 		}
-	} else {
+	} else if !iface.IsLogicalInterface() {
 		validation.DeviceModel = "Unknown"
-	}
-	if validation.DeviceModel == "Unknown" {
 		validation.setStatus(statusFail)
 		reasons = append(reasons, "Unknown device model")
 	}

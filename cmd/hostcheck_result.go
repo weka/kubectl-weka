@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	ds "github.com/weka/kubectl-weka/pkg/device-support"
+	"slices"
 )
 
 // CNIDetection contains detected CNI configuration from the node
@@ -109,7 +110,7 @@ type NetworkInterface struct {
 
 	// Internal reference to parent NetworkInterfaces list (not JSON serialized)
 	// Populated when HostChecksResult is created, allows navigation within interface hierarchy
-	parent *NetworkInterfaces `json:"-"`
+	parent NetworkInterfaces `json:"-"`
 }
 
 // IsBond returns true if this interface is a bond
@@ -118,7 +119,7 @@ func (ni *NetworkInterface) IsBond() bool {
 }
 
 func (ni *NetworkInterface) IsLACP() bool {
-	return ni != nil && ni.IsBond() && ni.BondMode == "lacp"
+	return ni != nil && ni.IsBond() && ni.BondMode == "802.3ad"
 }
 
 // IsVlan returns true if this interface is a VLAN interface
@@ -154,9 +155,9 @@ func (ni *NetworkInterface) GetParent() *NetworkInterface {
 
 	// For VLAN interfaces, get parent by VLANParent name
 	if ni.IsVlan() && ni.VLANParent != "" {
-		for i, iface := range *ni.parent {
+		for _, iface := range ni.parent {
 			if iface.Name == ni.VLANParent {
-				return &(*ni.parent)[i]
+				return iface
 			}
 		}
 		return nil
@@ -171,14 +172,7 @@ func (ni *NetworkInterface) HasVlans() bool {
 	if ni == nil || ni.IsVlan() || ni.parent == nil {
 		return false
 	}
-
-	// Check if any VLAN has this interface as parent
-	for _, iface := range *ni.parent {
-		if iface.IsVlan() && iface.VLANParent == ni.Name {
-			return true
-		}
-	}
-	return false
+	return len(ni.GetVlans()) > 0
 }
 
 // GetVlans returns all VLAN interfaces that are configured on this interface
@@ -189,9 +183,9 @@ func (ni *NetworkInterface) GetVlans() []*NetworkInterface {
 	}
 
 	var vlans []*NetworkInterface
-	for i, iface := range *ni.parent {
+	for _, iface := range ni.parent {
 		if iface.IsVlan() && iface.VLANParent == ni.Name {
-			vlans = append(vlans, &(*ni.parent)[i])
+			vlans = append(vlans, iface)
 		}
 	}
 	return vlans
@@ -216,10 +210,9 @@ func (ni *NetworkInterface) GetSlaves() []*NetworkInterface {
 
 	var slaves []*NetworkInterface
 	for _, slaveName := range ni.BondSlaves {
-		for i := range *ni.parent {
-			if (*ni.parent)[i].Name == slaveName {
-				slaves = append(slaves, &(*ni.parent)[i])
-				break
+		for _, iface := range ni.parent {
+			if iface.Name == slaveName {
+				slaves = append(slaves, iface)
 			}
 		}
 	}
@@ -233,9 +226,9 @@ func (ni *NetworkInterface) GetMaster() *NetworkInterface {
 		return nil
 	}
 
-	for i, iface := range *ni.parent {
+	for _, iface := range ni.parent {
 		if iface.Name == ni.BondMaster && iface.IsBond() {
-			return &(*ni.parent)[i]
+			return iface
 		}
 	}
 	return nil
@@ -345,13 +338,14 @@ func (ni *NetworkInterface) IsSupportedByWekaDpdk(forWekaVersion ...string) (boo
 			if !supported {
 				return false, fmt.Errorf("bond is on same card but does not support same-card LACP: %w", err)
 			}
+		} else {
+			supported, err := ni.IsSupportedByWekaForLacpDiffCards(forWekaVersion...)
+			if !supported {
+				return false, fmt.Errorf("bond is on different cards but does not support intra-card LACP: %w", err)
+			}
 		}
 
 		return true, nil
-	}
-
-	if ni.IsBondSlave {
-		return false, fmt.Errorf("interface is a bond slave")
 	}
 
 	var wekaVersion string
@@ -680,9 +674,21 @@ func (ni *NetworkInterface) IsSupportedByWekaInUdpMode(forWekaVersion ...string)
 		return false, fmt.Errorf("interface is nil")
 	}
 
-	// Bond slaves cannot be used directly
-	if ni.IsBondSlave {
-		return false, fmt.Errorf("interface is a bond slave")
+	if ni.IsBond() {
+		for _, iface := range ni.GetSlaves() {
+			s, err := iface.IsSupportedByWekaInUdpMode(forWekaVersion...)
+			if err != nil {
+				return false, err
+			}
+			if !s {
+				return false, fmt.Errorf("bond contains unsupported interface: %s", iface.Name)
+			}
+		}
+		return true, nil
+	}
+
+	if ni.IsVlan() {
+		return ni.GetParent().IsSupportedByWekaInUdpMode(forWekaVersion...)
 	}
 
 	// Check if UDP mode is supported
@@ -742,25 +748,36 @@ func (ni *NetworkInterface) GetDeviceInfo() *ds.NICInfo {
 }
 
 // NetworkInterfaces is a slice of NetworkInterface with helper methods
-type NetworkInterfaces []NetworkInterface
+type NetworkInterfaces []*NetworkInterface
 
 // InitializeParents sets the parent pointer for all interfaces in the slice
 // This must be called after the NetworkInterfaces slice is populated
 // Allows GetSlaves() and GetMaster() methods to work properly
-func (ni *NetworkInterfaces) InitializeParents() {
+func (ni NetworkInterfaces) InitializeParents() {
 	if ni == nil {
 		return
 	}
-	for i := range *ni {
-		(*ni)[i].parent = ni
+	for _, iface := range ni {
+		iface.parent = ni
 	}
 }
 
 // GetBonds returns all bond interfaces
-func (ni NetworkInterfaces) GetBonds() []NetworkInterface {
-	var bonds []NetworkInterface
+func (ni NetworkInterfaces) GetBonds() []*NetworkInterface {
+	var bonds []*NetworkInterface
 	for _, iface := range ni {
-		if iface.Type == "bond" {
+		if iface.IsBond() {
+			bonds = append(bonds, iface)
+		}
+	}
+	return bonds
+}
+
+// GetVlans returns all bond interfaces
+func (ni NetworkInterfaces) GetVlans() []*NetworkInterface {
+	var bonds []*NetworkInterface
+	for _, iface := range ni {
+		if iface.IsVlan() {
 			bonds = append(bonds, iface)
 		}
 	}
@@ -768,8 +785,8 @@ func (ni NetworkInterfaces) GetBonds() []NetworkInterface {
 }
 
 // GetEthernets returns all ethernet interfaces
-func (ni NetworkInterfaces) GetEthernets() []NetworkInterface {
-	var ethernets []NetworkInterface
+func (ni NetworkInterfaces) GetEthernets() []*NetworkInterface {
+	var ethernets []*NetworkInterface
 	for _, iface := range ni {
 		if iface.Type == "ethernet" {
 			ethernets = append(ethernets, iface)
@@ -779,8 +796,8 @@ func (ni NetworkInterfaces) GetEthernets() []NetworkInterface {
 }
 
 // GetInfiniBands returns all infiniband interfaces
-func (ni NetworkInterfaces) GetInfiniBands() []NetworkInterface {
-	var ib []NetworkInterface
+func (ni NetworkInterfaces) GetInfiniBands() []*NetworkInterface {
+	var ib []*NetworkInterface
 	for _, iface := range ni {
 		if iface.Type == "infiniband" {
 			ib = append(ib, iface)
@@ -790,8 +807,8 @@ func (ni NetworkInterfaces) GetInfiniBands() []NetworkInterface {
 }
 
 // GetVirtualInterfaces returns all virtual interfaces (bonds)
-func (ni NetworkInterfaces) GetVirtualInterfaces() []NetworkInterface {
-	return ni.GetBonds()
+func (ni NetworkInterfaces) GetVirtualInterfaces() []*NetworkInterface {
+	return slices.Concat(ni.GetBonds(), ni.GetVlans())
 }
 
 // getCIDRPrefix extracts the prefix length from a CIDR string
@@ -843,8 +860,7 @@ func (ni NetworkInterfaces) GetCandidateInterfacesForWeka(forWekaVersion ...stri
 
 	var candidates []*NetworkInterface
 
-	for i := range ni {
-		iface := &ni[i]
+	for _, iface := range ni {
 
 		// Filter: Exclude interfaces with MaxSpeed < 10Gbps
 		minSpeedGbps := 10
