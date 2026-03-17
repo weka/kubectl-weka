@@ -77,14 +77,14 @@ func generateNodesOutput(ctx context.Context, clients *K8sClients, printer Resou
 		{Name: "ARCH", VisibleInWide: false},
 		{Name: "KERNEL", VisibleInWide: false},
 		{Name: "STATUS", VisibleInWide: false},
-		{Name: "HP2MI_ALLOCATABLE", VisibleInWide: true, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
-		{Name: "HP2MI_ALLOCATED", VisibleInWide: true, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
+		{Name: "HP2MI_USABLE", VisibleInWide: true, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
+		{Name: "HP2MI_ALLOC", VisibleInWide: true, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
 		{Name: "HP2MI_FREE", VisibleInWide: false, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
-		{Name: "CORES_ALLOCATABLE", VisibleInWide: true, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
-		{Name: "CORES_ALLOCATED", VisibleInWide: true, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
+		{Name: "CORES_USABLE", VisibleInWide: true, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
+		{Name: "CORES_ALLOC", VisibleInWide: true, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
 		{Name: "CORES_FREE", VisibleInWide: false, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
-		{Name: "RAM_ALLOCATABLE", VisibleInWide: true, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
-		{Name: "RAM_ALLOCATED", VisibleInWide: true, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
+		{Name: "RAM_USABLE", VisibleInWide: true, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
+		{Name: "RAM_ALLOC", VisibleInWide: true, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
 		{Name: "RAM_FREE", VisibleInWide: false, formatFuncs: TableFormatFunctions{formatQuantityToGB}},
 	}
 
@@ -113,35 +113,27 @@ func generateNodesOutput(ctx context.Context, clients *K8sClients, printer Resou
 			}
 			return status
 		}()
-		row.Values["HP2MI_ALLOCATABLE"] = n.Status.Allocatable["hugepages-2Mi"]
-		row.Values["HP2MI_ALLOCATED"] = hugepageAllocations[n.Name]["hugepages-2Mi"]
+		row.Values["HP2MI_USABLE"] = n.Status.Allocatable["hugepages-2Mi"]
+		row.Values["HP2MI_ALLOC"] = hugepageAllocations[n.Name]["hugepages-2Mi"]
 		row.Values["HP2MI_FREE"] = func() resource.Quantity {
 			free := n.Status.Allocatable["hugepages-2Mi"].DeepCopy()
 			free.Sub(hugepageAllocations[n.Name]["hugepages-2Mi"])
 			return free
 		}()
-		row.Values["CORES_ALLOCATABLE"] = n.Status.Allocatable[corev1.ResourceCPU]
-		row.Values["CORES_ALLOCATED"] = coreAllocations[n.Name][corev1.ResourceCPU]
+		row.Values["CORES_USABLE"] = n.Status.Allocatable[corev1.ResourceCPU]
+		row.Values["CORES_ALLOC"] = coreAllocations[n.Name][corev1.ResourceCPU]
 		row.Values["CORES_FREE"] = func() resource.Quantity {
 			free := n.Status.Allocatable[corev1.ResourceCPU].DeepCopy()
 			free.Sub(coreAllocations[n.Name][corev1.ResourceCPU])
 			return free
 		}()
-		row.Values["RAM_ALLOCATABLE"] = n.Status.Allocatable[corev1.ResourceMemory]
-		row.Values["RAM_ALLOCATED"] = ramAllocations[n.Name][corev1.ResourceMemory]
+		row.Values["RAM_USABLE"] = n.Status.Allocatable[corev1.ResourceMemory]
+		row.Values["RAM_ALLOC"] = ramAllocations[n.Name][corev1.ResourceMemory]
 		row.Values["RAM_FREE"] = func() resource.Quantity {
 			free := n.Status.Allocatable[corev1.ResourceMemory].DeepCopy()
 			free.Sub(ramAllocations[n.Name][corev1.ResourceMemory])
 			return free
 		}()
-		cltRole := n.Labels["weka.io/supports-clients"]
-		bkndRole := n.Labels["weka.io/supports-backends"]
-		if cltRole == "" {
-			cltRole = "<none>"
-		}
-		if bkndRole == "" {
-			bkndRole = "<none>"
-		}
 		rows = append(rows, row)
 	}
 
@@ -151,63 +143,6 @@ func generateNodesOutput(ctx context.Context, clients *K8sClients, printer Resou
 		return "", err
 	}
 	return buf.String(), nil
-}
-
-// formatQuantityToGB converts a resource quantity to human-readable format in the largest appropriate unit
-// e.g., 2000Mi -> "2GB", 2500Mi -> "2.4GB", 512Mi -> "512MB", 512Ki -> "512KB"
-func formatQuantityToGB(val interface{}) string {
-	qty, ok := val.(resource.Quantity)
-	if !ok {
-		// Try pointer
-		if ptr, ok := val.(*resource.Quantity); ok && ptr != nil {
-			qty = *ptr
-		} else {
-			return "-"
-		}
-	}
-
-	// Get the value in bytes (canonical form)
-	bytes := qty.Value()
-	if bytes < 0 {
-		bytes = -bytes
-	}
-
-	const (
-		KB = 1024
-		MB = KB * 1024
-		GB = MB * 1024
-		TB = GB * 1024
-	)
-
-	// Format with appropriate precision, using the largest unit that keeps value >= 1
-	switch {
-	case bytes >= TB:
-		value := float64(bytes) / float64(TB)
-		if value >= 10 {
-			return fmt.Sprintf("%.0fTB", value)
-		}
-		return fmt.Sprintf("%.1fTB", value)
-	case bytes >= GB:
-		value := float64(bytes) / float64(GB)
-		if value >= 10 {
-			return fmt.Sprintf("%.0fGB", value)
-		}
-		return fmt.Sprintf("%.1fGB", value)
-	case bytes >= MB:
-		value := float64(bytes) / float64(MB)
-		if value >= 10 {
-			return fmt.Sprintf("%.0fMB", value)
-		}
-		return fmt.Sprintf("%.1fMB", value)
-	case bytes >= KB:
-		value := float64(bytes) / float64(KB)
-		if value >= 10 {
-			return fmt.Sprintf("%.0fKB", value)
-		}
-		return fmt.Sprintf("%.1fKB", value)
-	default:
-		return fmt.Sprintf("%d", bytes)
-	}
 }
 
 // calculateHugepageAllocations sums up hugepage requests from all Pods per node

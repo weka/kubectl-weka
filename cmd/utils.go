@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	"k8s.io/api/core/v1"
@@ -618,4 +619,61 @@ func boolToOkError(v bool) string {
 		return "OK"
 	}
 	return "ERROR"
+}
+
+// formatQuantityToGB converts a resource quantity to human-readable format in the largest appropriate unit
+// e.g., 2000Mi -> "2GB", 2500Mi -> "2.4GB", 512Mi -> "512MB", 512Ki -> "512KB"
+func formatQuantityToGB(val interface{}) string {
+	qty, ok := val.(resource.Quantity)
+	if !ok {
+		// Try pointer
+		if ptr, ok := val.(*resource.Quantity); ok && ptr != nil {
+			qty = *ptr
+		} else {
+			return "-"
+		}
+	}
+
+	// Get the value in bytes (canonical form)
+	bytes := qty.Value()
+	if bytes < 0 {
+		bytes = -bytes
+	}
+
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+		TB = GB * 1024
+	)
+
+	// Format with appropriate precision, using the largest unit that keeps value >= 1
+	switch {
+	case bytes >= TB:
+		value := float64(bytes) / float64(TB)
+		if value >= 10 {
+			return fmt.Sprintf("%.0fTB", value)
+		}
+		return fmt.Sprintf("%.1fTB", value)
+	case bytes >= GB:
+		value := float64(bytes) / float64(GB)
+		if value >= 10 {
+			return fmt.Sprintf("%.0fGB", value)
+		}
+		return fmt.Sprintf("%.1fGB", value)
+	case bytes >= MB:
+		value := float64(bytes) / float64(MB)
+		if value >= 10 {
+			return fmt.Sprintf("%.0fMB", value)
+		}
+		return fmt.Sprintf("%.1fMB", value)
+	case bytes >= KB:
+		value := float64(bytes) / float64(KB)
+		if value >= 10 {
+			return fmt.Sprintf("%.0fKB", value)
+		}
+		return fmt.Sprintf("%.1fKB", value)
+	default:
+		return fmt.Sprintf("%d", bytes)
+	}
 }

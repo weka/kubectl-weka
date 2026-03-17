@@ -468,9 +468,9 @@ kubectl weka get nodes [flags]
 - `BKNDROLE` – Backend role label value
 
 **Wide Output Adds (with `-o wide`):**
-- `HP_ALLOCATABLE`, `HP_ALLOCATED` – Hugepages allocation info
-- `CORES_ALLOCATABLE`, `CORES_ALLOCATED` – CPU allocation info
-- `RAM_ALLOCATABLE`, `RAM_ALLOCATED` – Memory allocation info
+- `HP_USABLE`, `HP_ALLOC` – Hugepages allocation info
+- `CORES_USABLE`, `CORES_ALLOC` – CPU allocation info
+- `RAM_USABLE`, `RAM_ALLOC` – Memory allocation info
 
 **Examples:**
 ```bash

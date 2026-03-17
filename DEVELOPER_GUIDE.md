@@ -475,7 +475,7 @@ func formatQuantityToGB(val interface{}) string {
 
 // Usage in column definition
 {
-	Name: "MEMORY_ALLOCATABLE",
+	Name: "MEMORY_USABLE",
 	TableFormatFunctions: []func(interface{}) string{formatQuantityToGB},
 }
 ```
