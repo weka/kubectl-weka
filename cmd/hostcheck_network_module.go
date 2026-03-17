@@ -10,7 +10,7 @@ import (
 
 // NetworkInterfaceValidation represents validation data for a single network interface
 type NetworkInterfaceValidation struct {
-	Status      checkStatus `json:"status"`
+	Status      CheckStatus `json:"status"`
 	Name        string      `json:"name"`
 	VendorModel string      `json:"vendor_model"`
 	DeviceModel string      `json:"device_model"`
@@ -37,7 +37,7 @@ func (nv *NetworkInterfaceValidation) String() string {
 	)
 }
 
-func (nv *NetworkInterfaceValidation) setStatus(status checkStatus) {
+func (nv *NetworkInterfaceValidation) setStatus(status CheckStatus) {
 	switch status {
 	case statusFail:
 		nv.Status = statusFail
@@ -67,14 +67,14 @@ type NetworkInterfacesModuleData struct {
 // Wraps NetworkInterfacesModuleData
 type NetworkInterfacesModuleResponse struct {
 	data       *NetworkInterfacesModuleData
-	status     checkStatus
-	moduleName string
+	status     CheckStatus
+	moduleName ModuleName
 	details    string
 	err        error
 }
 
-func (r *NetworkInterfacesModuleResponse) Status() checkStatus                { return r.status }
-func (r *NetworkInterfacesModuleResponse) ModuleName() string                 { return r.moduleName }
+func (r *NetworkInterfacesModuleResponse) Status() CheckStatus                { return r.status }
+func (r *NetworkInterfacesModuleResponse) ModuleName() ModuleName             { return r.moduleName }
 func (r *NetworkInterfacesModuleResponse) Details() string                    { return r.details }
 func (r *NetworkInterfacesModuleResponse) Error() error                       { return r.err }
 func (r *NetworkInterfacesModuleResponse) Data() *NetworkInterfacesModuleData { return r.data }
@@ -102,8 +102,8 @@ type NetworkInterfacesModule struct {
 	data *NetworkInterfacesModuleData
 }
 
-func (m *NetworkInterfacesModule) Name() string {
-	return "network_interfaces"
+func (m *NetworkInterfacesModule) Name() ModuleName {
+	return ModuleNameNetworkInterfaces
 }
 
 func (m *NetworkInterfacesModule) Description() string {

@@ -10,17 +10,17 @@ import (
 
 // OsModuleResponse implements HostCheckModuleResponse for OS validation
 type OsModuleResponse struct {
-	status     checkStatus
+	status     CheckStatus
 	IsRHCOS    bool
 	OSRelease  string
-	moduleName string
+	moduleName ModuleName
 	err        error
 }
 
-func (r *OsModuleResponse) Status() checkStatus { return r.status }
-func (r *OsModuleResponse) ModuleName() string  { return r.moduleName }
-func (r *OsModuleResponse) Details() string     { return r.OSRelease }
-func (r *OsModuleResponse) Error() error        { return r.err }
+func (r *OsModuleResponse) Status() CheckStatus    { return r.status }
+func (r *OsModuleResponse) ModuleName() ModuleName { return r.moduleName }
+func (r *OsModuleResponse) Details() string        { return r.OSRelease }
+func (r *OsModuleResponse) Error() error           { return r.err }
 func (r *OsModuleResponse) Map() map[string]interface{} {
 	return map[string]interface{}{
 		"Status":     r.status,
@@ -34,8 +34,8 @@ func (r *OsModuleResponse) Map() map[string]interface{} {
 // OSModule validates OS compatibility
 type OSModule struct{}
 
-func (m *OSModule) Name() string {
-	return "os"
+func (m *OSModule) Name() ModuleName {
+	return ModuleNameOs
 }
 
 func (m *OSModule) FriendlyName() string {

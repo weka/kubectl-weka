@@ -9,17 +9,17 @@ type WekaAgentServiceModuleModule struct{}
 
 // WekaAgentServiceModuleResponse implements HostCheckModuleResponse for Weka client validation
 type WekaAgentServiceModuleResponse struct {
-	status     checkStatus
+	status     CheckStatus
 	Clean      bool
 	Detail     string
-	moduleName string
+	moduleName ModuleName
 	err        error
 }
 
-func (r *WekaAgentServiceModuleResponse) Status() checkStatus { return r.status }
-func (r *WekaAgentServiceModuleResponse) ModuleName() string  { return r.moduleName }
-func (r *WekaAgentServiceModuleResponse) Details() string     { return r.Detail }
-func (r *WekaAgentServiceModuleResponse) Error() error        { return r.err }
+func (r *WekaAgentServiceModuleResponse) Status() CheckStatus    { return r.status }
+func (r *WekaAgentServiceModuleResponse) ModuleName() ModuleName { return r.moduleName }
+func (r *WekaAgentServiceModuleResponse) Details() string        { return r.Detail }
+func (r *WekaAgentServiceModuleResponse) Error() error           { return r.err }
 func (r *WekaAgentServiceModuleResponse) Map() map[string]interface{} {
 	return map[string]interface{}{
 		"Status":     r.status,
@@ -30,12 +30,12 @@ func (r *WekaAgentServiceModuleResponse) Map() map[string]interface{} {
 	}
 }
 
-func (m *WekaAgentServiceModuleModule) Name() string {
-	return "weka_client"
+func (m *WekaAgentServiceModuleModule) Name() ModuleName {
+	return ModuleNameWekaAgentService
 }
 
 func (m *WekaAgentServiceModuleModule) FriendlyName() string {
-	return "Weka Client"
+	return "Weka Agent Service Installation"
 }
 
 func (m *WekaAgentServiceModuleModule) Description() string {

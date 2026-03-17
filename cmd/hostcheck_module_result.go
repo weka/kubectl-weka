@@ -2,8 +2,8 @@ package cmd
 
 // HostCheckModuleResult represents the result of a single module validation
 type HostCheckModuleResult struct {
-	ModuleName                  string                  `json:"module_name"`
-	Status                      checkStatus             `json:"status"` // "success", "warning", "error"
+	ModuleName                  ModuleName              `json:"module_name"`
+	Status                      CheckStatus             `json:"status"` // "success", "warning", "error"
 	Data                        HostCheckModuleResponse `json:"data,omitempty"`
 	SuccessTemplate             string                  `json:"success_template,omitempty"`
 	WarningTemplate             string                  `json:"warning_template,omitempty"`

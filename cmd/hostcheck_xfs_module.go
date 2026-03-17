@@ -9,17 +9,17 @@ type XFSModule struct{}
 
 // XFSModuleResponse implements HostCheckModuleResponse for XFS validation
 type XFSModuleResponse struct {
-	status     checkStatus
+	status     CheckStatus
 	Found      bool
 	Detail     string
-	moduleName string
+	moduleName ModuleName
 	err        error
 }
 
-func (r *XFSModuleResponse) Status() checkStatus { return r.status }
-func (r *XFSModuleResponse) ModuleName() string  { return r.moduleName }
-func (r *XFSModuleResponse) Details() string     { return r.Detail }
-func (r *XFSModuleResponse) Error() error        { return r.err }
+func (r *XFSModuleResponse) Status() CheckStatus    { return r.status }
+func (r *XFSModuleResponse) ModuleName() ModuleName { return r.moduleName }
+func (r *XFSModuleResponse) Details() string        { return r.Detail }
+func (r *XFSModuleResponse) Error() error           { return r.err }
 func (r *XFSModuleResponse) Map() map[string]interface{} {
 	return map[string]interface{}{
 		"Status":     r.status,
@@ -30,8 +30,8 @@ func (r *XFSModuleResponse) Map() map[string]interface{} {
 	}
 }
 
-func (m *XFSModule) Name() string {
-	return "xfs"
+func (m *XFSModule) Name() ModuleName {
+	return ModuleNameXfs
 }
 
 func (m *XFSModule) FriendlyName() string {

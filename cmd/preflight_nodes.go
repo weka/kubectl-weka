@@ -42,14 +42,14 @@ func init() {
 
 }
 
-// checkStatus represents the overall status of node checks
-type checkStatus string
+// CheckStatus represents the overall status of node checks
+type CheckStatus string
 
 const (
-	statusPass    checkStatus = "✅ OK"
-	statusWarn    checkStatus = "⚠️ WARNING"
-	statusFail    checkStatus = "❌ FAILED"
-	statusSkipped checkStatus = "⏭️ SKIPPED (Node not ready)"
+	statusPass    CheckStatus = "✅ OK"
+	statusWarn    CheckStatus = "⚠️ WARNING"
+	statusFail    CheckStatus = "❌ FAILED"
+	statusSkipped CheckStatus = "⏭️ SKIPPED (Node not ready)"
 )
 
 func runPreflightNodes(cmd *cobra.Command, args []string) error {
@@ -177,12 +177,12 @@ func generatePreflightNodesOutput(
 	}
 	type NodeWarning struct {
 		NodeName string
-		Module   string
+		Module   ModuleName
 		Message  string
 	}
 	type NodeError struct {
 		NodeName string
-		Module   string
+		Module   ModuleName
 		Message  string
 		Fix      string
 	}
@@ -254,7 +254,7 @@ func generatePreflightNodesOutput(
 		}
 
 		var overallStatus string
-		var nodeStatus checkStatus
+		var nodeStatus CheckStatus
 		if hasError {
 			overallStatus = "failure"
 			nodeStatus = statusFail
@@ -381,12 +381,12 @@ func generatePreflightNodesOutput(
 
 		// Group errors by module (not by exact message)
 		type ErrorGroup struct {
-			Module       string
+			Module       ModuleName
 			Nodes        []string
 			Messages     []string
 			SuggestedFix string
 		}
-		errorGroups := make(map[string]*ErrorGroup)
+		errorGroups := make(map[ModuleName]*ErrorGroup)
 
 		for _, e := range allErrors {
 			// Use module name as the grouping key
@@ -419,10 +419,10 @@ func generatePreflightNodesOutput(
 			// Display the error with appropriate context
 			if allSame {
 				// All errors are identical - show the exact error
-				output.Printf("\n❌ %s: %s\n", red(group.Module), firstMsg)
+				output.Printf("\n❌ %s: %s\n", red(string(group.Module)), firstMsg)
 			} else {
 				// Errors differ - show it's a common issue with varying details
-				output.Printf("\n❌ %s: %s (values vary by node)\n", red(group.Module), firstMsg)
+				output.Printf("\n❌ %s: %s (values vary by node)\n", red(string(group.Module)), firstMsg)
 			}
 
 			output.Printf("   Affected nodes (%d): %s\n", len(group.Nodes), strings.Join(group.Nodes, ", "))
@@ -457,7 +457,7 @@ func printCheckResultToOutput(output *PreflightOutput, msg string, ok bool, deta
 }
 
 // printNodeValidationToOutput prints validation results to PreflightOutput
-func printNodeValidationToOutput(output *PreflightOutput, nodeName, category string, moduleResults map[string]*HostCheckModuleResult) {
+func printNodeValidationToOutput(output *PreflightOutput, nodeName, category string, moduleResults map[ModuleName]*HostCheckModuleResult) {
 	// Use the registry's FormatNodeValidationResults to get formatted output as string
 	formattedOutput, _ := GlobalHostCheckRegistry.FormatNodeValidationResults(nodeName, category, moduleResults)
 	// Write to our output instead of stdout

@@ -10,7 +10,7 @@ type WekaDirModule struct{}
 
 // WekaDirModuleResponse implements HostCheckModuleResponse for Weka directory validation
 type WekaDirModuleResponse struct {
-	status     checkStatus
+	status     CheckStatus
 	OK         bool
 	Path       string
 	Issue      string
@@ -19,14 +19,14 @@ type WekaDirModuleResponse struct {
 	MinFailGB  int64
 	MinWarnGB  int64
 	MinGB      int64
-	moduleName string
+	moduleName ModuleName
 	err        error
 }
 
-func (r *WekaDirModuleResponse) Status() checkStatus { return r.status }
-func (r *WekaDirModuleResponse) ModuleName() string  { return r.moduleName }
-func (r *WekaDirModuleResponse) Details() string     { return r.Issue }
-func (r *WekaDirModuleResponse) Error() error        { return r.err }
+func (r *WekaDirModuleResponse) Status() CheckStatus    { return r.status }
+func (r *WekaDirModuleResponse) ModuleName() ModuleName { return r.moduleName }
+func (r *WekaDirModuleResponse) Details() string        { return r.Issue }
+func (r *WekaDirModuleResponse) Error() error           { return r.err }
 func (r *WekaDirModuleResponse) Map() map[string]interface{} {
 	return map[string]interface{}{
 		"Status":     r.status,
@@ -43,8 +43,8 @@ func (r *WekaDirModuleResponse) Map() map[string]interface{} {
 	}
 }
 
-func (m *WekaDirModule) Name() string {
-	return "weka_dir"
+func (m *WekaDirModule) Name() ModuleName {
+	return ModuleNameWekaDirectory
 }
 
 func (m *WekaDirModule) FriendlyName() string {

@@ -499,7 +499,7 @@ func (r *HostCheckModuleRegistry) ValidateWithModules(
 	commandName string,
 	hostChecksMap HostChecksMap,
 	params map[string]interface{},
-) (map[string]map[string]*HostCheckModuleResult, error) {
+) (map[string]map[ModuleName]*HostCheckModuleResult, error) {
 
 	config, exists := r.GetCommand(commandName)
 	if !exists {
@@ -507,10 +507,10 @@ func (r *HostCheckModuleRegistry) ValidateWithModules(
 	}
 
 	// Results: map[nodeName]map[moduleName]*HostCheckModuleResult
-	results := make(map[string]map[string]*HostCheckModuleResult)
+	results := make(map[string]map[ModuleName]*HostCheckModuleResult)
 
 	for nodeName, hostCheck := range hostChecksMap {
-		nodeResults := make(map[string]*HostCheckModuleResult)
+		nodeResults := make(map[ModuleName]*HostCheckModuleResult)
 
 		for _, moduleName := range config.ModuleNames {
 			module, err := r.Get(moduleName)
@@ -553,7 +553,7 @@ func (r *HostCheckModuleRegistry) ValidateWithModules(
 
 			//// Extract status from the result data if provided
 			//if resultMap, ok := result; ok {
-			//	if statusVal, ok := resultMap["Status"].(checkStatus); ok {
+			//	if statusVal, ok := resultMap["Status"].(CheckStatus); ok {
 			//		resultStatus = statusVal
 			//	}
 			//}
@@ -591,7 +591,7 @@ func (r *HostCheckModuleRegistry) ValidateAll(
 	commandName string,
 	nodes []corev1.Node,
 	params map[string]interface{},
-) (map[string]map[string]*HostCheckModuleResult, error) {
+) (map[string]map[ModuleName]*HostCheckModuleResult, error) {
 
 	// Get hostchecks (cached or fresh)
 	hostChecksMap, err := r.GetHostChecksForNodes(ctx, nodes)
@@ -600,7 +600,7 @@ func (r *HostCheckModuleRegistry) ValidateAll(
 	}
 
 	if len(hostChecksMap) == 0 {
-		return make(map[string]map[string]*HostCheckModuleResult), nil
+		return make(map[string]map[ModuleName]*HostCheckModuleResult), nil
 	}
 
 	// Validate using registered modules with params
@@ -612,7 +612,7 @@ func (r *HostCheckModuleRegistry) ValidateAll(
 func (r *HostCheckModuleRegistry) FormatNodeValidationResults(
 	nodeName string,
 	commandName string,
-	moduleResults map[string]*HostCheckModuleResult,
+	moduleResults map[ModuleName]*HostCheckModuleResult,
 ) (string, string) {
 	var output strings.Builder
 
@@ -637,7 +637,7 @@ func (r *HostCheckModuleRegistry) FormatNodeValidationResults(
 
 	// Format each module result using Summary()
 	config, _ := r.GetCommand(commandName)
-	var checkOrder []string
+	var checkOrder []ModuleName
 	if config != nil {
 		checkOrder = config.ModuleNames
 	}

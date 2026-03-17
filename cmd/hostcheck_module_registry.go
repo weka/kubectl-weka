@@ -6,12 +6,26 @@ import (
 	"time"
 )
 
+type ModuleName string
+
+const (
+	ModuleNameOs                 ModuleName = "os"
+	ModuleNameKernel             ModuleName = "kernel"
+	ModuleNameCpuMemory          ModuleName = "cpu_memory"
+	ModuleNameWekaDirectory      ModuleName = "weka_dir"
+	ModuleNameXfs                ModuleName = "xfs"
+	ModuleNameWekaAgentService   ModuleName = "weka_agent_service"
+	ModuleNameNetworkInterfaces  ModuleName = "network_interfaces"
+	ModuleNameSourceBasedRouting ModuleName = "source_based_routing"
+	ModuleNameNVMeDrives         ModuleName = "nvme_drives"
+)
+
 // HostCheckModuleRegistry manages all available hostcheck modules
 // and command-specific validation configurations with caching
 type HostCheckModuleRegistry struct {
 	// Modules: available validation modules
-	modules map[string]HostCheckModule
-	order   []string // Preserve module registration order
+	modules map[ModuleName]HostCheckModule
+	order   []ModuleName // Preserve module registration order
 
 	// Command configs: which modules each command validates against
 	commands map[string]*CommandHostCheckConfig
@@ -28,8 +42,8 @@ type HostCheckModuleRegistry struct {
 // NewHostCheckModuleRegistry creates a new registry
 func NewHostCheckModuleRegistry() *HostCheckModuleRegistry {
 	registry := &HostCheckModuleRegistry{
-		modules:  make(map[string]HostCheckModule),
-		order:    []string{},
+		modules:  make(map[ModuleName]HostCheckModule),
+		order:    []ModuleName{},
 		commands: make(map[string]*CommandHostCheckConfig),
 	}
 	registry.cache.results = make(HostChecksMap)
@@ -53,25 +67,25 @@ func NewStandardModuleRegistry() *HostCheckModuleRegistry {
 	// Register command validation configurations
 	_ = registry.RegisterCommand(&CommandHostCheckConfig{
 		CommandName: "preflight_nodes",
-		ModuleNames: []string{
-			"os", "kernel", "cpu_memory", "weka_dir",
-			"xfs", "weka_client", "network_interfaces", "nvme_drives",
+		ModuleNames: []ModuleName{
+			ModuleNameOs, ModuleNameKernel, ModuleNameCpuMemory, ModuleNameWekaDirectory,
+			ModuleNameXfs, ModuleNameWekaAgentService, ModuleNameNetworkInterfaces, ModuleNameSourceBasedRouting, ModuleNameNVMeDrives,
 		},
 	})
 
 	_ = registry.RegisterCommand(&CommandHostCheckConfig{
 		CommandName: "plan_cluster",
-		ModuleNames: []string{"network_interfaces", "nvme_drives", "cpu_memory"},
+		ModuleNames: []ModuleName{ModuleNameCpuMemory, ModuleNameNetworkInterfaces, ModuleNameSourceBasedRouting, ModuleNameNVMeDrives},
 	})
 
 	_ = registry.RegisterCommand(&CommandHostCheckConfig{
 		CommandName: "plan_client",
-		ModuleNames: []string{"cpu_memory"},
+		ModuleNames: []ModuleName{ModuleNameCpuMemory, ModuleNameNetworkInterfaces, ModuleNameSourceBasedRouting, ModuleNameNVMeDrives},
 	})
 
 	_ = registry.RegisterCommand(&CommandHostCheckConfig{
 		CommandName: "plan_converged",
-		ModuleNames: []string{"network_interfaces", "nvme_drives", "cpu_memory"},
+		ModuleNames: []ModuleName{ModuleNameCpuMemory, ModuleNameNetworkInterfaces, ModuleNameSourceBasedRouting, ModuleNameNVMeDrives},
 	})
 
 	return registry
@@ -117,7 +131,7 @@ func (r *HostCheckModuleRegistry) GetCommand(commandName string) (*CommandHostCh
 }
 
 // GetRequiredModules returns the list of validation modules a command needs
-func (r *HostCheckModuleRegistry) GetRequiredModules(commandName string) []string {
+func (r *HostCheckModuleRegistry) GetRequiredModules(commandName string) []ModuleName {
 	config, exists := r.commands[commandName]
 	if !exists {
 		return nil
@@ -152,7 +166,7 @@ func (r *HostCheckModuleRegistry) GetCacheInfo() (nodeCount int, lastUpdated tim
 // ============================================================================
 
 // Get retrieves a module by name
-func (r *HostCheckModuleRegistry) Get(name string) (HostCheckModule, error) {
+func (r *HostCheckModuleRegistry) Get(name ModuleName) (HostCheckModule, error) {
 	module, exists := r.modules[name]
 	if !exists {
 		return nil, fmt.Errorf("hostcheck module '%s' not found", name)
@@ -161,8 +175,8 @@ func (r *HostCheckModuleRegistry) Get(name string) (HostCheckModule, error) {
 }
 
 // ListModules returns all registered module names in registration order
-func (r *HostCheckModuleRegistry) ListModules() []string {
-	result := make([]string, len(r.order))
+func (r *HostCheckModuleRegistry) ListModules() []ModuleName {
+	result := make([]ModuleName, len(r.order))
 	copy(result, r.order)
 	return result
 }

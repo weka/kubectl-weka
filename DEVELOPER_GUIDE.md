@@ -695,7 +695,7 @@ import (
 // ExampleHostCheckModule validates example node configuration
 type ExampleHostCheckModule struct{}
 
-func (m *ExampleHostCheckModule) Name() string {
+func (m *ExampleHostCheckModule) Name() ModuleName {
 	return "example_check"
 }
 
@@ -824,7 +824,7 @@ import (
 
 type ExampleClusterCheckModule struct{}
 
-func (m *ExampleClusterCheckModule) Name() string {
+func (m *ExampleClusterCheckModule) Name() ModuleName {
 	return "example_cluster_check"
 }
 
@@ -915,7 +915,7 @@ import (
 
 type ExampleClusterValidationModule struct{}
 
-func (m *ExampleClusterValidationModule) Name() string {
+func (m *ExampleClusterValidationModule) Name() ModuleName {
 	return "example_cluster_validation"
 }
 
@@ -1020,7 +1020,7 @@ type ExampleCollector struct {
 	ResourceName string // Optional: filter by resource name
 }
 
-func (c *ExampleCollector) Name() string {
+func (c *ExampleCollector) Name() ModuleName {
 	return "Example Data"
 }
 

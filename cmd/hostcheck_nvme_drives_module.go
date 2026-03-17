@@ -11,19 +11,19 @@ type NVMeDrivesModule struct{}
 
 // NVMeDrivesModuleResponse implements HostCheckModuleResponse for NVMe validation
 type NVMeDrivesModuleResponse struct {
-	status     checkStatus
+	status     CheckStatus
 	Detail     string
 	Drives     []NvmeDrive
 	DriveCount int
 	HasDrives  bool
-	moduleName string
+	moduleName ModuleName
 	err        error
 }
 
-func (r *NVMeDrivesModuleResponse) Status() checkStatus { return r.status }
-func (r *NVMeDrivesModuleResponse) ModuleName() string  { return r.moduleName }
-func (r *NVMeDrivesModuleResponse) Details() string     { return r.Detail }
-func (r *NVMeDrivesModuleResponse) Error() error        { return r.err }
+func (r *NVMeDrivesModuleResponse) Status() CheckStatus    { return r.status }
+func (r *NVMeDrivesModuleResponse) ModuleName() ModuleName { return r.moduleName }
+func (r *NVMeDrivesModuleResponse) Details() string        { return r.Detail }
+func (r *NVMeDrivesModuleResponse) Error() error           { return r.err }
 func (r *NVMeDrivesModuleResponse) Map() map[string]interface{} {
 	return map[string]interface{}{
 		"Status":     r.status,
@@ -36,8 +36,8 @@ func (r *NVMeDrivesModuleResponse) Map() map[string]interface{} {
 	}
 }
 
-func (m *NVMeDrivesModule) Name() string {
-	return "nvme_drives"
+func (m *NVMeDrivesModule) Name() ModuleName {
+	return ModuleNameNVMeDrives
 }
 
 func (m *NVMeDrivesModule) FriendlyName() string {

@@ -9,8 +9,8 @@ import (
 // CPUModule validates CPU and memory resources
 type CPUModule struct{}
 
-func (m *CPUModule) Name() string {
-	return "cpu_memory"
+func (m *CPUModule) Name() ModuleName {
+	return ModuleNameCpuMemory
 }
 
 func (m *CPUModule) FriendlyName() string {
@@ -39,7 +39,7 @@ func (m *CPUModule) SuggestedResolutionTemplate() string {
 
 // CPUModuleResponse implements HostCheckModuleResult for CPU validation
 type CPUModuleResponse struct {
-	status          checkStatus
+	status          CheckStatus
 	Detail          string
 	Warning         string
 	HTEnabled       bool
@@ -52,14 +52,14 @@ type CPUModuleResponse struct {
 	CPUFamily       string
 	CPUArch         string
 	CPUSockets      int
-	moduleName      string
+	moduleName      ModuleName
 	err             error
 }
 
-func (r *CPUModuleResponse) Status() checkStatus { return r.status }
-func (r *CPUModuleResponse) ModuleName() string  { return r.moduleName }
-func (r *CPUModuleResponse) Details() string     { return r.Detail }
-func (r *CPUModuleResponse) Error() error        { return r.err }
+func (r *CPUModuleResponse) Status() CheckStatus    { return r.status }
+func (r *CPUModuleResponse) ModuleName() ModuleName { return r.moduleName }
+func (r *CPUModuleResponse) Details() string        { return r.Detail }
+func (r *CPUModuleResponse) Error() error           { return r.err }
 func (r *CPUModuleResponse) Map() map[string]interface{} {
 	return map[string]interface{}{
 		"Status":          r.status,

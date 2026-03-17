@@ -8,16 +8,16 @@ type KernelModule struct{}
 
 // KernelModuleResponse implements HostCheckModuleResponse for kernel validation
 type KernelModuleResponse struct {
-	status        checkStatus
+	status        CheckStatus
 	KernelVersion string
-	moduleName    string
+	moduleName    ModuleName
 	err           error
 }
 
-func (r *KernelModuleResponse) Status() checkStatus { return r.status }
-func (r *KernelModuleResponse) ModuleName() string  { return r.moduleName }
-func (r *KernelModuleResponse) Details() string     { return r.KernelVersion }
-func (r *KernelModuleResponse) Error() error        { return r.err }
+func (r *KernelModuleResponse) Status() CheckStatus    { return r.status }
+func (r *KernelModuleResponse) ModuleName() ModuleName { return r.moduleName }
+func (r *KernelModuleResponse) Details() string        { return r.KernelVersion }
+func (r *KernelModuleResponse) Error() error           { return r.err }
 func (r *KernelModuleResponse) Map() map[string]interface{} {
 	return map[string]interface{}{
 		"Status":        r.status,
@@ -27,8 +27,8 @@ func (r *KernelModuleResponse) Map() map[string]interface{} {
 	}
 }
 
-func (m *KernelModule) Name() string {
-	return "kernel"
+func (m *KernelModule) Name() ModuleName {
+	return ModuleNameKernel
 }
 
 func (m *KernelModule) FriendlyName() string {

@@ -567,8 +567,8 @@ func GetPodRestartMetrics(pod *v1.Pod) PodRestartMetrics {
 
 // extractFriendlyName is a helper function just for sake of representation
 // gives a better name to module so it can be later embedded in node status checks
-func extractFriendlyName(moduleName string) string {
-	friendlyName := moduleName
+func extractFriendlyName(moduleName ModuleName) string {
+	friendlyName := string(moduleName)
 	switch moduleName {
 	case "os":
 		friendlyName = "Operating System"

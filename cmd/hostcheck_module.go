@@ -12,7 +12,7 @@ import (
 // HostCheckModule defines the interface for a hostcheck validation module
 type HostCheckModule interface {
 	// Name returns the unique name of this module
-	Name() string
+	Name() ModuleName
 
 	// Validate performs the validation and returns results
 	// Receives the pod output and should extract/parse what it needs
@@ -68,7 +68,7 @@ type CommandHostCheckConfig struct {
 	// ModuleNames lists the validation modules to run on hostcheck results
 	// e.g., ["network", "nvme_drives", "cpu_memory"]
 	// The hostcheck data is always the same - only validation differs
-	ModuleNames []string
+	ModuleNames []ModuleName
 }
 
 // ============================================================================
@@ -78,7 +78,7 @@ type CommandHostCheckConfig struct {
 // HostCheckModuleStub is a placeholder for future module implementations
 // This is part of the public API and can be used to create custom hostcheck modules
 type HostCheckModuleStub struct {
-	name               string
+	name               ModuleName
 	description        string
 	errorTemplate      string
 	resolutionTemplate string
@@ -87,14 +87,14 @@ type HostCheckModuleStub struct {
 // NewHostCheckModuleStub creates a new stub module
 // This is part of the public API and will be used by custom hostcheck module implementations
 // nolint:unused
-func NewHostCheckModuleStub(name, description string) *HostCheckModuleStub {
+func NewHostCheckModuleStub(name ModuleName, description string) *HostCheckModuleStub {
 	return &HostCheckModuleStub{
 		name:        name,
 		description: description,
 	}
 }
 
-func (m *HostCheckModuleStub) Name() string {
+func (m *HostCheckModuleStub) Name() ModuleName {
 	return m.name
 }
 
@@ -114,8 +114,8 @@ func (m *HostCheckModuleStub) SuggestedResolutionTemplate() string {
 // All modules must return a value implementing this interface
 // Example fields: Status, ModuleName, Details, Error, etc.
 type HostCheckModuleResponse interface {
-	Status() checkStatus
-	ModuleName() string
+	Status() CheckStatus
+	ModuleName() ModuleName
 	Details() string
 	Error() error
 	Map() map[string]interface{}
@@ -125,16 +125,16 @@ type HostCheckModuleResponse interface {
 // Can be used by stub and custom modules
 // Extend as needed for real modules
 type BasicHostCheckModuleResponse struct {
-	status     checkStatus
-	moduleName string
+	status     CheckStatus
+	moduleName ModuleName
 	details    string
 	err        error
 }
 
-func (r *BasicHostCheckModuleResponse) Status() checkStatus { return r.status }
-func (r *BasicHostCheckModuleResponse) ModuleName() string  { return r.moduleName }
-func (r *BasicHostCheckModuleResponse) Details() string     { return r.details }
-func (r *BasicHostCheckModuleResponse) Error() error        { return r.err }
+func (r *BasicHostCheckModuleResponse) Status() CheckStatus    { return r.status }
+func (r *BasicHostCheckModuleResponse) ModuleName() ModuleName { return r.moduleName }
+func (r *BasicHostCheckModuleResponse) Details() string        { return r.details }
+func (r *BasicHostCheckModuleResponse) Error() error           { return r.err }
 func (r *BasicHostCheckModuleResponse) Map() map[string]interface{} {
 	return map[string]interface{}{
 		"Status":     r.status,
@@ -157,8 +157,3 @@ func (m *HostCheckModuleStub) Validate(podOutput string) (HostCheckModuleRespons
 func (m *HostCheckModuleStub) ValidateWithParams(podOutput string, params map[string]interface{}) (HostCheckModuleResponse, error) {
 	return m.Validate(podOutput)
 }
-
-// ============================================================================
-// Note: Aggregation functionality is now provided by the merged registry's
-// ValidateAll() and ValidateWithModules() methods
-// ============================================================================
