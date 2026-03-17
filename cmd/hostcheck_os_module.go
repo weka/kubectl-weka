@@ -105,7 +105,42 @@ func (m *OSModule) Validate(podOutput string) (HostCheckModuleResponse, error) {
 		osDisplay = "Unknown OS"
 	}
 
-	status := statusPass // Always pass unless parsing fails
+	// Check if OS is supported by Weka
+	// Weka requires Linux-based distributions
+	status := statusFail // Default to fail unless we can confirm it's supported
+
+	supportedPatterns := map[string]bool{
+		"ubuntu":    true,
+		"rhel":      true,
+		"centos":    true,
+		"rhcos":     true,
+		"rocky":     true,
+		"almalinux": true,
+		"fedora":    true,
+		"debian":    true,
+		"opensuse":  true,
+		"sles":      true,
+		"amzn":      true, // Amazon Linux
+	}
+
+	// Check against known supported OS names
+	lowerName := strings.ToLower(name)
+	lowerPretty := strings.ToLower(prettyName)
+	lowerRelease := strings.ToLower(hc.OSRelease)
+
+	for pattern := range supportedPatterns {
+		if strings.Contains(lowerName, pattern) ||
+			strings.Contains(lowerPretty, pattern) ||
+			strings.Contains(lowerRelease, pattern) {
+			status = statusPass
+			break
+		}
+	}
+
+	// RHCOS detection
+	if hc.IsRHCOS {
+		status = statusPass
+	}
 
 	return &OsModuleResponse{
 		status:     status,
@@ -120,3 +155,5 @@ func (m *OSModule) Validate(podOutput string) (HostCheckModuleResponse, error) {
 func (m *OSModule) ValidateWithParams(podOutput string, params map[string]interface{}) (HostCheckModuleResponse, error) {
 	return m.Validate(podOutput)
 }
+
+// TODO: need to add actual FAR support for OS version...
