@@ -446,13 +446,270 @@ var NICRegistry = map[string]*NICInfo{
 		MinSupportedWekaVersion: "",
 		MaxSupportedWekaVersion: "",
 	},
-	"0x18ca:0x00e5": {
+	"18ca:00e5": {
 		VendorID:                "18ca",
 		DeviceID:                "00e5",
 		Vendor:                  "Google",
 		ShortModel:              "gVNIC",
 		Model:                   "Google Virtual NIC",
 		Speed:                   "50Gb/s",
+		NumPorts:                1,
+		InterfaceMode:           "Ethernet",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// ========================================================================
+	// TEST DEVICES - Comprehensive capability coverage for unit tests
+	// ========================================================================
+	// These devices are used for testing all combinations of capabilities
+
+	// Test Device 1: UDP=T, DPDK=T (SingleNic), SameCard=T, DiffCard=T
+	"ffff:0001": {
+		VendorID:                "ffff",
+		DeviceID:                "0001",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-FullSupport",
+		Model:                   "Test Device: Full Support (UDP, DPDK SingleNic, LACP)",
+		Speed:                   "100Gb/s",
+		NumPorts:                2,
+		InterfaceMode:           "Converged",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 2: UDP=T, DPDK=T (SingleNic), SameCard=T, DiffCard=F
+	"ffff:0002": {
+		VendorID:                "ffff",
+		DeviceID:                "0002",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-SingleNicSameCard",
+		Model:                   "Test Device: SingleNic+SameCard (no DiffCard)",
+		Speed:                   "50Gb/s",
+		NumPorts:                2,
+		InterfaceMode:           "Ethernet",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 3: UDP=T, DPDK=T (SingleNic), SameCard=F
+	"ffff:0003": {
+		VendorID:                "ffff",
+		DeviceID:                "0003",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-SingleNicNoLACP",
+		Model:                   "Test Device: SingleNic no LACP",
+		Speed:                   "25Gb/s",
+		NumPorts:                1,
+		InterfaceMode:           "Ethernet",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 4: UDP=T, DPDK=T (PerProcess), SameCard=T, DiffCard=T
+	"ffff:0004": {
+		VendorID:                "ffff",
+		DeviceID:                "0004",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-PerProcessLACP",
+		Model:                   "Test Device: PerProcess DPDK with LACP",
+		Speed:                   "100Gb/s",
+		NumPorts:                2,
+		InterfaceMode:           "InfiniBand",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 5: UDP=T, DPDK=T (PerProcess), SameCard=T, DiffCard=F
+	"ffff:0005": {
+		VendorID:                "ffff",
+		DeviceID:                "0005",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-PerProcessSameCard",
+		Model:                   "Test Device: PerProcess SameCard (no DiffCard)",
+		Speed:                   "50Gb/s",
+		NumPorts:                2,
+		InterfaceMode:           "Converged",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 6: UDP=T, DPDK=T (PerProcess), SameCard=F
+	"ffff:0006": {
+		VendorID:                "ffff",
+		DeviceID:                "0006",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-PerProcessNoLACP",
+		Model:                   "Test Device: PerProcess no LACP",
+		Speed:                   "25Gb/s",
+		NumPorts:                1,
+		InterfaceMode:           "Ethernet",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 7: UDP=T, DPDK=F, SameCard=T, DiffCard=T
+	"ffff:0007": {
+		VendorID:                "ffff",
+		DeviceID:                "0007",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-UDPOnlyLACP",
+		Model:                   "Test Device: UDP only with LACP",
+		Speed:                   "10Gb/s",
+		NumPorts:                2,
+		InterfaceMode:           "Ethernet",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 8: UDP=T, DPDK=F, SameCard=T, DiffCard=F
+	"ffff:0008": {
+		VendorID:                "ffff",
+		DeviceID:                "0008",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-UDPSameCard",
+		Model:                   "Test Device: UDP SameCard",
+		Speed:                   "10Gb/s",
+		NumPorts:                2,
+		InterfaceMode:           "Ethernet",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 9: UDP=T, DPDK=F, SameCard=F
+	"ffff:0009": {
+		VendorID:                "ffff",
+		DeviceID:                "0009",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-UDPOnly",
+		Model:                   "Test Device: UDP only no LACP",
+		Speed:                   "10Gb/s",
+		NumPorts:                1,
+		InterfaceMode:           "Ethernet",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 10: UDP=F, DPDK=T (SingleNic), SameCard=T, DiffCard=T
+	"ffff:000a": {
+		VendorID:                "ffff",
+		DeviceID:                "000a",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-DPDKOnly",
+		Model:                   "Test Device: DPDK SingleNic only (no UDP)",
+		Speed:                   "100Gb/s",
+		NumPorts:                2,
+		InterfaceMode:           "InfiniBand",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 11: UDP=F, DPDK=T (SingleNic), SameCard=T, DiffCard=F
+	"ffff:000b": {
+		VendorID:                "ffff",
+		DeviceID:                "000b",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-DPDKSingleNic",
+		Model:                   "Test Device: DPDK SingleNic SameCard",
+		Speed:                   "50Gb/s",
+		NumPorts:                2,
+		InterfaceMode:           "Converged",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 12: UDP=F, DPDK=T (SingleNic), SameCard=F
+	"ffff:000c": {
+		VendorID:                "ffff",
+		DeviceID:                "000c",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-DPDKNoLACP",
+		Model:                   "Test Device: DPDK SingleNic no LACP",
+		Speed:                   "25Gb/s",
+		NumPorts:                1,
+		InterfaceMode:           "Ethernet",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 13: UDP=F, DPDK=T (PerProcess), SameCard=T, DiffCard=T
+	"ffff:000d": {
+		VendorID:                "ffff",
+		DeviceID:                "000d",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-DPDKPerProcess",
+		Model:                   "Test Device: DPDK PerProcess with LACP",
+		Speed:                   "100Gb/s",
+		NumPorts:                2,
+		InterfaceMode:           "InfiniBand",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 14: UDP=F, DPDK=T (PerProcess), SameCard=T, DiffCard=F
+	"ffff:000e": {
+		VendorID:                "ffff",
+		DeviceID:                "000e",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-DPDKPerProcessSameCard",
+		Model:                   "Test Device: DPDK PerProcess SameCard",
+		Speed:                   "50Gb/s",
+		NumPorts:                2,
+		InterfaceMode:           "Converged",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 15: UDP=F, DPDK=T (PerProcess), SameCard=F
+	"ffff:000f": {
+		VendorID:                "ffff",
+		DeviceID:                "000f",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-DPDKPerProcessNoLACP",
+		Model:                   "Test Device: DPDK PerProcess no LACP",
+		Speed:                   "25Gb/s",
+		NumPorts:                1,
+		InterfaceMode:           "Ethernet",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 16: UDP=F, DPDK=F, SameCard=T, DiffCard=T
+	"ffff:0010": {
+		VendorID:                "ffff",
+		DeviceID:                "0010",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-NoSupport",
+		Model:                   "Test Device: No Weka Support (LACP only)",
+		Speed:                   "1Gb/s",
+		NumPorts:                2,
+		InterfaceMode:           "Ethernet",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 17: UDP=F, DPDK=F, SameCard=T, DiffCard=F
+	"ffff:0011": {
+		VendorID:                "ffff",
+		DeviceID:                "0011",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-NoSupportSameCard",
+		Model:                   "Test Device: No Support SameCard",
+		Speed:                   "1Gb/s",
+		NumPorts:                2,
+		InterfaceMode:           "Ethernet",
+		MinSupportedWekaVersion: "",
+		MaxSupportedWekaVersion: "",
+	},
+
+	// Test Device 18: UDP=F, DPDK=F, SameCard=F
+	"ffff:0012": {
+		VendorID:                "ffff",
+		DeviceID:                "0012",
+		Vendor:                  "TestVendor",
+		ShortModel:              "TestNIC-Unsupported",
+		Model:                   "Test Device: Completely Unsupported",
+		Speed:                   "1Gb/s",
 		NumPorts:                1,
 		InterfaceMode:           "Ethernet",
 		MinSupportedWekaVersion: "",
@@ -627,6 +884,172 @@ var NICCapabilityMap = map[string]*NICCapabilities{
 		SupportedByWekaDpdk:             true,
 		SupportedByWekaDpdkSingleNic:    false,
 		SupportedByWekaUdp:              true,
+		SupportedByWekaForLacpSameCard:  false,
+		SupportedByWekaForLacpDiffCards: false,
+	},
+
+	// ========================================================================
+	// TEST DEVICES - Capability Matrix (18 devices covering all combinations)
+	// ========================================================================
+
+	// Device 1: UDP=T, DPDK=T (SingleNic), SameCard=T, DiffCard=T
+	"ffff:0001": {
+		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdkSingleNic:    true,
+		SupportedByWekaUdp:              true,
+		SupportedByWekaForLacpSameCard:  true,
+		SupportedByWekaForLacpDiffCards: true,
+	},
+
+	// Device 2: UDP=T, DPDK=T (SingleNic), SameCard=T, DiffCard=F
+	"ffff:0002": {
+		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdkSingleNic:    true,
+		SupportedByWekaUdp:              true,
+		SupportedByWekaForLacpSameCard:  true,
+		SupportedByWekaForLacpDiffCards: false,
+	},
+
+	// Device 3: UDP=T, DPDK=T (SingleNic), SameCard=F
+	"ffff:0003": {
+		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdkSingleNic:    true,
+		SupportedByWekaUdp:              true,
+		SupportedByWekaForLacpSameCard:  false,
+		SupportedByWekaForLacpDiffCards: false,
+	},
+
+	// Device 4: UDP=T, DPDK=T (PerProcess), SameCard=T, DiffCard=T
+	"ffff:0004": {
+		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdkSingleNic:    false,
+		SupportedByWekaUdp:              true,
+		SupportedByWekaForLacpSameCard:  true,
+		SupportedByWekaForLacpDiffCards: true,
+	},
+
+	// Device 5: UDP=T, DPDK=T (PerProcess), SameCard=T, DiffCard=F
+	"ffff:0005": {
+		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdkSingleNic:    false,
+		SupportedByWekaUdp:              true,
+		SupportedByWekaForLacpSameCard:  true,
+		SupportedByWekaForLacpDiffCards: false,
+	},
+
+	// Device 6: UDP=T, DPDK=T (PerProcess), SameCard=F
+	"ffff:0006": {
+		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdkSingleNic:    false,
+		SupportedByWekaUdp:              true,
+		SupportedByWekaForLacpSameCard:  false,
+		SupportedByWekaForLacpDiffCards: false,
+	},
+
+	// Device 7: UDP=T, DPDK=F, SameCard=T, DiffCard=T
+	"ffff:0007": {
+		SupportedByWekaDpdk:             false,
+		SupportedByWekaDpdkSingleNic:    false,
+		SupportedByWekaUdp:              true,
+		SupportedByWekaForLacpSameCard:  true,
+		SupportedByWekaForLacpDiffCards: true,
+	},
+
+	// Device 8: UDP=T, DPDK=F, SameCard=T, DiffCard=F
+	"ffff:0008": {
+		SupportedByWekaDpdk:             false,
+		SupportedByWekaDpdkSingleNic:    false,
+		SupportedByWekaUdp:              true,
+		SupportedByWekaForLacpSameCard:  true,
+		SupportedByWekaForLacpDiffCards: false,
+	},
+
+	// Device 9: UDP=T, DPDK=F, SameCard=F
+	"ffff:0009": {
+		SupportedByWekaDpdk:             false,
+		SupportedByWekaDpdkSingleNic:    false,
+		SupportedByWekaUdp:              true,
+		SupportedByWekaForLacpSameCard:  false,
+		SupportedByWekaForLacpDiffCards: false,
+	},
+
+	// Device 10: UDP=F, DPDK=T (SingleNic), SameCard=T, DiffCard=T
+	"ffff:000a": {
+		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdkSingleNic:    true,
+		SupportedByWekaUdp:              false,
+		SupportedByWekaForLacpSameCard:  true,
+		SupportedByWekaForLacpDiffCards: true,
+	},
+
+	// Device 11: UDP=F, DPDK=T (SingleNic), SameCard=T, DiffCard=F
+	"ffff:000b": {
+		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdkSingleNic:    true,
+		SupportedByWekaUdp:              false,
+		SupportedByWekaForLacpSameCard:  true,
+		SupportedByWekaForLacpDiffCards: false,
+	},
+
+	// Device 12: UDP=F, DPDK=T (SingleNic), SameCard=F
+	"ffff:000c": {
+		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdkSingleNic:    true,
+		SupportedByWekaUdp:              false,
+		SupportedByWekaForLacpSameCard:  false,
+		SupportedByWekaForLacpDiffCards: false,
+	},
+
+	// Device 13: UDP=F, DPDK=T (PerProcess), SameCard=T, DiffCard=T
+	"ffff:000d": {
+		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdkSingleNic:    false,
+		SupportedByWekaUdp:              false,
+		SupportedByWekaForLacpSameCard:  true,
+		SupportedByWekaForLacpDiffCards: true,
+	},
+
+	// Device 14: UDP=F, DPDK=T (PerProcess), SameCard=T, DiffCard=F
+	"ffff:000e": {
+		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdkSingleNic:    false,
+		SupportedByWekaUdp:              false,
+		SupportedByWekaForLacpSameCard:  true,
+		SupportedByWekaForLacpDiffCards: false,
+	},
+
+	// Device 15: UDP=F, DPDK=T (PerProcess), SameCard=F
+	"ffff:000f": {
+		SupportedByWekaDpdk:             true,
+		SupportedByWekaDpdkSingleNic:    false,
+		SupportedByWekaUdp:              false,
+		SupportedByWekaForLacpSameCard:  false,
+		SupportedByWekaForLacpDiffCards: false,
+	},
+
+	// Device 16: UDP=F, DPDK=F, SameCard=T, DiffCard=T
+	"ffff:0010": {
+		SupportedByWekaDpdk:             false,
+		SupportedByWekaDpdkSingleNic:    false,
+		SupportedByWekaUdp:              false,
+		SupportedByWekaForLacpSameCard:  true,
+		SupportedByWekaForLacpDiffCards: true,
+	},
+
+	// Device 17: UDP=F, DPDK=F, SameCard=T, DiffCard=F
+	"ffff:0011": {
+		SupportedByWekaDpdk:             false,
+		SupportedByWekaDpdkSingleNic:    false,
+		SupportedByWekaUdp:              false,
+		SupportedByWekaForLacpSameCard:  true,
+		SupportedByWekaForLacpDiffCards: false,
+	},
+
+	// Device 18: UDP=F, DPDK=F, SameCard=F
+	"ffff:0012": {
+		SupportedByWekaDpdk:             false,
+		SupportedByWekaDpdkSingleNic:    false,
+		SupportedByWekaUdp:              false,
 		SupportedByWekaForLacpSameCard:  false,
 		SupportedByWekaForLacpDiffCards: false,
 	},
