@@ -63,6 +63,7 @@ func NewStandardModuleRegistry() *HostCheckModuleRegistry {
 	_ = registry.RegisterModule(&KernelModule{})
 	_ = registry.RegisterModule(&NVMeDrivesModule{})
 	_ = registry.RegisterModule(&NetworkInterfacesModule{})
+	_ = registry.RegisterModule(&SourceBasedRoutingModule{})
 
 	// Register command validation configurations
 	_ = registry.RegisterCommand(&CommandHostCheckConfig{

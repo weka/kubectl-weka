@@ -14,6 +14,9 @@ type HostCheckModule interface {
 	// Name returns the unique name of this module
 	Name() ModuleName
 
+	// FriendlyName returns a human-friendly name of the module for printing in reports
+	FriendlyName() string
+
 	// Validate performs the validation and returns results
 	// Receives the pod output and should extract/parse what it needs
 	Validate(podOutput string) (HostCheckModuleResponse, error)

@@ -106,6 +106,10 @@ func (m *NetworkInterfacesModule) Name() ModuleName {
 	return ModuleNameNetworkInterfaces
 }
 
+func (m *NetworkInterfacesModule) FriendlyName() string {
+	return "Network Interfaces Configuration"
+}
+
 func (m *NetworkInterfacesModule) Description() string {
 	return "Validates network interfaces for Weka compatibility (DPDK, UDP, or unsupported)"
 }
