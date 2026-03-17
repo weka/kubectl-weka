@@ -4,6 +4,15 @@
 
 ### Features
 
+* **Unified Output Format Flags** – All `kubectl weka get` commands now use standard `-o/--output` flag:
+  * Replaces previous `--wide` boolean flag across all get subcommands
+  * Supports multiple output formats: `table` (default), `wide`, `json`, `yaml`, `custom-columns=<COLS...>`
+  * Consistent with native `kubectl` command behavior
+  * Implemented via unified ResourcePrinter abstraction
+  * Affected commands: `get nodes`, `get cluster-instances`, `get client-instances`, `get csi-instances`, `get csi-drivers`, `get csi-secrets`
+  * Column visibility now controlled by `VisibleInWide` attribute in TableColumn definitions
+  * See [OUTPUT_FLAG_REFACTORING.md](OUTPUT_FLAG_REFACTORING.md) for migration details
+
 * **Extended Hostcheck Information** – Comprehensive network and storage device data:
   * Generic network interface collection: Ethernet and InfiniBand interfaces
   * Network traffic metrics: bytes/packets in/out, errors, drops, collisions, overruns, CRC errors

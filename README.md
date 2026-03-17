@@ -350,7 +350,7 @@ kubectl weka get cluster-instances [CLUSTER_NAME] [flags]
 **Flags:**
 - `-n, --namespace <string>` – Kubernetes namespace (default: current namespace)
 - `-A, --all-namespaces` – List instances across all namespaces
-- `--wide` – Show additional columns (AGE, CPU_UTIL)
+- `-o, --output <string>` – Output format: `table` (default), `wide`, `json`, `yaml`, or `custom-columns=<COLS...>`
 - `--no-headers` – Don't print headers
 
 **Output Columns:**
@@ -362,8 +362,8 @@ kubectl weka get cluster-instances [CLUSTER_NAME] [flags]
 - `POD` – Pod phase (Running, Pending, etc.)
 - `MGMT_IP` – Management IP address
 - `CONTAINER_ID` – WEKA container ID
-- `AGE` – Age of WekaContainer (with `--wide`)
-- `CPU_UTIL` – CPU utilization (with `--wide`)
+- `AGE` – Age of WekaContainer (with `-o wide`)
+- `CPU_UTIL` – CPU utilization (with `-o wide`)
 
 **Examples:**
 ```bash
@@ -376,8 +376,14 @@ kubectl weka get cluster-instances weka01
 # List across all namespaces
 kubectl weka get cluster-instances -A
 
-# Show additional details
-kubectl weka get cluster-instances --wide
+# Show additional details (wide format)
+kubectl weka get cluster-instances -o wide
+
+# JSON output
+kubectl weka get cluster-instances -o json
+
+# YAML output
+kubectl weka get cluster-instances -o yaml
 ```
 
 ---
@@ -394,7 +400,7 @@ kubectl weka get client-instances [CLIENT_NAME] [flags]
 **Flags:**
 - `-n, --namespace <string>` – Kubernetes namespace
 - `-A, --all-namespaces` – List across all namespaces
-- `--wide` – Show additional columns
+- `-o, --output <string>` – Output format: `table` (default), `wide`, `json`, `yaml`, or `custom-columns=<COLS...>`
 - `--no-headers` – Don't print headers
 
 **Output Columns:**
@@ -403,12 +409,14 @@ kubectl weka get client-instances [CLIENT_NAME] [flags]
 - `NAMESPACE` – Kubernetes namespace (with `-A`)
 - `WEKACONTAINER` – WekaContainer instance name
 - `WC_STATUS` – Container status
-- `POD` – Pod phase
+- `POD_STATUS` – Pod phase
 - `JOINED` – Whether client has joined cluster
 - `CONTAINER_ID` – WEKA container ID
-- `MGMT_IP` – Management IP
+- `MGMT_IPS` – All management IPs (with `-o wide`)
+- `MGMT_IP` – Primary management IP
 - `ACTIVE_MOUNTS` – Number of active mounts
-- `CPU_UTIL` – CPU usage (with `--wide`)
+- `CPU_UTIL` – CPU usage
+- `NODE_SELECTOR` – Node selector labels (with `-o wide`)
 
 **Examples:**
 ```bash
@@ -419,7 +427,13 @@ kubectl weka get client-instances
 kubectl weka get client-instances weka01-clients
 
 # All namespaces with details
-kubectl weka get client-instances -A --wide
+kubectl weka get client-instances -A -o wide
+
+# JSON output
+kubectl weka get client-instances -o json
+
+# YAML output
+kubectl weka get client-instances -o yaml
 ```
 
 ---
@@ -435,7 +449,7 @@ kubectl weka get nodes [flags]
 
 **Flags:**
 - `--node-selector <label>=<value>` – Filter nodes by label selector (e.g., `role=storage`, `weka.io/supports-backends=true`)
-- `--wide` – Show additional resource columns (allocatable and allocated resources)
+- `-o, --output <string>` – Output format: `table` (default), `wide`, `json`, `yaml`, or `custom-columns=<COLS...>`
 - `--no-headers` – Don't print table headers
 
 **Output Columns:**
@@ -453,7 +467,7 @@ kubectl weka get nodes [flags]
 - `CLTROLE` – Client role label value
 - `BKNDROLE` – Backend role label value
 
-**Wide Output Adds:**
+**Wide Output Adds (with `-o wide`):**
 - `HP_ALLOCATABLE`, `HP_ALLOCATED` – Hugepages allocation info
 - `CORES_ALLOCATABLE`, `CORES_ALLOCATED` – CPU allocation info
 - `RAM_ALLOCATABLE`, `RAM_ALLOCATED` – Memory allocation info
@@ -467,7 +481,13 @@ kubectl weka get nodes
 kubectl weka get nodes --node-selector role=storage
 
 # Show wide output
-kubectl weka get nodes --wide
+kubectl weka get nodes -o wide
+
+# JSON output
+kubectl weka get nodes -o json
+
+# YAML output
+kubectl weka get nodes -o yaml
 
 # No headers (for scripting)
 kubectl weka get nodes --no-headers
@@ -513,7 +533,7 @@ kubectl weka get csi-drivers [DRIVER_NAME] [flags]
 **Flags:**
 - `--only-helm` – Show only CSI drivers installed via Helm chart (label: `app.kubernetes.io/managed-by=Helm`)
 - `--only-operator` – Show only CSI drivers installed by Weka operator (label: `app.kubernetes.io/created-by=weka-operator`)
-- `--wide, -w` – Show additional columns (PVs, PVCs, Bound PVs)
+- `-o, --output <string>` – Output format: `table` (default), `wide`, `json`, `yaml`, or `custom-columns=<COLS...>`
 
 **Output Columns (Default):**
 - `CSI DRIVER` – CSI driver name (e.g., `weka.io`, `weka-csi.weka.io`)
@@ -524,7 +544,7 @@ kubectl weka get csi-drivers [DRIVER_NAME] [flags]
 - `STORAGECLASSES` – Number of StorageClasses that refer to this driver
 - `AGE` – Time since CSI driver was installed
 
-**Output Columns (Wide: `--wide`):**
+**Output Columns (Wide: `-o wide`):**
 - All default columns, plus:
 - `PVS` – Total number of PersistentVolumes using this CSI driver
 - `PVCS` – Total number of PersistentVolumeClaims using this CSI driver
@@ -540,8 +560,7 @@ kubectl weka get csi-drivers weka.io
 kubectl weka get csi-drivers weka-csi.weka.io
 
 # Show drivers with storage usage details
-kubectl weka get csi-drivers --wide
-kubectl weka get csi-drivers -w
+kubectl weka get csi-drivers -o wide
 
 # Show only Helm-installed drivers
 kubectl weka get csi-drivers --only-helm
@@ -550,10 +569,16 @@ kubectl weka get csi-drivers --only-helm
 kubectl weka get csi-drivers --only-operator
 
 # Specific driver with wide format
-kubectl weka get csi-drivers weka.io --wide
+kubectl weka get csi-drivers weka.io -o wide
 
-# Filter by installation method
-kubectl weka get csi-drivers --only-helm --wide
+# Filter by installation method with wide format
+kubectl weka get csi-drivers --only-helm -o wide
+
+# JSON output
+kubectl weka get csi-drivers -o json
+
+# YAML output
+kubectl weka get csi-drivers -o yaml
 ```
 
 **Example Output (Default):**
@@ -607,8 +632,8 @@ kubectl weka get csi-instances [DRIVER_NAME] [flags]
 **Flags:**
 - `-n, --namespace <string>` – Filter by Kubernetes namespace (shows all namespaces if not set)
 - `-r, --role <string>` – Filter by pod role: `controller` or `node` (shows both if not set)
-- `-w, --wide` – Show additional column: last restart time
-- `--unhealthy` – Show only pods with frequent restarts (more than 1 restart in the last 5 minutes)
+- `-o, --output <string>` – Output format: `table` (default), `wide`, `json`, `yaml`, or `custom-columns=<COLS...>`
+- `--unhealthy` – Show only pods with frequent restarts (>1 restart in last 5 minutes)
 
 **Output Columns (Default):**
 - `CSI DRIVER` – CSI driver name
@@ -620,7 +645,7 @@ kubectl weka get csi-instances [DRIVER_NAME] [flags]
 - `RESTARTS` – Number of times the pod container(s) have restarted
 - `AGE` – Time since the pod was created
 
-**Wide Columns (`--wide`):**
+**Wide Columns (with `-o wide`):**
 - `LAST RESTART` – Time since the pod container was last restarted (shows `N/A` if never restarted)
 
 **Examples:**
@@ -641,13 +666,18 @@ kubectl weka get csi-instances --role node
 kubectl weka get csi-instances -n csi-weka
 
 # Wide view with restart timing
-kubectl weka get csi-instances --wide
-kubectl weka get csi-instances -w
+kubectl weka get csi-instances -o wide
 
 # Show only unhealthy pods (frequent restarts)
 kubectl weka get csi-instances --unhealthy
-kubectl weka get csi-instances --unhealthy --wide
+kubectl weka get csi-instances --unhealthy -o wide
 kubectl weka get csi-instances --unhealthy -n csi-weka
+
+# JSON output
+kubectl weka get csi-instances -o json
+
+# YAML output
+kubectl weka get csi-instances -o yaml
 
 # Combine filters with wide view
 kubectl weka get csi-instances weka.io -n csi-weka --role controller --wide
