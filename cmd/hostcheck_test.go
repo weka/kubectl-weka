@@ -413,14 +413,14 @@ func TestRoutingTableInfo(t *testing.T) {
 func TestNetworkNamespaceRouting(t *testing.T) {
 	nsRouting := &NetworkNamespaceRouting{
 		Namespace: "",
-		RoutingTables: []RoutingTableInfo{
+		RoutingTables: []*RoutingTableInfo{
 			{
 				TableName: "main",
 				TableID:   254,
 				Routes:    []RouteEntry{},
 			},
 		},
-		RoutingRules: []RoutingRule{
+		RoutingRules: []*RoutingRule{
 			{
 				Priority: 1000,
 				Table:    "200",
@@ -553,12 +553,12 @@ func TestSubnet(t *testing.T) {
 func TestNetworkNamespaceRoutingWithSubnets(t *testing.T) {
 	nsRouting := &NetworkNamespaceRouting{
 		Namespace:     "",
-		RoutingTables: []RoutingTableInfo{},
-		RoutingRules: []RoutingRule{
+		RoutingTables: []*RoutingTableInfo{},
+		RoutingRules: []*RoutingRule{
 			{Priority: 32766, Table: "main"},
 		},
 		RuleCount: 1,
-		Subnets: []Subnet{
+		Subnets: []*Subnet{
 			{
 				NetworkAddress: "10.0.0.0",
 				Netmask:        "255.255.255.0",

@@ -74,13 +74,13 @@ type Subnet struct {
 
 // NetworkNamespaceRouting contains routing info for a network namespace
 type NetworkNamespaceRouting struct {
-	Namespace     string             `json:"namespace"`      // Namespace name (empty = default)
-	RoutingTables []RoutingTableInfo `json:"routing_tables"` // All routing tables
-	RoutingRules  []RoutingRule      `json:"routing_rules"`  // All policy-based routing rules
-	RuleCount     int                `json:"rule_count"`     // Total number of rules
-	Subnets       []Subnet           `json:"subnets"`        // All subnets on the system
-	SubnetCount   int                `json:"subnet_count"`   // Total number of subnets
-	TableCount    int                `json:"table_count"`    // Total number of tables
+	Namespace     string              `json:"namespace"`      // Namespace name (empty = default)
+	RoutingTables []*RoutingTableInfo `json:"routing_tables"` // All routing tables (pointers)
+	RoutingRules  []*RoutingRule      `json:"routing_rules"`  // All policy-based routing rules (pointers)
+	RuleCount     int                 `json:"rule_count"`     // Total number of rules
+	Subnets       []*Subnet           `json:"subnets"`        // All subnets on the system (pointers)
+	SubnetCount   int                 `json:"subnet_count"`   // Total number of subnets
+	TableCount    int                 `json:"table_count"`    // Total number of tables
 }
 
 // NetworkInterface represents a generic network interface (Ethernet, InfiniBand, Bond, or VLAN)
@@ -110,7 +110,7 @@ type NetworkInterface struct {
 
 	// Internal reference to parent NetworkInterfaces list (not JSON serialized)
 	// Populated when HostChecksResult is created, allows navigation within interface hierarchy
-	parent NetworkInterfaces `json:"-"`
+	parent NetworkInterfaces
 }
 
 // IsBond returns true if this interface is a bond

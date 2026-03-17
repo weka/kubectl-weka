@@ -1465,6 +1465,247 @@ func TestSourceBasedRoutingModuleResponse_Map(t *testing.T) {
 }
 
 // ============================================================================
+// Source-Based Routing Module Comprehensive Tests
+// ============================================================================
+
+// TestSourceBasedRoutingModule_ValidSBRRulesOnBothInterfaces tests scenario 1:
+// 2 interfaces on same subnet, both have valid SBR rules (should pass)
+func TestSourceBasedRoutingModule_ValidSBRRulesOnBothInterfaces(t *testing.T) {
+	m := &SourceBasedRoutingModule{}
+
+	// Create two interfaces on same subnet with valid SBR rules
+	hc := &HostChecksResult{
+		NetworkInterfaces: NetworkInterfaces{
+			{
+				Name:           "eth0",
+				Type:           "ethernet",
+				IP:             "10.0.0.10/24",
+				MaxSpeed:       "100Gbps",
+				EffectiveSpeed: "100Gbps",
+				MTU:            9000,
+				VendorModel:    "ffff:0001", // Test device with full support
+			},
+			{
+				Name:           "eth1",
+				Type:           "ethernet",
+				IP:             "10.0.0.11/24",
+				MaxSpeed:       "100Gbps",
+				EffectiveSpeed: "100Gbps",
+				MTU:            9000,
+				VendorModel:    "ffff:0001", // Test device with full support
+			},
+		},
+		// SBR rules configured for both interfaces
+		NetworkNamespaceRouting: &NetworkNamespaceRouting{
+			Namespace: "default",
+			RoutingTables: []*RoutingTableInfo{
+				{
+					TableName: "100",
+					TableID:   100,
+					Routes: []RouteEntry{
+						{
+							Destination: "0.0.0.0/0",
+							Gateway:     "10.0.0.1",
+							Device:      "eth0",
+							Source:      "10.0.0.10",
+						},
+					},
+				},
+				{
+					TableName: "101",
+					TableID:   101,
+					Routes: []RouteEntry{
+						{
+							Destination: "0.0.0.0/0",
+							Gateway:     "10.0.0.1",
+							Device:      "eth1",
+							Source:      "10.0.0.11",
+						},
+					},
+				},
+			},
+			RoutingRules: []*RoutingRule{
+				{
+					Priority:  100,
+					Condition: "from 10.0.0.10",
+					Table:     "100",
+				},
+				{
+					Priority:  101,
+					Condition: "from 10.0.0.11",
+					Table:     "101",
+				},
+			},
+			RuleCount:  2,
+			TableCount: 2,
+		},
+	}
+	hc.NetworkInterfaces.InitializeParents()
+
+	jsonData, err := json.Marshal(hc)
+	if err != nil {
+		t.Fatalf("Failed to marshal test data: %v", err)
+	}
+
+	response, err := m.Validate(string(jsonData))
+	if err != nil {
+		t.Fatalf("Validate failed: %v", err)
+	}
+
+	// Should pass when both interfaces have valid SBR rules
+	if response.Status() != statusPass {
+		t.Errorf("Expected pass status for valid SBR rules on both interfaces, got %v", response.Status())
+	}
+
+	// Verify response data contains both interfaces
+	if respData, ok := response.(*SourceBasedRoutingModuleResponse); ok {
+		if respData.data == nil {
+			t.Errorf("Expected response data to be populated")
+		} else if !respData.data.SameSubnetFound {
+			t.Errorf("Expected SameSubnetFound to be true")
+		}
+	}
+}
+
+// TestSourceBasedRoutingModule_MissingOrInvalidSBRRulesOnOneInterface tests scenario 2:
+// 2 interfaces on same subnet, one has missing or invalid SBR rules (should fail/warn)
+func TestSourceBasedRoutingModule_MissingOrInvalidSBRRulesOnOneInterface(t *testing.T) {
+	m := &SourceBasedRoutingModule{}
+
+	// Create two interfaces on same subnet, only one has SBR rules
+	hc := &HostChecksResult{
+		NetworkInterfaces: NetworkInterfaces{
+			{
+				Name:           "eth0",
+				Type:           "ethernet",
+				IP:             "10.0.0.10/24",
+				MaxSpeed:       "100Gbps",
+				EffectiveSpeed: "100Gbps",
+				MTU:            9000,
+				VendorModel:    "ffff:0001", // Test device with full support
+			},
+			{
+				Name:           "eth1",
+				Type:           "ethernet",
+				IP:             "10.0.0.11/24",
+				MaxSpeed:       "100Gbps",
+				EffectiveSpeed: "100Gbps",
+				MTU:            9000,
+				VendorModel:    "ffff:0001", // Test device with full support
+			},
+		},
+		// SBR rules only for eth0, missing for eth1
+		NetworkNamespaceRouting: &NetworkNamespaceRouting{
+			Namespace: "default",
+			RoutingTables: []*RoutingTableInfo{
+				{
+					TableName: "100",
+					TableID:   100,
+					Routes: []RouteEntry{
+						{
+							Destination: "0.0.0.0/0",
+							Gateway:     "10.0.0.1",
+							Device:      "eth0",
+							Source:      "10.0.0.10",
+						},
+					},
+				},
+				// eth1 has no routing table - MISSING!
+			},
+			RoutingRules: []*RoutingRule{
+				{
+					Priority:  100,
+					Condition: "from 10.0.0.10",
+					Table:     "100",
+				},
+				// eth1 has no rule - MISSING!
+			},
+			RuleCount:  1,
+			TableCount: 1,
+		},
+	}
+	hc.NetworkInterfaces.InitializeParents()
+
+	jsonData, err := json.Marshal(hc)
+	if err != nil {
+		t.Fatalf("Failed to marshal test data: %v", err)
+	}
+
+	response, err := m.Validate(string(jsonData))
+	if err != nil {
+		t.Fatalf("Validate failed: %v", err)
+	}
+
+	// Should fail or warn when SBR rules are missing on one interface
+	if response.Status() == statusPass {
+		t.Errorf("Expected fail/warn status for missing SBR rules on one interface, got %v", response.Status())
+	}
+
+	// Verify response indicates multiple interfaces on same subnet
+	if respData, ok := response.(*SourceBasedRoutingModuleResponse); ok {
+		if respData.data == nil {
+			t.Errorf("Expected response data to be populated")
+		} else if !respData.data.SameSubnetFound {
+			t.Errorf("Expected SameSubnetFound to be true (multi-interface scenario)")
+		}
+	}
+}
+
+// TestSourceBasedRoutingModule_AllRulesMissingOnBothInterfaces tests scenario 3:
+// 2 interfaces on same subnet, both missing SBR rules (should fail)
+func TestSourceBasedRoutingModule_AllRulesMissingOnBothInterfaces(t *testing.T) {
+	m := &SourceBasedRoutingModule{}
+
+	// Create two interfaces on same subnet with NO SBR rules
+	hc := &HostChecksResult{
+		NetworkInterfaces: NetworkInterfaces{
+			{
+				Name:           "eth0",
+				Type:           "ethernet",
+				IP:             "10.0.0.10/24",
+				MaxSpeed:       "100Gbps",
+				EffectiveSpeed: "100Gbps",
+				MTU:            9000,
+				VendorModel:    "ffff:0001", // Test device with full support
+			},
+			{
+				Name:           "eth1",
+				Type:           "ethernet",
+				IP:             "10.0.0.11/24",
+				MaxSpeed:       "100Gbps",
+				EffectiveSpeed: "100Gbps",
+				MTU:            9000,
+				VendorModel:    "ffff:0001", // Test device with full support
+			},
+		},
+		// NO SBR rules at all
+		NetworkNamespaceRouting: &NetworkNamespaceRouting{
+			Namespace:     "default",
+			RoutingTables: []*RoutingTableInfo{},
+			RoutingRules:  []*RoutingRule{},
+			RuleCount:     0,
+			TableCount:    0,
+		},
+	}
+	hc.NetworkInterfaces.InitializeParents()
+
+	jsonData, err := json.Marshal(hc)
+	if err != nil {
+		t.Fatalf("Failed to marshal test data: %v", err)
+	}
+
+	response, err := m.Validate(string(jsonData))
+	if err != nil {
+		t.Fatalf("Validate failed: %v", err)
+	}
+
+	// Should fail when no SBR rules are configured on multi-interface setup
+	if response.Status() == statusPass {
+		t.Errorf("Expected fail/warn status for no SBR rules on multi-interface subnet, got %v", response.Status())
+	}
+}
+
+// ============================================================================
 // Template Placeholder Tests
 // ============================================================================
 
