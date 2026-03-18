@@ -17,7 +17,7 @@ func TestValidateInterface(t *testing.T) {
 		IP:             "192.168.1.10",
 		VendorModel:    "15b3:1021",
 		EffectiveSpeed: 100000, // 100Gbps in Mbps (for Ethernet)
-		EffectiveRate:  0,      // Not used for Ethernet
+		EffectiveRate:  "",     // Not used for Ethernet
 		MTU:            9000,
 	}
 	// Normal case
@@ -284,8 +284,8 @@ func TestNetworkInterface(t *testing.T) {
 		MAC:            "52:54:00:12:34:56",
 		BondMaster:     "",
 		IsBondSlave:    false,
-		MaxSpeed:       "10Gbps",
-		EffectiveSpeed: "10Gbps",
+		MaxSpeed:       10000,
+		EffectiveSpeed: 10000,
 		PCIAddress:     "0000:01:00.0",
 		Model:          "Intel I350",
 		Status:         "up",
@@ -305,10 +305,10 @@ func TestNetworkInterface(t *testing.T) {
 	if iface.PCIAddress != "0000:01:00.0" {
 		t.Errorf("Expected PCIAddress '0000:01:00.0', got %q", iface.PCIAddress)
 	}
-	if iface.MaxSpeed != "10Gbps" {
+	if iface.MaxSpeed != 10000 {
 		t.Errorf("Expected MaxSpeed '10Gbps', got %q", iface.MaxSpeed)
 	}
-	if iface.EffectiveSpeed != "10Gbps" {
+	if iface.EffectiveSpeed != 10000 {
 		t.Errorf("Expected EffectiveSpeed '10Gbps', got %q", iface.EffectiveSpeed)
 	}
 	if iface.Metrics == nil {
@@ -327,8 +327,8 @@ func TestNetworkInterfaceInfiniBand(t *testing.T) {
 		IP:             "192.168.1.10/24",
 		MTU:            2048,
 		IsBondSlave:    false,
-		MaxSpeed:       "400Gbps",
-		EffectiveSpeed: "400Gbps",
+		MaxSpeed:       400000,
+		EffectiveSpeed: 400000,
 		PCIAddress:     "0000:3d:00.0",
 		Model:          "Mellanox ConnectX-7",
 		Status:         "up",
@@ -337,7 +337,7 @@ func TestNetworkInterfaceInfiniBand(t *testing.T) {
 	if iface.Type != "infiniband" {
 		t.Errorf("Expected type 'infiniband', got %q", iface.Type)
 	}
-	if iface.MaxSpeed != "400Gbps" {
+	if iface.MaxSpeed != 400000 {
 		t.Errorf("Expected MaxSpeed '400Gbps', got %q", iface.MaxSpeed)
 	}
 	if iface.Model != "Mellanox ConnectX-7" {
@@ -939,7 +939,7 @@ func TestInfiniBandInterfaceWithPCIAddress(t *testing.T) {
 		MTU:        2048,
 		PCIAddress: "0000:3d:00.0",
 		Model:      "Mellanox ConnectX-7",
-		MaxSpeed:   "400Gbps",
+		MaxSpeed:   400000,
 		Status:     "up",
 	}
 
@@ -1100,7 +1100,7 @@ func TestDualFunctionMellanoxDevice(t *testing.T) {
 		PCIAddress: "0000:63:00.0", // Ethernet function
 		NUMANode:   0,
 		Model:      "Mellanox ConnectX-7",
-		MaxSpeed:   "100Gbps",
+		MaxSpeed:   100000,
 		Status:     "up",
 	}
 
@@ -1112,7 +1112,7 @@ func TestDualFunctionMellanoxDevice(t *testing.T) {
 		PCIAddress: "0000:63:00.1", // InfiniBand function
 		NUMANode:   0,
 		Model:      "Mellanox ConnectX-7",
-		MaxSpeed:   "400Gbps",
+		MaxSpeed:   400000,
 		Status:     "up",
 	}
 

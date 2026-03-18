@@ -26,11 +26,12 @@ type NetworkInterfaceValidation struct {
 // String returns a human-readable summary of the validation result
 func (nv *NetworkInterfaceValidation) String() string {
 	return fmt.Sprintf(
-		"Name: %s, Type: %s, IP: %s, Speed: %s, MTU: %d, Supported: %s, Status: %s, Reason: %s",
+		"Name: %s, Type: %s, IP: %s, Speed: %d, Rate: %s, MTU: %d, Supported: %s, Status: %s, Reason: %s",
 		nv.Name,
 		nv.Type,
 		nv.IPAddress,
 		nv.Speed,
+		nv.Rate,
 		nv.MTU,
 		nv.Supported,
 		nv.Status,
