@@ -12,7 +12,8 @@ BUILD_DATE := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 TAG_ON_HEAD := $(shell git describe --exact-match --tags 2>/dev/null)
 
 # Check if working directory is dirty (has uncommitted changes)
-IS_DIRTY := $(shell git status --porcelain 2>/dev/null | wc -l)
+# git diff-index --quiet HEAD returns 0 if clean, 1 if dirty
+IS_DIRTY := $(shell if git diff-index --quiet HEAD 2>/dev/null; then echo 0; else echo 1; fi)
 
 # Calculate version based on whether tag is on HEAD
 ifeq ($(TAG_ON_HEAD),)
