@@ -40,39 +40,45 @@ kubectl weka preflight nodes --failed-only
 # List cluster instances
 kubectl weka get cluster-instances
 kubectl weka get cluster-instances weka01
-kubectl weka get cluster-instances -A --wide
+kubectl weka get cluster-instances -A -o wide
 
 # List client instances
 kubectl weka get client-instances
 kubectl weka get client-instances weka01-clients
-kubectl weka get client-instances -A
+kubectl weka get client-instances -A -o wide
 
 # List nodes
 kubectl weka get nodes
 kubectl weka get nodes --node-selector role=storage
+kubectl weka get nodes -o wide
 
 # List CSI drivers
 kubectl weka get csi-drivers
-kubectl weka get csi-drivers csi.weka.io
-kubectl weka get csi-drivers --wide
+kubectl weka get csi-drivers weka.io
+kubectl weka get csi-drivers -o wide
 kubectl weka get csi-drivers --only-helm
-kubectl weka get csi-drivers csi.weka.io --wide
+kubectl weka get csi-drivers weka.io -o wide
 
 # List CSI instances (pods)
 kubectl weka get csi-instances
 kubectl weka get csi-instances weka.io
 kubectl weka get csi-instances --role controller
 kubectl weka get csi-instances -n csi-weka
-kubectl weka get csi-instances weka.io --wide
-kubectl weka get csi-instances -w --role node -n csi-weka
+kubectl weka get csi-instances weka.io -o wide
+kubectl weka get csi-instances -o wide --role node -n csi-weka
 kubectl weka get csi-instances --unhealthy
-kubectl weka get csi-instances --unhealthy --wide
+kubectl weka get csi-instances --unhealthy -o wide
 
 # List and validate CSI secrets
 kubectl weka get csi-secrets
 
 # List policies
 kubectl weka get policies -A
+
+# Output format options
+kubectl weka get nodes -o json
+kubectl weka get nodes -o yaml
+kubectl weka get nodes -o custom-columns=NAME,IP,STATUS
 ```
 
 ### Plan Deployment

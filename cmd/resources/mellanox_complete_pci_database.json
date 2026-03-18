@@ -1,0 +1,1237 @@
+{
+  "vendor": "NVIDIA / Mellanox",
+  "vendor_id": "15b3",
+  "devices": [
+    {
+      "device_id": "6278",
+      "family": "InfiniHost III Ex",
+      "short_name": "InfiniHost III Ex",
+      "lspci_name": "MT25208 InfiniHost III Ex HCA",
+      "ports": 1,
+      "ib_speed": "SDR/DDR",
+      "eth_speed": null,
+      "media": [
+        "infiniband"
+      ],
+      "pcie": "Gen1 x8",
+      "driver": "mthca"
+    },
+    {
+      "device_id": "6282",
+      "family": "InfiniHost III Ex",
+      "short_name": "InfiniHost III Ex",
+      "lspci_name": "MT25208 InfiniHost III Ex",
+      "ports": 1,
+      "ib_speed": "SDR/DDR",
+      "eth_speed": null,
+      "media": [
+        "infiniband"
+      ],
+      "pcie": "Gen1 x8",
+      "driver": "mthca"
+    },
+    {
+      "device_id": "6340",
+      "family": "ConnectX-1",
+      "short_name": "ConnectX-1",
+      "lspci_name": "MT25408 ConnectX VPI",
+      "ports": 2,
+      "ib_speed": "QDR",
+      "eth_speed": "10GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen2 x8",
+      "driver": "mlx4_core"
+    },
+    {
+      "device_id": "6368",
+      "family": "ConnectX-2",
+      "short_name": "ConnectX-2 EN",
+      "lspci_name": "MT25448 ConnectX EN",
+      "ports": 2,
+      "ib_speed": null,
+      "eth_speed": "10GbE",
+      "media": [
+        "ethernet"
+      ],
+      "pcie": "Gen2 x8",
+      "driver": "mlx4_core"
+    },
+    {
+      "device_id": "673c",
+      "family": "ConnectX-2",
+      "short_name": "ConnectX-2 VPI",
+      "lspci_name": "MT26428 ConnectX-2 VPI",
+      "ports": 2,
+      "ib_speed": "QDR",
+      "eth_speed": "10GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen2 x8",
+      "driver": "mlx4_core"
+    },
+    {
+      "device_id": "1003",
+      "family": "ConnectX-3",
+      "short_name": "ConnectX-3",
+      "lspci_name": "MT27500 ConnectX-3",
+      "ports": 2,
+      "ib_speed": "FDR10",
+      "eth_speed": "40GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen3 x8",
+      "driver": "mlx4_core"
+    },
+    {
+      "device_id": "1007",
+      "family": "ConnectX-3 Pro",
+      "short_name": "ConnectX-3 Pro",
+      "lspci_name": "MT27520 ConnectX-3 Pro",
+      "ports": 2,
+      "ib_speed": "FDR",
+      "eth_speed": "56GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen3 x8",
+      "driver": "mlx4_core"
+    },
+    {
+      "device_id": "1013",
+      "family": "ConnectX-4",
+      "short_name": "ConnectX-4",
+      "lspci_name": "MT27700 ConnectX-4",
+      "ports": 2,
+      "ib_speed": "EDR",
+      "eth_speed": "100GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen3 x16",
+      "driver": "mlx5_core"
+    },
+    {
+      "device_id": "1015",
+      "family": "ConnectX-4 Lx",
+      "short_name": "ConnectX-4 Lx",
+      "lspci_name": "MT27710 ConnectX-4 Lx",
+      "ports": 2,
+      "ib_speed": null,
+      "eth_speed": "25/50GbE",
+      "media": [
+        "ethernet"
+      ],
+      "pcie": "Gen3 x8",
+      "driver": "mlx5_core"
+    },
+    {
+      "device_id": "1016",
+      "family": "ConnectX-5",
+      "short_name": "ConnectX-5",
+      "lspci_name": "MT27800 ConnectX-5",
+      "ports": 2,
+      "ib_speed": "HDR100",
+      "eth_speed": "100GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen3 x16",
+      "driver": "mlx5_core"
+    },
+    {
+      "device_id": "1019",
+      "family": "ConnectX-5 Ex",
+      "short_name": "ConnectX-5 Ex",
+      "lspci_name": "MT28800 ConnectX-5 Ex",
+      "ports": 2,
+      "ib_speed": "HDR100",
+      "eth_speed": "100GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen4 x16",
+      "driver": "mlx5_core"
+    },
+    {
+      "device_id": "101b",
+      "family": "ConnectX-6",
+      "short_name": "ConnectX-6",
+      "lspci_name": "MT28908 ConnectX-6",
+      "ports": 2,
+      "ib_speed": "HDR200",
+      "eth_speed": "200GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen4 x16",
+      "driver": "mlx5_core"
+    },
+    {
+      "device_id": "101d",
+      "family": "ConnectX-6 Dx",
+      "short_name": "ConnectX-6 Dx",
+      "lspci_name": "MT2892 ConnectX-6 Dx",
+      "ports": 2,
+      "ib_speed": "HDR200",
+      "eth_speed": "200GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen4 x16",
+      "driver": "mlx5_core"
+    },
+    {
+      "device_id": "101e",
+      "family": "ConnectX-6 Lx",
+      "short_name": "ConnectX-6 Lx",
+      "lspci_name": "MT2894 ConnectX-6 Lx",
+      "ports": 2,
+      "ib_speed": null,
+      "eth_speed": "25/50GbE",
+      "media": [
+        "ethernet"
+      ],
+      "pcie": "Gen4 x8",
+      "driver": "mlx5_core"
+    },
+    {
+      "device_id": "1021",
+      "family": "ConnectX-7",
+      "short_name": "ConnectX-7",
+      "lspci_name": "MT2910 ConnectX-7",
+      "ports": 2,
+      "ib_speed": "NDR400",
+      "eth_speed": "400GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen5 x16",
+      "driver": "mlx5_core"
+    },
+    {
+      "device_id": "1025",
+      "family": "ConnectX-7 Lx",
+      "short_name": "ConnectX-7 Lx",
+      "lspci_name": "MT2912 ConnectX-7 Lx",
+      "ports": 2,
+      "ib_speed": null,
+      "eth_speed": "200GbE",
+      "media": [
+        "ethernet"
+      ],
+      "pcie": "Gen5 x16",
+      "driver": "mlx5_core"
+    },
+    {
+      "device_id": "a2d2",
+      "family": "BlueField",
+      "short_name": "BlueField-1",
+      "lspci_name": "MT41682 BlueField SmartNIC",
+      "ports": 2,
+      "ib_speed": "EDR",
+      "eth_speed": "100GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen3 x16",
+      "driver": "mlx5_core"
+    },
+    {
+      "device_id": "a2d6",
+      "family": "BlueField",
+      "short_name": "BlueField-2",
+      "lspci_name": "MT42822 BlueField-2 DPU",
+      "ports": 2,
+      "ib_speed": "HDR200",
+      "eth_speed": "200GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen4 x16",
+      "driver": "mlx5_core"
+    },
+    {
+      "device_id": "a2dc",
+      "family": "BlueField",
+      "short_name": "BlueField-3",
+      "lspci_name": "MT43244 BlueField-3 DPU",
+      "ports": 2,
+      "ib_speed": "NDR400",
+      "eth_speed": "400GbE",
+      "media": [
+        "ethernet",
+        "infiniband"
+      ],
+      "pcie": "Gen5 x16",
+      "driver": "mlx5_core"
+    }
+  ],
+  "subsystem_mappings": [
+    {
+      "pci_id": "15b3:6278",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:6278",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:6278",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:6278",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:6278",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:6278",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:6278",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:6278",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:6278",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:6278",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:6282",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:6282",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:6282",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:6282",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:6282",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:6282",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:6282",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:6282",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:6282",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:6282",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:6340",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:6340",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:6340",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:6340",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:6340",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:6340",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:6340",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:6340",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:6340",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:6340",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:6368",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:6368",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:6368",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:6368",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:6368",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:6368",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:6368",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:6368",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:6368",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:6368",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:673c",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:673c",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:673c",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:673c",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:673c",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:673c",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:673c",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:673c",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:673c",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:673c",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:1003",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:1003",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:1003",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:1003",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:1003",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:1003",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:1003",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:1003",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:1003",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:1003",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:1007",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:1007",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:1007",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:1007",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:1007",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:1007",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:1007",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:1007",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:1007",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:1007",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:1013",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:1013",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:1013",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:1013",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:1013",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:1013",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:1013",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:1013",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:1013",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:1013",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:1015",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:1015",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:1015",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:1015",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:1015",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:1015",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:1015",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:1015",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:1015",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:1015",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:1016",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:1016",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:1016",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:1016",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:1016",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:1016",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:1016",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:1016",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:1016",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:1016",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:1019",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:1019",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:1019",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:1019",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:1019",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:1019",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:1019",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:1019",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:1019",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:1019",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:101b",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:101b",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:101b",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:101b",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:101b",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:101b",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:101b",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:101b",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:101b",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:101b",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:101d",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:101d",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:101d",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:101d",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:101d",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:101d",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:101d",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:101d",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:101d",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:101d",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:101e",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:101e",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:101e",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:101e",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:101e",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:101e",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:101e",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:101e",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:101e",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:101e",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:1021",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:1021",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:1021",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:1021",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:1021",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:1021",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:1021",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:1021",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:1021",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:1021",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:1025",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:1025",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:1025",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:1025",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:1025",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:1025",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:1025",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:1025",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:1025",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:1025",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:a2d2",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:a2d2",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:a2d2",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:a2d2",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:a2d2",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:a2d2",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:a2d2",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:a2d2",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:a2d2",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:a2d2",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:a2d6",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:a2d6",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:a2d6",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:a2d6",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:a2d6",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:a2d6",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:a2d6",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:a2d6",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:a2d6",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:a2d6",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    },
+    {
+      "pci_id": "15b3:a2dc",
+      "subsystem_vendor_id": "1028",
+      "subsystem_vendor": "Dell"
+    },
+    {
+      "pci_id": "15b3:a2dc",
+      "subsystem_vendor_id": "103c",
+      "subsystem_vendor": "HPE"
+    },
+    {
+      "pci_id": "15b3:a2dc",
+      "subsystem_vendor_id": "17aa",
+      "subsystem_vendor": "Lenovo"
+    },
+    {
+      "pci_id": "15b3:a2dc",
+      "subsystem_vendor_id": "15d9",
+      "subsystem_vendor": "Supermicro"
+    },
+    {
+      "pci_id": "15b3:a2dc",
+      "subsystem_vendor_id": "10de",
+      "subsystem_vendor": "NVIDIA"
+    },
+    {
+      "pci_id": "15b3:a2dc",
+      "subsystem_vendor_id": "1af4",
+      "subsystem_vendor": "Red Hat / Virt"
+    },
+    {
+      "pci_id": "15b3:a2dc",
+      "subsystem_vendor_id": "1d0f",
+      "subsystem_vendor": "Amazon"
+    },
+    {
+      "pci_id": "15b3:a2dc",
+      "subsystem_vendor_id": "1043",
+      "subsystem_vendor": "ASUS"
+    },
+    {
+      "pci_id": "15b3:a2dc",
+      "subsystem_vendor_id": "19e5",
+      "subsystem_vendor": "Huawei"
+    },
+    {
+      "pci_id": "15b3:a2dc",
+      "subsystem_vendor_id": "1137",
+      "subsystem_vendor": "Cisco"
+    }
+  ]
+}

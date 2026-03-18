@@ -4,6 +4,26 @@
 
 ### Features
 
+* **Unified Output Format Flags** – All `kubectl weka get` commands now use standard `-o/--output` flag:
+  * Replaces previous `--wide` boolean flag across all get subcommands
+  * Supports multiple output formats: `table` (default), `wide`, `json`, `yaml`, `custom-columns=<COLS...>`
+  * Consistent with native `kubectl` command behavior
+  * Implemented via unified ResourcePrinter abstraction
+  * Affected commands: `get nodes`, `get cluster-instances`, `get client-instances`, `get csi-instances`, `get csi-drivers`, `get csi-secrets`
+  * Column visibility now controlled by `VisibleInWide` attribute in TableColumn definitions
+  * See [OUTPUT_FLAG_REFACTORING.md](OUTPUT_FLAG_REFACTORING.md) for migration details
+
+* **Extended Hostcheck Information** – Comprehensive network and storage device data:
+  * Generic network interface collection: Ethernet and InfiniBand interfaces
+  * Network traffic metrics: bytes/packets in/out, errors, drops, collisions, overruns, CRC errors
+  * Network speed information: maximum speed and effective/negotiated speed
+  * PCI address identification: for all network interfaces and NVMe drives
+  * Separate sections for generic network interfaces and Mellanox-specific interfaces
+  * Interface bonding support: track bond master/slave relationships
+  * MTU and MAC address information
+  * Interface status (up/down) detection
+  * Backward compatible with existing Mellanox interface data
+
 * **Host Checks Collection in Support Bundle** – New section collects hardware and system information:
   * Automatically runs on all nodes in all support-bundle commands
   * Uses `GlobalHostCheckRegistry` with intelligent caching to avoid redundant execution

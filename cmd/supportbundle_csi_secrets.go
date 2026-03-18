@@ -9,7 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // CSISecretsCollector collects CSI-related secrets from storage classes
@@ -182,39 +182,40 @@ type secretResult struct {
 
 func (c *CSISecretsCollector) collectSecret(ctx context.Context, baseDir, driverName, storageClassName string, secretRef SecretReference) secretResult {
 	logger := getLogger(ctx)
+	clients := getClients(ctx)
 	result := secretResult{}
 
-	// Get the secret from the cluster
-	secret, err := KubeClients.Clientset.CoreV1().Secrets(secretRef.Namespace).Get(ctx, secretRef.Name, metav1.GetOptions{})
-	if err != nil {
+	// Get the secret from the cluster using controller-runtime client (cached)
+	var secret corev1.Secret
+	if err := clients.CRClient.Get(ctx, types.NamespacedName{Namespace: secretRef.Namespace, Name: secretRef.Name}, &secret); err != nil {
 		result.err = fmt.Errorf("failed to get secret %s/%s: %w", secretRef.Namespace, secretRef.Name, err)
 		return result
 	}
 
 	// Create directory structure: csi/secrets/drivername/storageClassName/secretName
-	secretDir := filepath.Join(baseDir, driverName, storageClassName, secretRef.Name)
+	secretDir := filepath.Join(baseDir, driverName)
 	if err := os.MkdirAll(secretDir, 0755); err != nil {
 		result.err = fmt.Errorf("failed to create secret directory %s: %w", secretDir, err)
 		return result
 	}
 
 	// Validate and process secret data
-	secretFile := filepath.Join(secretDir, "secret.txt")
+	secretFile := filepath.Join(secretDir, fmt.Sprintf("Secret_%s-%s.yaml", sanitizeName(secretRef.Namespace), sanitizeName(secretRef.Name)))
 	var content string
 	var validationErrors []string
 
 	if supportBundleIncludeSensitive {
 		// Include full secret data
-		content = formatSecretContent(secret, false)
+		content = formatSecretContent(&secret, false)
 		logger.Debug("Collected secret (unredacted)", "secret", secretRef.Name, "namespace", secretRef.Namespace, "file", secretFile)
 	} else {
 		// Redact sensitive data
-		content = formatSecretContent(secret, true)
+		content = formatSecretContent(&secret, true)
 		logger.Debug("Collected secret (redacted)", "secret", secretRef.Name, "namespace", secretRef.Namespace, "file", secretFile)
 	}
 
 	// Validate secret content
-	validationErrors = validateSecretContent(secret)
+	validationErrors = validateSecretContent(&secret)
 	if len(validationErrors) > 0 {
 		result.validationErrors = validationErrors
 	}
@@ -237,10 +238,10 @@ type SecretReference struct {
 
 // getWekaCSIDrivers returns all WEKA CSI drivers
 func getWekaCSIDrivers(ctx context.Context) ([]storagev1.CSIDriver, error) {
-	crClient := KubeClients.CRClient
+	clients := getClients(ctx)
 
 	var csiDriverList storagev1.CSIDriverList
-	if err := crClient.List(ctx, &csiDriverList); err != nil {
+	if err := clients.CRClient.List(ctx, &csiDriverList); err != nil {
 		return nil, fmt.Errorf("failed to list CSI drivers: %w", err)
 	}
 
@@ -256,10 +257,10 @@ func getWekaCSIDrivers(ctx context.Context) ([]storagev1.CSIDriver, error) {
 
 // getStorageClassesForCSIDrivers returns all storage classes that use WEKA CSI drivers
 func getStorageClassesForCSIDrivers(ctx context.Context, driverMap map[string]bool) ([]storagev1.StorageClass, error) {
-	crClient := KubeClients.CRClient
+	clients := getClients(ctx)
 
 	var scList storagev1.StorageClassList
-	if err := crClient.List(ctx, &scList); err != nil {
+	if err := clients.CRClient.List(ctx, &scList); err != nil {
 		return nil, fmt.Errorf("failed to list storage classes: %w", err)
 	}
 

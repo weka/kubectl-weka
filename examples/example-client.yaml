@@ -1,0 +1,33 @@
+apiVersion: weka.weka.io/v1alpha1
+kind: WekaClient
+metadata:
+  name: longevity-client
+  namespace: longevity
+spec:
+  autoRemoveTimeout: 24h0m0s
+  coresNum: 8
+  cpuPolicy: auto
+  driversDistService: https://weka-drivers-dist.weka-operator-system.svc.cluster.local:60002
+  image: quay.io/weka.io/weka-in-container:4.4.10.200
+  imagePullSecret: quay-io-robot-secret
+  network:
+    deviceSubnets:
+      - 10.100.0.0/16
+  nodeSelector:
+    weka.io/supports-clients: "true"
+    weka.io/dedicated: infra
+
+  portRange:
+    basePort: 45000
+    portRange: 0
+  targetCluster:
+    name: longevity
+    namespace: longevity
+  tracesConfiguration:
+    dumperConfigMode: cluster
+    ensureFreeSpace: 20
+    maxCapacityPerIoNode: 10
+  upgradePolicy:
+    type: all-at-once
+  wekaHomeConfig: {}
+  wekaSecretRef: weka-client-longevity

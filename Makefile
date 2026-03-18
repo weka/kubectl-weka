@@ -70,11 +70,11 @@ install: .git-info
 
 test:
 	@echo "Running tests..."
-	go test ./cmd -q
+	go test ./cmd
 
 test-verbose:
 	@echo "Running tests with verbose output..."
-	go test ./cmd -v
+	go test ./cmd -test.v
 
 test-coverage:
 	@echo "Running tests with coverage..."

@@ -42,14 +42,14 @@ func init() {
 
 }
 
-// checkStatus represents the overall status of node checks
-type checkStatus string
+// CheckStatus represents the overall status of node checks
+type CheckStatus string
 
 const (
-	statusPass    checkStatus = "✅ OK"
-	statusWarn    checkStatus = "⚠️ WARNING"
-	statusFail    checkStatus = "❌ FAILED"
-	statusSkipped checkStatus = "⏭️ SKIPPED (Node not ready)"
+	statusPass    CheckStatus = "✅ OK"
+	statusWarn    CheckStatus = "⚠️ WARNING"
+	statusFail    CheckStatus = "❌ FAILED"
+	statusSkipped CheckStatus = "⏭️ SKIPPED (Node not ready)"
 )
 
 func runPreflightNodes(cmd *cobra.Command, args []string) error {
@@ -67,7 +67,6 @@ func runPreflightNodes(cmd *cobra.Command, args []string) error {
 		sig := <-sigChan
 		fmt.Printf("\n\nReceived signal %v, cleaning up pods...\n", sig)
 		cancel() // Cancel context to stop operations
-		// ...existing code...
 	}()
 
 	// Create output that writes to stdout in real-time
@@ -178,12 +177,12 @@ func generatePreflightNodesOutput(
 	}
 	type NodeWarning struct {
 		NodeName string
-		Module   string
+		Module   ModuleName
 		Message  string
 	}
 	type NodeError struct {
 		NodeName string
-		Module   string
+		Module   ModuleName
 		Message  string
 		Fix      string
 	}
@@ -199,17 +198,16 @@ func generatePreflightNodesOutput(
 		var issuesForNode []string
 
 		for moduleName, mr := range moduleResults {
+			dataMap := mr.Data.Map()
 			if mr.Status == "error" {
 				hasError = true
 				errorMsg := ""
 				if mr.Error != "" {
 					errorMsg = mr.Error
 					issuesForNode = append(issuesForNode, fmt.Sprintf("%s: %s", moduleName, mr.Error))
-				} else if dataMap, ok := mr.Data.(map[string]interface{}); ok {
-					if issue, ok := dataMap["Issue"].(string); ok && issue != "" {
-						errorMsg = issue
-						issuesForNode = append(issuesForNode, fmt.Sprintf("%s: %s", moduleName, issue))
-					}
+				} else if mr.Data.Error() != nil {
+					errorMsg = mr.Data.Error().Error()
+					issuesForNode = append(issuesForNode, fmt.Sprintf("%s: %s", moduleName, mr.Data.Error()))
 				}
 
 				// Get suggested fix from module using template interpolation
@@ -220,10 +218,8 @@ func generatePreflightNodesOutput(
 						"NodeName": nodeName,
 					}
 					// Add all data from the module result
-					if dataMap, ok := mr.Data.(map[string]interface{}); ok {
-						for k, v := range dataMap {
-							fixParams[k] = v
-						}
+					for k, v := range dataMap {
+						fixParams[k] = v
 					}
 					suggestedFix = mr.FormatSuggestedFix(fixParams)
 				}
@@ -239,14 +235,12 @@ func generatePreflightNodesOutput(
 
 				// Extract warning message from module data
 				warningMsg := ""
-				if dataMap, ok := mr.Data.(map[string]interface{}); ok {
-					if warning, ok := dataMap["Warning"].(string); ok && warning != "" {
-						warningMsg = warning
-					} else if issue, ok := dataMap["Issue"].(string); ok && issue != "" {
-						warningMsg = issue
-					} else if detail, ok := dataMap["Detail"].(string); ok && detail != "" {
-						warningMsg = detail
-					}
+				if warning, ok := dataMap["Warning"].(string); ok && warning != "" {
+					warningMsg = warning
+				} else if issue, ok := dataMap["Issue"].(string); ok && issue != "" {
+					warningMsg = issue
+				} else if detail, ok := dataMap["Detail"].(string); ok && detail != "" {
+					warningMsg = detail
 				}
 
 				if warningMsg != "" {
@@ -260,7 +254,7 @@ func generatePreflightNodesOutput(
 		}
 
 		var overallStatus string
-		var nodeStatus checkStatus
+		var nodeStatus CheckStatus
 		if hasError {
 			overallStatus = "failure"
 			nodeStatus = statusFail
@@ -308,6 +302,7 @@ func generatePreflightNodesOutput(
 		if shouldPrintDetails {
 			// Print all validation results for this node
 			printNodeValidationToOutput(output, nodeName, "preflight_nodes", moduleResults)
+
 			output.Println("")
 		}
 
@@ -386,12 +381,12 @@ func generatePreflightNodesOutput(
 
 		// Group errors by module (not by exact message)
 		type ErrorGroup struct {
-			Module       string
+			Module       ModuleName
 			Nodes        []string
 			Messages     []string
 			SuggestedFix string
 		}
-		errorGroups := make(map[string]*ErrorGroup)
+		errorGroups := make(map[ModuleName]*ErrorGroup)
 
 		for _, e := range allErrors {
 			// Use module name as the grouping key
@@ -424,10 +419,10 @@ func generatePreflightNodesOutput(
 			// Display the error with appropriate context
 			if allSame {
 				// All errors are identical - show the exact error
-				output.Printf("\n❌ %s: %s\n", red(group.Module), firstMsg)
+				output.Printf("\n❌ %s: %s\n", red(string(group.Module)), firstMsg)
 			} else {
 				// Errors differ - show it's a common issue with varying details
-				output.Printf("\n❌ %s: %s (values vary by node)\n", red(group.Module), firstMsg)
+				output.Printf("\n❌ %s: %s (values vary by node)\n", red(string(group.Module)), firstMsg)
 			}
 
 			output.Printf("   Affected nodes (%d): %s\n", len(group.Nodes), strings.Join(group.Nodes, ", "))
@@ -462,7 +457,7 @@ func printCheckResultToOutput(output *PreflightOutput, msg string, ok bool, deta
 }
 
 // printNodeValidationToOutput prints validation results to PreflightOutput
-func printNodeValidationToOutput(output *PreflightOutput, nodeName, category string, moduleResults map[string]*HostCheckResult) {
+func printNodeValidationToOutput(output *PreflightOutput, nodeName, category string, moduleResults map[ModuleName]*HostCheckModuleResult) {
 	// Use the registry's FormatNodeValidationResults to get formatted output as string
 	formattedOutput, _ := GlobalHostCheckRegistry.FormatNodeValidationResults(nodeName, category, moduleResults)
 	// Write to our output instead of stdout

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	appsv1 "k8s.io/api/apps/v1"
@@ -18,6 +17,8 @@ var (
 	getCSIDriversOnlyHelm     bool
 	getCSIDriversOnlyOperator bool
 	getCSIDriversWide         bool
+	flagCSIDriversOutput      string
+	flagCSIDriversNoHeaders   bool
 )
 
 var getCSIDriversCmd = &cobra.Command{
@@ -55,12 +56,16 @@ func init() {
 
 	getCSIDriversCmd.Flags().BoolVar(&getCSIDriversOnlyHelm, "only-helm", false, "Only show CSI drivers installed via Helm chart")
 	getCSIDriversCmd.Flags().BoolVar(&getCSIDriversOnlyOperator, "only-operator", false, "Only show CSI drivers installed by Weka operator")
-	getCSIDriversCmd.Flags().BoolVarP(&getCSIDriversWide, "wide", "w", false, "Show additional columns (PVs, PVCs, Bound PVs)")
+	getCSIDriversCmd.Flags().StringVarP(&flagCSIDriversOutput, "output", "o", "", "Output format. Supported: json, yaml, wide, custom-columns=<COLS...>")
+	getCSIDriversCmd.Flags().BoolVar(&flagCSIDriversNoHeaders, "no-headers", false, "Don't print headers")
 	getCSIDriversCmd.SilenceUsage = true
 }
 
 func runGetCSIDrivers(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
+	if strings.Contains(flagCSIDriversOutput, "wide") {
+		getCSIDriversWide = true
+	}
 
 	// Extract optional driver name argument
 	var driverName string
@@ -68,14 +73,12 @@ func runGetCSIDrivers(cmd *cobra.Command, args []string) error {
 		driverName = args[0]
 	}
 
-	// Generate the output
-	output, err := generateCSIDriversOutput(ctx, KubeClients, getCSIDriversOnlyHelm, getCSIDriversOnlyOperator, getCSIDriversWide, driverName)
+	driverOutput, err := generateCSIDriversOutput(ctx, KubeClients, getCSIDriversOnlyHelm, getCSIDriversOnlyOperator, getCSIDriversWide, driverName)
 	if err != nil {
 		return err
 	}
-
-	// Print the output
-	fmt.Print(output)
+	_, _ = fmt.Fprint(cmd.OutOrStdout(), driverOutput)
+	_, _ = fmt.Fprintln(cmd.OutOrStdout()) // Add newline after table
 	return nil
 }
 
@@ -95,7 +98,7 @@ type CSIDriverInfo struct {
 	CreationTime       metav1.Time
 }
 
-// generateCSIDriversOutput generates the CSI deployments table as a string
+// generateCSIDriversOutput generates the CSI driver output for printing
 func generateCSIDriversOutput(ctx context.Context, clients *K8sClients, onlyHelm, onlyOperator, wide bool, driverName string) (string, error) {
 	crClient := clients.CRClient
 
@@ -278,55 +281,44 @@ func generateCSIDriversOutput(ctx context.Context, clients *K8sClients, onlyHelm
 		return compareNodeNames(deployments[i].DriverName, deployments[j].DriverName) < 0
 	})
 
-	// Generate table output
-	var output strings.Builder
-	w := tabwriter.NewWriter(&output, 0, 8, 2, ' ', 0)
-
-	// Write header
-	if wide {
-		fmt.Fprintln(w, "CSI DRIVER\tMANAGED BY\tNAMESPACE\tCONTROLLER\tNODE DAEMONSET\tSTORAGECLASSES\tPVS\tPVCS\tBOUND PVS\tAGE")
-	} else {
-		fmt.Fprintln(w, "CSI DRIVER\tMANAGED BY\tNAMESPACE\tCONTROLLER\tNODE DAEMONSET\tSTORAGECLASSES\tAGE")
+	// Build columns
+	var columns []TableColumn
+	columns = []TableColumn{
+		{Name: "CSI DRIVER", VisibleInWide: false},
+		{Name: "MANAGED BY", VisibleInWide: false},
+		{Name: "NAMESPACE", VisibleInWide: false},
+		{Name: "CONTROLLER", VisibleInWide: false},
+		{Name: "NODE DAEMONSET", VisibleInWide: false},
+		{Name: "STORAGECLASSES", VisibleInWide: false},
+		{Name: "PVS", VisibleInWide: true},
+		{Name: "PVCS", VisibleInWide: true},
+		{Name: "BOUND PVS", VisibleInWide: true},
+		{Name: "AGE", VisibleInWide: false, formatFuncs: TableFormatFunctions{humanAge}},
 	}
 
-	// Write rows
+	// Build rows
+	var rows []TableRow
 	for _, info := range deployments {
-		age := humanAge(metav1.Now().Sub(info.CreationTime.Time))
-		if wide {
-			fmt.Fprintf(w,
-				"%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s\n",
-				info.DriverName,
-				info.ManagedBy,
-				info.Namespace,
-				getNameOrNone(info.ControllerName),
-				getNameOrNone(info.NodeDaemonsetName),
-				info.StorageClassCount,
-				info.PVCount,
-				info.PVCCount,
-				info.BoundPVCount,
-				age,
-			)
-		} else {
-			fmt.Fprintf(w,
-				"%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
-				info.DriverName,
-				info.ManagedBy,
-				info.Namespace,
-				getNameOrNone(info.ControllerName),
-				getNameOrNone(info.NodeDaemonsetName),
-				info.StorageClassCount,
-				age,
-			)
-		}
+		row := TableRow{Values: map[string]interface{}{}}
+		row.Values["CSI DRIVER"] = info.DriverName
+		row.Values["MANAGED BY"] = info.ManagedBy
+		row.Values["NAMESPACE"] = info.Namespace
+		row.Values["CONTROLLER"] = info.ControllerName
+		row.Values["NODE DAEMONSET"] = info.NodeDaemonsetName
+		row.Values["STORAGECLASSES"] = info.StorageClassCount
+		row.Values["AGE"] = info.CreationTime.Time
+		row.Values["PVS"] = info.PVCount
+		row.Values["PVCS"] = info.PVCCount
+		row.Values["BOUND PVS"] = info.BoundPVCount
+		rows = append(rows, row)
 	}
-
-	w.Flush()
-
-	if len(deployments) == 0 {
-		return "No CSI deployments found.\n", nil
+	printer, _ := GetPrinterFromFlags(flagCSIDriversOutput, !flagCSIDriversNoHeaders, nil, wide, 0, TableStyleMinimal)
+	var sb strings.Builder
+	err := printer.Print(columns, rows, &sb)
+	if err != nil {
+		return "", err
 	}
-
-	return output.String(), nil
+	return sb.String(), nil
 }
 
 // getCSIDriverNameFromDeployment extracts CSI_DRIVER_NAME from deployment's first container

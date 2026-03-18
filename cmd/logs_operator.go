@@ -37,8 +37,8 @@ func init() {
 		"Specify if the logs should be streamed")
 
 	// kubectl default is usually -1 (all lines). We'll match that.
-	logsOperatorCmd.Flags().Int64Var(&operatorLogsTail, "tail", -1,
-		"Lines of recent log file to display. Defaults to -1 (all logs)")
+	logsOperatorCmd.Flags().Int64Var(&operatorLogsTail, "tail", 50,
+		"Lines of recent log file to display, or -1 (all logs). Defaults to 50 last lines.")
 
 	logsOperatorCmd.Flags().DurationVar(&operatorLogsSince, "since", 0,
 		"Only return logs newer than a relative duration like 5s, 2m, or 3h")

@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/jedib0t/go-pretty/v6/table"
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -15,8 +18,61 @@ import (
 	"time"
 )
 
+// styleTableMinimal configures a table with minimal styling (kubectl-like output)
+func styleTableMinimal(w table.Writer) {
+	w.SetStyle(table.StyleDefault)
+	w.Style().Options.DrawBorder = false
+	w.Style().Options.SeparateRows = false
+	w.Style().Options.SeparateColumns = false
+	w.Style().Options.SeparateFooter = false
+	w.Style().Options.SeparateHeader = false
+}
+
+// indentText indents a block of text by the specified number of spaces
+func indentText(text string, spaces int, subsequentSpace ...int) string {
+	if spaces <= 0 || text == "" {
+		return text
+	}
+
+	indent := strings.Repeat(" ", spaces)
+	subIndent := indent
+	lines := strings.Split(text, "\n")
+
+	if subsequentSpace != nil {
+		subIndent = strings.Repeat(" ", subsequentSpace[0]) + subIndent
+	}
+	var result []string
+	for i, line := range lines {
+		if line == "" {
+			result = append(result, "")
+		} else if i > 0 {
+			result = append(result, subIndent+line)
+		} else {
+			result = append(result, indent+line)
+		}
+	}
+
+	return strings.Join(result, "\n")
+}
+
 // -----------------------------
-func humanAge(d time.Duration) string {
+func humanAge(t interface{}) string {
+	var d time.Duration
+	if t == nil {
+		return "-"
+	}
+	switch v := t.(type) {
+	case time.Time:
+		d = time.Since(v)
+	case metav1.Time:
+		d = time.Since(v.Time)
+	case time.Duration:
+		d = v
+	case string:
+		return v
+	default:
+		return "-"
+	}
 	if d < 0 {
 		d = -d
 	}
@@ -507,4 +563,105 @@ func GetPodRestartMetrics(pod *v1.Pod) PodRestartMetrics {
 	}
 
 	return metrics
+}
+
+// truncateString truncates a string to maxLength characters and adds ellipsis if needed
+func truncateString(s string, maxLength int) string {
+	if len(s) <= maxLength {
+		return s
+	}
+	return s[:maxLength] + "..."
+}
+
+// GetNamespaceFromFlags centralizes logic for namespace selection based on flags.
+// Returns: namespace string, allNamespaces bool, error
+func GetNamespaceFromFlags(allNamespaces bool, namespace string) (string, bool, error) {
+	if allNamespaces {
+		return "", true, nil
+	}
+	if namespace != "" {
+		return namespace, false, nil
+	}
+	ns, err := GetKubeNamespace()
+	if err != nil {
+		return "", false, err
+	}
+	return ns, false, nil
+}
+
+func boolToOkError(v bool) string {
+	if v {
+		return "OK"
+	}
+	return "ERROR"
+}
+
+// formatQuantityToGB converts a resource quantity to human-readable format in the largest appropriate unit
+// e.g., 2000Mi -> "2GB", 2500Mi -> "2.4GB", 512Mi -> "512MB", 512Ki -> "512KB"
+func formatQuantityToGB(val interface{}) string {
+	qty, ok := val.(resource.Quantity)
+	if !ok {
+		// Try pointer
+		if ptr, ok := val.(*resource.Quantity); ok && ptr != nil {
+			qty = *ptr
+		} else {
+			return "-"
+		}
+	}
+
+	// Get the value in bytes (canonical form)
+	bytes := qty.Value()
+	if bytes < 0 {
+		bytes = -bytes
+	}
+
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+		TB = GB * 1024
+	)
+
+	// Format with appropriate precision, using the largest unit that keeps value >= 1
+	switch {
+	case bytes >= TB:
+		value := float64(bytes) / float64(TB)
+		if value >= 10 {
+			return fmt.Sprintf("%.0fTB", value)
+		}
+		return fmt.Sprintf("%.1fTB", value)
+	case bytes >= GB:
+		value := float64(bytes) / float64(GB)
+		if value >= 10 {
+			return fmt.Sprintf("%.0fGB", value)
+		}
+		return fmt.Sprintf("%.1fGB", value)
+	case bytes >= MB:
+		value := float64(bytes) / float64(MB)
+		if value >= 10 {
+			return fmt.Sprintf("%.0fMB", value)
+		}
+		return fmt.Sprintf("%.1fMB", value)
+	case bytes >= KB:
+		value := float64(bytes) / float64(KB)
+		if value >= 10 {
+			return fmt.Sprintf("%.0fKB", value)
+		}
+		return fmt.Sprintf("%.1fKB", value)
+	default:
+		return fmt.Sprintf("%d", bytes)
+	}
+}
+
+func FormatMbpsToHuman(r interface{}) string {
+	if num, ok := r.(int); ok {
+		if num <= 0 {
+			return "Unknown/No link"
+		}
+		if num >= 1000 {
+			return strconv.Itoa(num/1000) + " Gbps"
+		}
+		return strconv.Itoa(num) + " Mbps"
+	}
+	return fmt.Sprintf("%v", r)
 }

@@ -186,6 +186,7 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 
 	// Wait for pods to complete and collect results
 	deadline := time.Now().Add(opts.Timeout)
+	collectionErrors := make(map[string]string)
 
 	for time.Now().Before(deadline) {
 		allCompleted := true
@@ -203,15 +204,49 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 				// Pod completed, read logs
 				if _, exists := hostChecksMap[nodeName]; !exists {
 					logs, err := getPodLogs(ctx, currentPod.Namespace, currentPod.Name, "hostchecks")
-					if err == nil {
+					if err != nil {
+						collectionErrors[nodeName] = fmt.Sprintf("failed to read pod logs: %v", err)
+						if opts.Verbose {
+							fmt.Printf("  [%s] Failed to read logs: %v\n", nodeName, err)
+						}
+					} else {
 						var hc HostChecksResult
-						if err := json.Unmarshal([]byte(logs), &hc); err == nil {
+						if err := json.Unmarshal([]byte(logs), &hc); err != nil {
+							collectionErrors[nodeName] = fmt.Sprintf("failed to parse hostcheck JSON: %v\nFirst 200 chars of output: %s",
+								err, truncateString(logs, 200))
+							if opts.Verbose {
+								fmt.Printf("  [%s] Failed to parse JSON: %v\n", nodeName, err)
+								fmt.Printf("       Output: %s\n", truncateString(logs, 200))
+							}
+						} else {
 							hostChecksMap[nodeName] = &hc
+							hc.InitializeNetworkInterfaceHierarchy()
+							if opts.Verbose {
+								fmt.Printf("  [%s] ✅ Collected hostcheck data\n", nodeName)
+							}
 						}
 					}
 				}
 			} else if currentPod.Status.Phase != corev1.PodPending && currentPod.Status.Phase != corev1.PodRunning {
-				// Pod failed
+				// Pod failed - get error info
+				if len(currentPod.Status.ContainerStatuses) > 0 {
+					containerStatus := currentPod.Status.ContainerStatuses[0]
+					if containerStatus.State.Terminated != nil {
+						msg := containerStatus.State.Terminated.Message
+						if msg == "" {
+							msg = containerStatus.State.Terminated.Reason
+						}
+						collectionErrors[nodeName] = fmt.Sprintf("pod failed: %s", msg)
+						if opts.Verbose {
+							fmt.Printf("  [%s] Pod failed: %s\n", nodeName, msg)
+						}
+					}
+				} else {
+					collectionErrors[nodeName] = fmt.Sprintf("pod phase: %s", currentPod.Status.Phase)
+					if opts.Verbose {
+						fmt.Printf("  [%s] Pod failed with phase: %s\n", nodeName, currentPod.Status.Phase)
+					}
+				}
 				delete(createdPods, nodeName)
 			} else {
 				allCompleted = false
@@ -230,14 +265,23 @@ func RunHostChecks(ctx context.Context, nodes []corev1.Node, opts HostCheckOptio
 	}
 
 	if len(hostChecksMap) == 0 {
-		return nil, fmt.Errorf("failed to collect hostcheck information from any node")
+		// Build detailed error message with all collection errors
+		var errorDetails strings.Builder
+		errorDetails.WriteString("failed to collect hostcheck information from any node")
+		if len(collectionErrors) > 0 {
+			errorDetails.WriteString(":\n")
+			for nodeName, errMsg := range collectionErrors {
+				errorDetails.WriteString(fmt.Sprintf("  [%s] %s\n", nodeName, errMsg))
+			}
+		}
+		return nil, fmt.Errorf("%s", errorDetails.String())
 	}
 
 	return hostChecksMap, nil
 }
 
 // GetNodeDrivesFromHostChecks extracts drive information from hostcheck results
-func (hcm HostChecksMap) GetNodeDrivesFromHostChecks(nodeName string) []NVMeDriveInfo {
+func (hcm HostChecksMap) GetNodeDrivesFromHostChecks(nodeName string) []NvmeDrive {
 	if result, exists := hcm[nodeName]; exists {
 		return result.NVMeDrives
 	}
@@ -347,7 +391,7 @@ func (hcm HostChecksMap) FormatSummary() string {
 // - If new nodes are requested, runs hostchecks only on new nodes
 // - Filters out NotReady nodes (they can't run pods)
 // - Thread-safe for concurrent access
-func (r *HostCheckRegistry) GetHostChecksForNodes(
+func (r *HostCheckModuleRegistry) GetHostChecksForNodes(
 	ctx context.Context,
 	nodes []corev1.Node,
 ) (HostChecksMap, error) {
@@ -451,22 +495,22 @@ func (r *HostCheckRegistry) GetHostChecksForNodes(
 
 // ValidateWithModules validates hostcheck results using specified modules
 // params can be used for parameterized validation (e.g., {"ethDevice": "bond0"})
-func (r *HostCheckRegistry) ValidateWithModules(
+func (r *HostCheckModuleRegistry) ValidateWithModules(
 	commandName string,
 	hostChecksMap HostChecksMap,
 	params map[string]interface{},
-) (map[string]map[string]*HostCheckResult, error) {
+) (map[string]map[ModuleName]*HostCheckModuleResult, error) {
 
 	config, exists := r.GetCommand(commandName)
 	if !exists {
 		return nil, fmt.Errorf("command '%s' not registered", commandName)
 	}
 
-	// Results: map[nodeName]map[moduleName]*HostCheckResult
-	results := make(map[string]map[string]*HostCheckResult)
+	// Results: map[nodeName]map[moduleName]*HostCheckModuleResult
+	results := make(map[string]map[ModuleName]*HostCheckModuleResult)
 
 	for nodeName, hostCheck := range hostChecksMap {
-		nodeResults := make(map[string]*HostCheckResult)
+		nodeResults := make(map[ModuleName]*HostCheckModuleResult)
 
 		for _, moduleName := range config.ModuleNames {
 			module, err := r.Get(moduleName)
@@ -478,86 +522,76 @@ func (r *HostCheckRegistry) ValidateWithModules(
 			// Convert hostcheck to JSON for module validation
 			hostCheckJSON, err := json.Marshal(hostCheck)
 			if err != nil {
-				nodeResults[moduleName] = &HostCheckResult{
+				nodeResults[moduleName] = &HostCheckModuleResult{
 					ModuleName: moduleName,
-					Status:     "error",
+					Status:     statusFail,
 					Error:      fmt.Sprintf("Failed to marshal hostcheck: %v", err),
 				}
 				continue
 			}
 
 			// Use ValidateWithParams if parameters are provided
-			var result interface{}
-			if len(params) > 0 {
-				result, err = module.ValidateWithParams(string(hostCheckJSON), params)
+			var result HostCheckModuleResponse
+
+			// Create a copy of params to add node-specific data
+			nodeParams := make(map[string]interface{})
+			for k, v := range params {
+				nodeParams[k] = v
+			}
+			// Add node-specific data
+			nodeParams["nodeName"] = nodeName
+
+			if len(nodeParams) > 0 {
+				result, err = module.ValidateWithParams(string(hostCheckJSON), nodeParams)
 			} else {
 				result, err = module.Validate(string(hostCheckJSON))
 			}
-
+			resultStatus := statusPass
 			if err != nil {
-				// Get the module to extract its error template
-				module, _ := r.Get(moduleName)
-				errorTemplate := ""
-				if module != nil {
-					errorTemplate = module.ErrorTemplate()
-				}
+				resultStatus = statusFail
+			}
 
-				nodeResults[moduleName] = &HostCheckResult{
-					ModuleName:    moduleName,
-					Status:        "error",
-					Error:         fmt.Sprintf("Validation error: %v", err),
-					ErrorTemplate: errorTemplate,
-					Params:        map[string]interface{}{"NodeName": nodeName},
-				}
-			} else {
-				// Get the module to extract its templates
-				module, _ := r.Get(moduleName)
-				successTemplate := ""
-				warningTemplate := ""
-				errorTemplate := ""
-				suggestedResolutionTemplate := ""
-				if module != nil {
-					successTemplate = module.SuccessTemplate()
-					warningTemplate = module.WarningTemplate()
-					errorTemplate = module.ErrorTemplate()
-					suggestedResolutionTemplate = module.SuggestedResolutionTemplate()
-				}
+			//// Extract status from the result data if provided
+			//if resultMap, ok := result; ok {
+			//	if statusVal, ok := resultMap["Status"].(CheckStatus); ok {
+			//		resultStatus = statusVal
+			//	}
+			//}
 
-				// Extract status from the result data if provided
-				resultStatus := "success"
-				if resultMap, ok := result.(map[string]interface{}); ok {
-					if statusVal, ok := resultMap["Status"].(string); ok {
-						resultStatus = statusVal
-					}
-				}
+			resultStatus = result.Status()
 
-				nodeResults[moduleName] = &HostCheckResult{
-					ModuleName:                  moduleName,
-					Status:                      resultStatus,
-					Data:                        result,
-					SuccessTemplate:             successTemplate,
-					WarningTemplate:             warningTemplate,
-					ErrorTemplate:               errorTemplate,
-					SuggestedResolutionTemplate: suggestedResolutionTemplate,
-					Params:                      map[string]interface{}{"NodeName": nodeName},
-				}
+			// fetch those after the module has actually performed the test since they can be dynamic
+			errorTemplate := module.ErrorTemplate()
+			successTemplate := module.SuccessTemplate()
+			warningTemplate := module.WarningTemplate()
+			suggestedResolutionTemplate := module.SuggestedResolutionTemplate()
+
+			nodeResults[moduleName] = &HostCheckModuleResult{
+				ModuleName:                  moduleName,
+				Status:                      resultStatus,
+				Error:                       fmt.Sprintf("Validation error: %v", err),
+				Data:                        result.(HostCheckModuleResponse),
+				SuccessTemplate:             successTemplate,
+				WarningTemplate:             warningTemplate,
+				ErrorTemplate:               errorTemplate,
+				SuggestedResolutionTemplate: suggestedResolutionTemplate,
+				Params:                      map[string]interface{}{"NodeName": nodeName},
 			}
 		}
 
 		results[nodeName] = nodeResults
 	}
-
 	return results, nil
 }
 
 // ValidateAll runs all validation modules for a command on cached hostcheck data
 // params can be used for parameterized validation (e.g., {"ethDevice": "bond0"})
-func (r *HostCheckRegistry) ValidateAll(
+func (r *HostCheckModuleRegistry) ValidateAll(
 	ctx context.Context,
 	commandName string,
 	nodes []corev1.Node,
 	params map[string]interface{},
-) (map[string]map[string]*HostCheckResult, error) {
+) (map[string]map[ModuleName]*HostCheckModuleResult, error) {
 
 	// Get hostchecks (cached or fresh)
 	hostChecksMap, err := r.GetHostChecksForNodes(ctx, nodes)
@@ -566,7 +600,7 @@ func (r *HostCheckRegistry) ValidateAll(
 	}
 
 	if len(hostChecksMap) == 0 {
-		return make(map[string]map[string]*HostCheckResult), nil
+		return make(map[string]map[ModuleName]*HostCheckModuleResult), nil
 	}
 
 	// Validate using registered modules with params
@@ -575,10 +609,10 @@ func (r *HostCheckRegistry) ValidateAll(
 
 // FormatNodeValidationResults formats the validation results for a single node as a string
 // Returns the formatted output and overall status: "success", "partial", or "failure"
-func (r *HostCheckRegistry) FormatNodeValidationResults(
+func (r *HostCheckModuleRegistry) FormatNodeValidationResults(
 	nodeName string,
 	commandName string,
-	moduleResults map[string]*HostCheckResult,
+	moduleResults map[ModuleName]*HostCheckModuleResult,
 ) (string, string) {
 	var output strings.Builder
 
@@ -588,9 +622,9 @@ func (r *HostCheckRegistry) FormatNodeValidationResults(
 	hasError := false
 
 	for _, mr := range moduleResults {
-		if mr.Status == "error" {
+		if mr.Status == statusFail {
 			hasError = true
-		} else if mr.Status == "warning" {
+		} else if mr.Status == statusWarn {
 			hasWarning = true
 		}
 	}
@@ -603,7 +637,7 @@ func (r *HostCheckRegistry) FormatNodeValidationResults(
 
 	// Format each module result using Summary()
 	config, _ := r.GetCommand(commandName)
-	var checkOrder []string
+	var checkOrder []ModuleName
 	if config != nil {
 		checkOrder = config.ModuleNames
 	}
@@ -614,26 +648,8 @@ func (r *HostCheckRegistry) FormatNodeValidationResults(
 			continue
 		}
 
-		// Map module name to friendly name
-		friendlyName := moduleName
-		switch moduleName {
-		case "os":
-			friendlyName = "Operating System"
-		case "kernel":
-			friendlyName = "Kernel"
-		case "cpu_memory":
-			friendlyName = "CPU & Memory"
-		case "weka_dir":
-			friendlyName = "Weka Directory"
-		case "xfs":
-			friendlyName = "XFS Tools"
-		case "weka_client":
-			friendlyName = "Weka Client"
-		case "network":
-			friendlyName = "Network Configuration"
-		case "nvme_drives":
-			friendlyName = "NVMe Drives"
-		}
+		module := r.modules[moduleName]
+		friendlyName := module.FriendlyName()
 
 		// Create context params for Summary()
 		contextParams := map[string]interface{}{
@@ -643,40 +659,23 @@ func (r *HostCheckRegistry) FormatNodeValidationResults(
 
 		// Add any additional data from the module result
 		if moduleResult.Data != nil {
-			if dataMap, ok := moduleResult.Data.(map[string]interface{}); ok {
-				for k, v := range dataMap {
-					contextParams[k] = v
-				}
+			resp := moduleResult.Data
+			contextParams["Status"] = resp.Status()
+			contextParams["ModuleName"] = resp.ModuleName()
+			contextParams["Details"] = resp.Details()
+			contextParams["Error"] = resp.Error()
+			for k, v := range moduleResult.Data.Map() {
+				contextParams[k] = v
 			}
+			// Add more fields if needed for specific modules (e.g., KernelVersion, OSRelease, etc.)
 		}
 
 		// Use Summary() to format the output
 		displayText := moduleResult.Summary(contextParams)
-
+		displayText = indentText(displayText, 5, 3) // Indent module details for better readability
 		// Handle multiline details (like network configuration)
-		if strings.Contains(displayText, "\n") {
-			lines := strings.Split(displayText, "\n")
-			output.WriteString(fmt.Sprintf("     %s\n", lines[0]))
-			indent := "               "
-			for i := 1; i < len(lines); i++ {
-				output.WriteString(fmt.Sprintf("%s%s\n", indent, lines[i]))
-			}
-		} else {
-			output.WriteString(fmt.Sprintf("     %s\n", displayText))
-		}
+		output.WriteString(displayText + "\n")
 	}
 
 	return output.String(), overallStatus
-}
-
-// PrintNodeValidationResults prints the validation results for a single node
-// Returns the overall status: "success", "partial", or "failure"
-func (r *HostCheckRegistry) PrintNodeValidationResults(
-	nodeName string,
-	commandName string,
-	moduleResults map[string]*HostCheckResult,
-) string {
-	output, status := r.FormatNodeValidationResults(nodeName, commandName, moduleResults)
-	fmt.Print(output)
-	return status
 }

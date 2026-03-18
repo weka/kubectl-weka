@@ -6,6 +6,7 @@ This guide explains how to extend `kubectl-weka` with new functionality.
 
 - [Building](#building)
 - [Architecture Overview](#architecture-overview)
+- [ResourcePrinter System](#resourceprinter-system)
 - [Adding Preflight Checks](#adding-preflight-checks)
   - [Node Preflight Checks](#node-preflight-checks)
   - [Cluster Preflight Checks](#cluster-preflight-checks)
@@ -212,7 +213,468 @@ Long-running operations use `PreflightOutput` for dual screen+file output.
 
 ---
 
-## Adding Preflight Checks
+## ResourcePrinter System
+
+The ResourcePrinter system formats and outputs produced output in a structured table or YAML format.
+
+### Overview
+
+- ResourcePrinters are registered for each resource type (e.g., Pods, Services).
+- Each printer implements the `ResourcePrinter` interface.
+- Common flags:
+  - `-o`/`--output`: Output format (table, yaml, json).
+  - `--no-headers`: Omit table headers.
+
+### Example Printer
+
+```go
+type PodResourcePrinter struct{}
+
+func (p *PodResourcePrinter) PrintObj(obj runtime.Object, w io.Writer) error {
+	pod := obj.(*v1.Pod)
+	_, err := fmt.Fprintf(w, "Pod: %s\n", pod.Name)
+	return err
+}
+```
+
+### Table-Driven Tests
+
+ResourcePrinters use table-driven tests for coverage:
+
+```go
+func TestPodResourcePrinter(t *testing.T) {
+	printer := &PodResourcePrinter{}
+	
+	var buf bytes.Buffer
+	err := printer.PrintObj(pod, &buf)
+	
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	
+	if !strings.Contains(buf.String(), "Pod:") {
+		t.Errorf("output did not contain expected text")
+	}
+}
+```
+
+---
+
+## ResourcePrinter System
+
+The ResourcePrinter system provides a unified abstraction for formatting and displaying resource data in multiple output formats. This design enables consistent output across all `kubectl weka get` commands while supporting table, JSON, YAML, and custom-column formats.
+
+### Overview
+
+**Purpose**: Standardize resource output formatting across all `get` commands
+
+**Features**:
+- ✅ Multiple output formats (table, wide, json, yaml, custom-columns)
+- ✅ Column visibility control (VisibleInWide attribute)
+- ✅ Custom value formatting via TableFormatFunctions
+- ✅ Consistent kubectl-like behavior
+- ✅ Extensible for new formats
+
+### Architecture
+
+#### Core Types
+
+**ResourcePrinter Interface** (`cmd/printer.go`):
+```go
+type ResourcePrinter interface {
+	SetOptions(opts PrinterOptions)
+	Print(columns []TableColumn, rows []TableRow, w io.Writer) error
+}
+```
+
+**TableColumn** - Column definition:
+```go
+type TableColumn struct {
+	Name                 string                           // Column header name
+	VisibleInWide        bool                             // Only shown with -o wide
+	TableFormatFunctions []func(interface{}) string       // Value formatting functions
+}
+```
+
+**TableRow** - Data row:
+```go
+type TableRow struct {
+	Values map[string]interface{}  // Column name -> value mapping
+}
+```
+
+**PrinterOptions** - Output configuration:
+```go
+type PrinterOptions struct {
+	ShowHeader        bool        // Include header row
+	WideOutput        bool        // Show VisibleInWide columns
+	ColumnsList       []string    // Explicitly selected columns
+	HideColumnsList   []string    // Columns to hide (case-insensitive)
+	HideEmptyColumns  bool        // Omit empty columns
+	IndentByNumSpaces int         // Indentation for output
+	TableStyle        TableStyle  // Table rendering style
+}
+```
+
+#### Printer Implementations
+
+**TablePrinter** - Human-readable tables (`cmd/table_printer.go`):
+```go
+type TablePrinter struct {
+	opts PrinterOptions
+}
+
+func (tp *TablePrinter) Print(columns []TableColumn, rows []TableRow, w io.Writer) error {
+	// Filters columns based on visibility and selection rules
+	// Formats values using TableFormatFunctions
+	// Renders as pretty table with go-pretty/v6/table
+}
+```
+
+**JsonPrinter** - JSON output (`cmd/json_printer.go`):
+```go
+type JsonPrinter struct {
+	opts PrinterOptions
+}
+```
+
+**YamlPrinter** - YAML output (`cmd/yaml_printer.go`):
+```go
+type YamlPrinter struct {
+	opts PrinterOptions
+}
+```
+
+### Usage Pattern
+
+#### Step 1: Define Columns
+
+```go
+columns := []TableColumn{
+	{Name: "NAME", VisibleInWide: false},
+	{Name: "IP", VisibleInWide: false},
+	{Name: "STATUS", VisibleInWide: false},
+	{Name: "AGE", VisibleInWide: true},  // Only with -o wide
+	{Name: "CPU", VisibleInWide: true, TableFormatFunctions: []func(interface{}) string{
+		func(val interface{}) string {
+			if cpu, ok := val.(float64); ok {
+				return fmt.Sprintf("%.2f", cpu)
+			}
+			return "-"
+		},
+	}},
+}
+```
+
+**Column Visibility Rules**:
+- `VisibleInWide: false` → Shown in default and wide output
+- `VisibleInWide: true` → Shown only in wide output (`-o wide`)
+
+#### Step 2: Build Rows
+
+```go
+var rows []TableRow
+for _, item := range items {
+	row := TableRow{Values: map[string]interface{}{
+		"NAME":   item.Name,
+		"IP":     item.IP,
+		"STATUS": item.Status,
+		"AGE":    item.CreationTime,
+		"CPU":    item.CPUUsage,
+	}}
+	rows = append(rows, row)
+}
+```
+
+#### Step 3: Get Printer from Flags
+
+```go
+printer, _ := GetPrinterFromFlags(
+	flagOutput,           // "-o" flag value
+	!flagNoHeaders,       // Show headers
+	nil,                  // Hide columns list
+	false,                // Hide empty columns
+	0,                    // No indentation
+	TableStyleMinimal,    // Table style
+)
+```
+
+#### Step 4: Render Output
+
+```go
+var output strings.Builder
+if err := printer.Print(columns, rows, &output); err != nil {
+	return "", err
+}
+return output.String() + "\n", nil
+```
+
+### Format Selection Function
+
+**GetPrinterFromFlags** (`cmd/printer_factory.go`):
+
+```go
+func GetPrinterFromFlags(
+	outputFlag string,
+	showHeader bool,
+	hideColumnsList []string,
+	hideEmptyColumns bool,
+	indentByNumSpaces int,
+	tableStyle TableStyle,
+) (ResourcePrinter, []string) {
+	// Parses output flag: "table" (default), "wide", "json", "yaml", "custom-columns=..."
+	// Returns appropriate printer and column list
+}
+```
+
+**Output Format Support**:
+
+| Format | Value | Behavior |
+|--------|-------|----------|
+| Default | `""` or `"table"` | Table with default columns |
+| Wide | `"wide"` | Table with VisibleInWide columns |
+| JSON | `"json"` | JSON array of row objects |
+| YAML | `"yaml"` | YAML array of row objects |
+| Custom | `"custom-columns=COL1,COL2"` | Table with selected columns only |
+
+### Value Formatting
+
+**TableFormatFunctions** allow custom formatting of column values:
+
+```go
+type TableColumn struct {
+	Name: "MEMORY",
+	TableFormatFunctions: []func(interface{}) string{
+		func(val interface{}) string {
+			if bytes, ok := val.(int64); ok {
+				return fmt.Sprintf("%.2fGB", float64(bytes)/(1024*1024*1024))
+			}
+			return "-"
+		},
+	},
+}
+```
+
+**Real-World Example** - formatQuantityToGB (`cmd/get_nodes.go`):
+
+```go
+func formatQuantityToGB(val interface{}) string {
+	qty, ok := val.(resource.Quantity)
+	if !ok {
+		if ptr, ok := val.(*resource.Quantity); ok && ptr != nil {
+			qty = *ptr
+		} else {
+			return "-"
+		}
+	}
+	
+	bytes := qty.Value()
+	// ... format bytes to human-readable GB/MB/KB
+	return formatted
+}
+
+// Usage in column definition
+{
+	Name: "MEMORY_USABLE",
+	TableFormatFunctions: []func(interface{}) string{formatQuantityToGB},
+}
+```
+
+### Real-World Examples
+
+#### Example 1: Simple Table (get nodes)
+
+```go
+columns := []TableColumn{
+	{Name: "NAME", VisibleInWide: false},
+	{Name: "IP", VisibleInWide: false},
+	{Name: "STATUS", VisibleInWide: false},
+	{Name: "CORES_FREE", VisibleInWide: false, 
+	 TableFormatFunctions: []func(interface{}) string{formatQuantityToGB}},
+	{Name: "RAM_FREE", VisibleInWide: false,
+	 TableFormatFunctions: []func(interface{}) string{formatQuantityToGB}},
+	{Name: "AGE", VisibleInWide: true},
+	{Name: "CPU_UTIL", VisibleInWide: true},
+}
+
+// Usage:
+// kubectl weka get nodes                    # Default columns
+// kubectl weka get nodes -o wide            # Includes AGE, CPU_UTIL
+// kubectl weka get nodes -o json            # JSON output
+// kubectl weka get nodes -o custom-columns=NAME,IP,STATUS
+```
+
+#### Example 2: With Namespace Column (get cluster-instances -A)
+
+```go
+var columns []TableColumn
+if allNamespaces {
+	columns = []TableColumn{
+		{Name: "NAMESPACE", VisibleInWide: false},  // Only with -A
+		{Name: "WEKACLUSTER", VisibleInWide: false},
+		// ... other columns
+	}
+} else {
+	columns = []TableColumn{
+		{Name: "WEKACLUSTER", VisibleInWide: false},
+		// ... other columns (no NAMESPACE)
+	}
+}
+```
+
+#### Example 3: Custom Format Function
+
+```go
+// Define formatting function
+func formatStatus(val interface{}) string {
+	if status, ok := val.(string); ok {
+		switch status {
+		case "Running":
+			return "✓ Running"
+		case "Pending":
+			return "⏳ Pending"
+		case "Failed":
+			return "✗ Failed"
+		}
+	}
+	return "-"
+}
+
+// Use in column
+{
+	Name: "STATUS",
+	TableFormatFunctions: []func(interface{}) string{formatStatus},
+}
+```
+
+### Command Implementation Template
+
+Here's the standard pattern for implementing a new `get` command with ResourcePrinter:
+
+```go
+var flagOutput string
+
+func init() {
+	getCmd.AddCommand(getExampleCmd)
+	getExampleCmd.Flags().StringVarP(&flagOutput, "output", "o", "", 
+		"Output format: table, wide, json, yaml, custom-columns=<COLS...>")
+}
+
+func runGetExample(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
+	
+	printer, _ := GetPrinterFromFlags(flagOutput, true, nil, false, 0, TableStyleMinimal)
+	output, err := generateExampleOutput(ctx, KubeClients, printer)
+	if err != nil {
+		return err
+	}
+	
+	fmt.Print(output)
+	return nil
+}
+
+func generateExampleOutput(ctx context.Context, clients *K8sClients, printer ResourcePrinter) (string, error) {
+	// Fetch data
+	// ... your logic to retrieve data ...
+	
+	// Define columns
+	columns := []TableColumn{
+		{Name: "FIELD1", VisibleInWide: false},
+		{Name: "FIELD2", VisibleInWide: false},
+		{Name: "WIDE_ONLY", VisibleInWide: true},
+	}
+	
+	// Build rows
+	var rows []TableRow
+	for _, item := range items {
+		row := TableRow{Values: map[string]interface{}{
+			"FIELD1": item.Field1,
+			"FIELD2": item.Field2,
+			"WIDE_ONLY": item.WideOnlyField,
+		}}
+		rows = append(rows, row)
+	}
+	
+	// Render
+	var buf strings.Builder
+	_ = printer.Print(columns, rows, &buf)
+	return buf.String() + "\n", nil
+}
+```
+
+### Testing ResourcePrinter Output
+
+```go
+func TestResourcePrinter(t *testing.T) {
+	columns := []TableColumn{
+		{Name: "NAME", VisibleInWide: false},
+		{Name: "VALUE", VisibleInWide: false},
+	}
+	
+	rows := []TableRow{
+		{Values: map[string]interface{}{
+			"NAME": "test1",
+			"VALUE": "value1",
+		}},
+	}
+	
+	// Test table output
+	printer := &TablePrinter{}
+	printer.SetOptions(PrinterOptions{ShowHeader: true})
+	
+	var buf strings.Builder
+	err := printer.Print(columns, rows, &buf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	
+	output := buf.String()
+	if !strings.Contains(output, "NAME") {
+		t.Error("header not found in output")
+	}
+	if !strings.Contains(output, "test1") {
+		t.Error("data not found in output")
+	}
+}
+```
+
+### Extending for New Output Formats
+
+To add a new output format:
+
+1. **Create new printer** (e.g., `cmd/xml_printer.go`):
+```go
+type XmlPrinter struct {
+	opts PrinterOptions
+}
+
+func (xp *XmlPrinter) SetOptions(opts PrinterOptions) {
+	xp.opts = opts
+}
+
+func (xp *XmlPrinter) Print(columns []TableColumn, rows []TableRow, w io.Writer) error {
+	// Implement XML formatting
+}
+```
+
+2. **Register in GetPrinterFromFlags** (`cmd/printer_factory.go`):
+```go
+case "xml":
+	printer = &XmlPrinter{}
+```
+
+3. **Update documentation** with new format option
+
+### Best Practices
+
+1. **Always define VisibleInWide** explicitly
+2. **Use TableFormatFunctions** for non-string values
+3. **Handle nil values** gracefully (return "-")
+4. **Sort rows consistently** before passing to printer
+5. **Test all output formats** (table, wide, json, yaml)
+6. **Document column visibility** in command help text
+
+---
 
 ### Node Preflight Checks
 
@@ -233,7 +695,7 @@ import (
 // ExampleHostCheckModule validates example node configuration
 type ExampleHostCheckModule struct{}
 
-func (m *ExampleHostCheckModule) Name() string {
+func (m *ExampleHostCheckModule) Name() ModuleName {
 	return "example_check"
 }
 
@@ -362,7 +824,7 @@ import (
 
 type ExampleClusterCheckModule struct{}
 
-func (m *ExampleClusterCheckModule) Name() string {
+func (m *ExampleClusterCheckModule) Name() ModuleName {
 	return "example_cluster_check"
 }
 
@@ -453,7 +915,7 @@ import (
 
 type ExampleClusterValidationModule struct{}
 
-func (m *ExampleClusterValidationModule) Name() string {
+func (m *ExampleClusterValidationModule) Name() ModuleName {
 	return "example_cluster_validation"
 }
 
@@ -558,7 +1020,7 @@ type ExampleCollector struct {
 	ResourceName string // Optional: filter by resource name
 }
 
-func (c *ExampleCollector) Name() string {
+func (c *ExampleCollector) Name() ModuleName {
 	return "Example Data"
 }
 
@@ -686,23 +1148,101 @@ The `NodesDescriptionCollector` includes a specialized `collectHostChecks()` met
    - Files: `{nodeName}_hostcheck.json`
    - One file per node with complete host check data
 
-4. **Collected Data Includes**
-   - OS and kernel information
-   - WEKA directory availability and size
-   - Network interfaces (Mellanox, bonds, LACP)
-   - CPU and memory configuration
-   - NVMe drive inventory
-   - System performance tuning parameters
+4. **Extended Hostcheck Data**
+   
+   The hostcheck now collects comprehensive information:
+   
+   - **OS and System**
+     - OS release information
+     - Kernel version
+     - CPU model, family, architecture
+   
+   - **Network Interfaces** (generic section)
+     - All Ethernet and InfiniBand interfaces
+     - Connection type and speeds (max and effective)
+     - PCI addresses for hardware mapping
+     - MTU, MAC address, bonding information
+     - Network metrics: bytes/packets in/out
+     - Error tracking: errors, drops, collisions, overruns, CRC errors
+   
+   - **Mellanox-Specific Interfaces** (backward compatible)
+     - Mellanox NIC detection
+     - LACP bond configuration
+     - Bond-specific information
+   
+   - **Storage**
+     - NVMe drive inventory with PCI addresses
+     - Drive models, serial numbers, sizes
+     - Mount point information
+   
+   - **Compute Resources**
+     - CPU cores (physical and logical)
+     - Hyperthreading status
+     - Memory capacity and available memory
+     - Hugepage configuration
+   
+   - **WEKA Resources**
+     - WEKA directory availability
+     - Available storage space
+     - WEKA client status
+     - XFS tools detection
 
-**Example JSON Output:**
+**Example JSON Output with Network Interfaces:**
 ```json
 {
   "os_release": "Ubuntu 22.04 LTS",
   "kernel_version": "5.15.0-1234-aws",
+  "network_interfaces": [
+    {
+      "name": "eth0",
+      "type": "ethernet",
+      "ip": "10.0.0.1/24",
+      "mtu": 1500,
+      "max_speed": "10Gbps",
+      "effective_speed": "10Gbps",
+      "pci_address": "0000:01:00.0",
+      "model": "Intel I350",
+      "status": "up",
+      "metrics": {
+        "bytes_in": 5000000000,
+        "bytes_out": 3000000000,
+        "packets_in": 5000000,
+        "errors_in": 0,
+        "crc_errors": 0
+      }
+    },
+    {
+      "name": "ib0",
+      "type": "infiniband",
+      "ip": "192.168.1.10/24",
+      "mtu": 2048,
+      "max_speed": "400Gbps",
+      "effective_speed": "400Gbps",
+      "pci_address": "0000:3d:00.0",
+      "model": "Mellanox ConnectX-7",
+      "status": "up",
+      "metrics": {
+        "bytes_in": 50000000000,
+        "bytes_out": 30000000000
+      }
+    }
+  ],
+  "network_interface_count": 2,
+  "nvme_drives": [
+    {
+      "device_name": "nvme0n1",
+      "device_path": "/dev/nvme0n1",
+      "serial": "SERIAL123",
+      "model": "Samsung 970 EVO",
+      "size": 1099511627776,
+      "pci_address": "0000:01:00.0",
+      "mounted": true,
+      "mount_point": "/mnt/nvme0n1"
+    }
+  ],
   "weka_dir_ok": true,
   "weka_dir_path": "/mnt/weka",
   "weka_dir_avail_bytes": 1649267441664,
-  "mellanox": true,
   "physical_cores": 32,
   "logical_cores": 64,
   "memory_bytes": 274877906944,

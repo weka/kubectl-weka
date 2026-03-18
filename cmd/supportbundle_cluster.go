@@ -270,14 +270,14 @@ func (c *ClusterResourcesCollector) collectClusterInstances(ctx context.Context,
 	logger.Debug("Collecting cluster instances", "cluster", cluster.Name, "namespace", cluster.Namespace)
 
 	// Generate cluster instances output directly using the function
+	printer := NewSupportBundlePrinter()
 	output, err := generateClusterInstancesOutput(
 		ctx,
 		clients,
 		cluster.Namespace,
 		false, // allNamespaces = false (we want this specific cluster only)
 		cluster.Name,
-		false, // noHeaders = false (include headers)
-		false, // wide = false (standard output)
+		printer,
 	)
 	if err != nil {
 		warning := fmt.Sprintf("failed to collect cluster instances for %s/%s: %v", cluster.Namespace, cluster.Name, err)

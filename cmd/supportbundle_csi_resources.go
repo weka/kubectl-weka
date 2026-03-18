@@ -391,11 +391,11 @@ func (c *CSIDriverCollector) Collect(ctx context.Context) CollectorResult {
 		}
 	}
 
-	logger.Debug("Found CSIDriver resources with weka.io in the name", "count", len(wekaDrivers))
+	logger.Debug("Found WEKA CSIDriver resources", "count", len(wekaDrivers))
 
 	// Check if we exceeded the limit
 	if len(wekaDrivers) > 100 {
-		warning := fmt.Sprintf("Found %d CSIDriver resources with weka.io in the name, collecting only first 100", len(wekaDrivers))
+		warning := fmt.Sprintf("Found %d WEKA CSIDriver resources, collecting only first 100", len(wekaDrivers))
 		warnings = append(warnings, warning)
 		logger.Debug("⚠️  " + warning)
 		wekaDrivers = wekaDrivers[:100]

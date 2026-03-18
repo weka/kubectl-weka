@@ -102,8 +102,10 @@ func (c *NodesDescriptionCollector) collectNodesTable(ctx context.Context) (stri
 
 	logger.Debug("Collecting nodes table", "nodeSelector", c.NodeSelector)
 
+	printer := NewSupportBundlePrinter()
+
 	// Generate nodes table output with node selector
-	output, err := generateNodesOutput(ctx, clients, false, false, c.NodeSelector)
+	output, err := generateNodesOutput(ctx, clients, printer, c.NodeSelector)
 	if err != nil {
 		warning := fmt.Sprintf("failed to collect nodes table: %v", err)
 		logger.Debug("⚠️  Failed to collect nodes table", "error", err)
@@ -123,7 +125,7 @@ func (c *NodesDescriptionCollector) collectNodesTable(ctx context.Context) (stri
 }
 
 // collectHostChecks runs host checks on all nodes and dumps results as JSON
-// Uses the HostCheckRegistry with caching to avoid redundant host check execution
+// Uses the HostCheckModuleRegistry with caching to avoid redundant host check execution
 func (c *NodesDescriptionCollector) collectHostChecks(ctx context.Context, nodes *[]corev1.Node, bundlePath string, logger *slog.Logger) ([]string, []string) {
 	if len(*nodes) == 0 {
 		return []string{}, []string{}

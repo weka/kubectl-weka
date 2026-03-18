@@ -101,7 +101,8 @@ func (c *CSIResourcesCollector) Collect(ctx context.Context) CollectorResult {
 
 	// Collect CSI instances (pods) information
 	logger.Debug("Collecting CSI instances")
-	instancesOutput, err := generateCSIInstancesOutput(ctx, KubeClients, "", "", "", false, false)
+	printer := NewSupportBundlePrinter()
+	instancesOutput, err := generateCSIInstancesOutput(ctx, KubeClients, "", "", "", false, printer)
 	if err != nil {
 		errors = append(errors, fmt.Sprintf("failed to get CSI instances: %v", err))
 		logger.Warn("Failed to collect CSI instances", "error", err)
@@ -118,7 +119,7 @@ func (c *CSIResourcesCollector) Collect(ctx context.Context) CollectorResult {
 
 	// Collect unhealthy CSI instances in wide view
 	logger.Debug("Collecting unhealthy CSI instances")
-	unhealthyOutput, err := generateCSIInstancesOutput(ctx, KubeClients, "", "", "", true, true)
+	unhealthyOutput, err := generateCSIInstancesOutput(ctx, KubeClients, "", "", "", true, printer)
 	if err != nil {
 		errors = append(errors, fmt.Sprintf("failed to get unhealthy CSI instances: %v", err))
 		logger.Warn("Failed to collect unhealthy CSI instances", "error", err)
@@ -130,6 +131,27 @@ func (c *CSIResourcesCollector) Collect(ctx context.Context) CollectorResult {
 		} else {
 			filesCreated = append(filesCreated, unhealthyFile)
 			logger.Debug("Collected unhealthy CSI instances", "file", unhealthyFile)
+		}
+	}
+
+	// Collect CSI secrets (respecting include-sensitive-data flag)
+	logger.Debug("Collecting CSI secrets", "include_sensitive", supportBundleIncludeSensitive)
+	secretsOutput, err := generateCSISecretsOutput(ctx, KubeClients, printer)
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("failed to get CSI secrets: %v", err))
+		logger.Warn("Failed to collect CSI secrets", "error", err)
+	} else {
+		secretsFile := filepath.Join(csiDir, "csi-secrets.txt")
+		if err := os.WriteFile(secretsFile, []byte(secretsOutput), 0644); err != nil {
+			errors = append(errors, fmt.Sprintf("failed to write CSI secrets file: %v", err))
+			logger.Warn("Failed to write CSI secrets file", "error", err)
+		} else {
+			filesCreated = append(filesCreated, secretsFile)
+			if supportBundleIncludeSensitive {
+				logger.Warn("Collected CSI secrets (unredacted)", "file", secretsFile)
+			} else {
+				logger.Debug("Collected CSI secrets (redacted)", "file", secretsFile)
+			}
 		}
 	}
 
