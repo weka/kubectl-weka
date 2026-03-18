@@ -37,7 +37,9 @@ else
 endif
 
 # ldflags for build
-LDFLAGS := -ldflags="-X main.version=$(VERSION) -X main.commit=$(GIT_COMMIT) -X main.date=$(BUILD_DATE)"
+LDFLAGS := -ldflags="-X github.com/weka/kubectl-weka/pkg/version.Version=${VERSION} \
+                     -X github.com/weka/kubectl-weka/pkg/version.Commit=$(GIT_COMMIT) \
+                     -X github.com/weka/kubectl-weka/pkg/version.Date=$(BUILD_DATE)"
 
 help:
 	@echo "kubectl-weka Makefile"

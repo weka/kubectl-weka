@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -16,8 +17,12 @@ var (
 	flagNamespace     string
 	flagAllNamespaces bool
 	flagNoHeaders     bool
-	flagWide          bool
-	KubeClients       *K8sClients
+	flagOutput        string
+	flagNodeSelector  string
+	flagFailFast      bool
+	flagRole          string
+
+	KubeClients *kubernetes.K8sClients
 )
 
 var rootCmd = &cobra.Command{
@@ -44,7 +49,7 @@ func Execute() {
 
 	ctx := context.Background()
 	var err error
-	KubeClients, err = NewK8sClients(ctx)
+	KubeClients, err = kubernetes.NewK8sClients(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to initialize Kubernetes client: %v\n", err)
 		os.Exit(1)
@@ -58,12 +63,9 @@ func Execute() {
 }
 
 func init() {
-	InitializeHostCheckRegistry()
-
 	rootCmd.AddCommand(getCmd)
 	rootCmd.AddCommand(preflightCmd)
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(planCmd)
 	rootCmd.AddCommand(supportBundleCmd)
-
 }

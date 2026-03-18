@@ -1,0 +1,430 @@
+package clustercheck
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	kubernetes2 "github.com/weka/kubectl-weka/pkg/kubernetes"
+	"github.com/weka/kubectl-weka/pkg/utils"
+	v2 "k8s.io/api/authorization/v1"
+	v3 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/version"
+	"k8s.io/client-go/kubernetes"
+	"strings"
+	"time"
+)
+
+func CheckK8sVersion124Plus(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
+	sv, err := clientset.Discovery().ServerVersion()
+	if err != nil {
+		return false, "", err
+	}
+
+	// sv.GitVersion is like "v1.29.1"
+	got, err := version.ParseGeneric(sv.GitVersion)
+	if err != nil {
+		// fallback: try without leading v
+		got, err = version.ParseGeneric(strings.TrimPrefix(sv.GitVersion, "v"))
+		if err != nil {
+			return false, "", fmt.Errorf("cannot parse server version %q", sv.GitVersion)
+		}
+	}
+
+	min := version.MustParseGeneric("1.24.0")
+	if got.LessThan(min) {
+		return false, fmt.Sprintf("k8s is %s, should be >= 1.24.0", sv.GitVersion), nil
+	}
+	return true, "", nil
+}
+
+func CheckNotOpenShiftOrROSA(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
+	// Detect OpenShift by API groups exposed by the apiserver.
+	// If any are present, it's OpenShift (including ROSA / managed OpenShift).
+	grps, err := clientset.Discovery().ServerGroups()
+	if err != nil {
+		return false, "", err
+	}
+
+	isOpenShift := false
+	var found []string
+
+	for _, g := range grps.Groups {
+		switch g.Name {
+		case "route.openshift.io", "config.openshift.io", "security.openshift.io", "operator.openshift.io", "machine.openshift.io":
+			isOpenShift = true
+			found = append(found, g.Name)
+		}
+	}
+
+	if !isOpenShift {
+		return true, "", nil
+	}
+
+	// Best-effort ROSA hints:
+	// - "openshift-rosa" or "openshift-addon-operator" namespaces often exist on ROSA,
+	//   but not guaranteed. We'll keep the message helpful either way.
+	rosaHint := detectROSAHint(ctx, clientset)
+
+	if rosaHint != "" {
+		return false, fmt.Sprintf("OpenShift detected (%s); ROSA hint: %s", strings.Join(found, ","), rosaHint), nil
+	}
+	return false, fmt.Sprintf("OpenShift detected (%s)", strings.Join(found, ",")), nil
+}
+
+func detectROSAHint(ctx context.Context, clientset *kubernetes.Clientset) string {
+	// This is heuristic: safe and optional.
+	nsList, err := clientset.CoreV1().Namespaces().List(ctx, v1.ListOptions{})
+	if err != nil {
+		return ""
+	}
+	for _, ns := range nsList.Items {
+		if ns.Name == "openshift-rosa" || strings.Contains(ns.Name, "rosa") {
+			return "namespace " + ns.Name
+		}
+		if ns.Name == "openshift-addon-operator" {
+			return "namespace openshift-addon-operator"
+		}
+	}
+	return ""
+}
+
+func CheckHelmClusterPermissions(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
+	type check struct {
+		verb, group, resource string
+	}
+
+	// Minimal set that implies you are NOT confined to a single namespace,
+	// and can install typical operator charts.
+	checks := []check{
+		{"create", "apiextensions.k8s.io", "customresourcedefinitions"},
+		{"create", "rbac.authorization.k8s.io", "clusterroles"},
+		{"create", "rbac.authorization.k8s.io", "clusterrolebindings"},
+		{"create", "", "namespaces"},
+		// Nice-to-have for many operators; not strictly "helm" but common:
+		{"create", "admissionregistration.k8s.io", "validatingwebhookconfigurations"},
+		{"create", "admissionregistration.k8s.io", "mutatingwebhookconfigurations"},
+	}
+
+	var missing []string
+	for _, c := range checks {
+		allowed, err := ssarAllowed(ctx, clientset, c.verb, c.group, c.resource, "", "")
+		if err != nil {
+			return false, "", err
+		}
+		if !allowed {
+			if c.group == "" {
+				missing = append(missing, fmt.Sprintf("%s %s", c.verb, c.resource))
+			} else {
+				missing = append(missing, fmt.Sprintf("%s %s.%s", c.verb, c.resource, c.group))
+			}
+		}
+	}
+
+	if len(missing) == 0 {
+		return true, "", nil
+	}
+
+	return false, fmt.Sprintf("missing permissions: %s", utils.JoinLimited(missing, 5)), nil
+}
+
+func ssarAllowed(ctx context.Context, clientset *kubernetes.Clientset, verb, group, resource, namespace, name string) (bool, error) {
+	ssar := &v2.SelfSubjectAccessReview{
+		Spec: v2.SelfSubjectAccessReviewSpec{
+			ResourceAttributes: &v2.ResourceAttributes{
+				Verb:      verb,
+				Group:     group,
+				Resource:  resource,
+				Namespace: namespace,
+				Name:      name,
+			},
+		},
+	}
+
+	out, err := clientset.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, ssar, v1.CreateOptions{})
+	if err != nil {
+		return false, err
+	}
+	return out.Status.Allowed, nil
+}
+
+// kubelet configz via apiserver proxy:
+// GET /api/v1/nodes/<node>/proxy/configz
+func getCPUManagerPolicyViaConfigz(ctx context.Context, clientset *kubernetes.Clientset, nodeName string) (string, error) {
+	// Retry logic with exponential backoff for transient errors (503, timeouts, etc.)
+	var lastErr error
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		raw, err := clientset.CoreV1().
+			RESTClient().
+			Get().
+			AbsPath("/api/v1/nodes", nodeName, "proxy", "configz").
+			Do(ctx).
+			Raw()
+		if err == nil {
+			// Success - parse the response
+			var top map[string]any
+			if err := json.Unmarshal(raw, &top); err != nil {
+				return "", err
+			}
+
+			if kc, ok := top["kubeletconfig"].(map[string]any); ok {
+				if v, ok := kc["cpuManagerPolicy"].(string); ok && v != "" {
+					return v, nil
+				}
+			}
+
+			for _, v := range top {
+				m, ok := v.(map[string]any)
+				if !ok {
+					continue
+				}
+				if pol, ok := m["cpuManagerPolicy"].(string); ok && pol != "" {
+					return pol, nil
+				}
+			}
+
+			return "", fmt.Errorf("cpuManagerPolicy not found in configz")
+		}
+
+		lastErr = err
+		errStr := err.Error()
+
+		// Check if this is a transient error worth retrying
+		// Transient: 503 Service Unavailable, timeout, temporary network issue
+		isTransient := strings.Contains(errStr, "503") ||
+			strings.Contains(errStr, "temporarily unable") ||
+			strings.Contains(errStr, "currently unable to handle") ||
+			strings.Contains(errStr, "timeout") ||
+			strings.Contains(errStr, "connection refused") ||
+			strings.Contains(errStr, "temporary failure")
+
+		if !isTransient {
+			// Permanent error - don't retry
+			return "", err
+		}
+
+		// This is a transient error; retry with backoff
+		if attempt < maxRetries-1 {
+			// Exponential backoff: 100ms, 200ms, 400ms
+			waitTime := time.Duration(100*(1<<uint(attempt))) * time.Millisecond
+			select {
+			case <-time.After(waitTime):
+				// Continue to next attempt
+			case <-ctx.Done():
+				// Context cancelled
+				return "", ctx.Err()
+			}
+		}
+	}
+
+	return "", fmt.Errorf("failed to get CPU manager policy after %d retries: %w", maxRetries, lastErr)
+}
+
+func getNodeConditionStatus(n *v3.Node, t v3.NodeConditionType) v3.ConditionStatus {
+	for _, c := range n.Status.Conditions {
+		if c.Type == t {
+			return c.Status
+		}
+	}
+	return ""
+}
+
+func detectK3s(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
+	// K3s detection strategies:
+	// 1. Check for k3s nodes via labels (node.kubernetes.io/instance-type=k3s or provider contains k3s)
+	// 2. Check for k3s-server service in kube-system
+	// 3. Check for k3s components (coredns with k3s labels, etc.)
+
+	// Strategy 1: Check nodes for k3s labels or provider ID
+	nodes, err := clientset.CoreV1().Nodes().List(ctx, v1.ListOptions{})
+	if err != nil {
+		return false, "", err
+	}
+
+	for _, node := range nodes.Items {
+		// Check labels
+		if val, ok := node.Labels["node.kubernetes.io/instance-type"]; ok {
+			if strings.Contains(strings.ToLower(val), "k3s") {
+				return true, fmt.Sprintf("detected via node %s label", node.Name), nil
+			}
+		}
+
+		// Check providerID (e.g., "k3s://hostname")
+		if strings.HasPrefix(strings.ToLower(node.Spec.ProviderID), "k3s://") {
+			return true, fmt.Sprintf("detected via node %s providerID", node.Name), nil
+		}
+
+		// Check node info (some k3s setups put k3s in the container runtime version or OS image)
+		if strings.Contains(strings.ToLower(node.Status.NodeInfo.ContainerRuntimeVersion), "k3s") {
+			return true, fmt.Sprintf("detected via node %s runtime version", node.Name), nil
+		}
+		if strings.Contains(strings.ToLower(node.Status.NodeInfo.OSImage), "k3s") {
+			return true, fmt.Sprintf("detected via node %s OS image", node.Name), nil
+		}
+	}
+
+	// Strategy 2: Check for k3s services in kube-system
+	svcs, err := clientset.CoreV1().Services("kube-system").List(ctx, v1.ListOptions{})
+	if err == nil {
+		for _, svc := range svcs.Items {
+			if svc.Name == "k3s" || svc.Name == "k3s-server" || strings.HasPrefix(svc.Name, "k3s-") {
+				return true, fmt.Sprintf("detected via service kube-system/%s", svc.Name), nil
+			}
+		}
+	}
+
+	// Strategy 3: Check for k3s-specific deployments or pods
+	deploys, err := clientset.AppsV1().Deployments("kube-system").List(ctx, v1.ListOptions{})
+	if err == nil {
+		for _, deploy := range deploys.Items {
+			// K3s typically runs coredns with specific labels
+			if deploy.Name == "coredns" {
+				if val, ok := deploy.Labels["k3s-app"]; ok && val == "kube-dns" {
+					return true, "detected via coredns k3s-app label", nil
+				}
+			}
+			if strings.Contains(strings.ToLower(deploy.Name), "k3s") {
+				return true, fmt.Sprintf("detected via deployment kube-system/%s", deploy.Name), nil
+			}
+		}
+	}
+
+	return false, "", nil
+}
+
+func DetectKnownCNIDaemonSet(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
+	// Check for K3s built-in CNI (Flannel is integrated into k3s-agent, not a separate daemonset)
+	isK3s, k3sHint, err := detectK3s(ctx, clientset)
+	if err != nil {
+		return false, "", err
+	}
+	if isK3s {
+		return true, fmt.Sprintf("k3s built-in CNI (flannel) %s", k3sHint), nil
+	}
+
+	// Check typical namespaces where CNI runs
+	namespaces := []string{"kube-system", "kube-flannel"}
+
+	// Known identifiers (substring match) across CNIs
+	knownSubstrings := []string{
+		"calico-node",
+		"cilium",
+		"weave-net",
+		"flannel",
+		"antrea-agent",
+		"canal",
+		"aws-node",
+		"azure-vnet",
+	}
+
+	// 1) DaemonSet name substring check in likely namespaces
+	for _, ns := range namespaces {
+		dsList, err := clientset.AppsV1().DaemonSets(ns).List(ctx, v1.ListOptions{})
+		if err != nil {
+			// If namespace doesn't exist, ignore; other errors bubble up
+			if strings.Contains(strings.ToLower(err.Error()), "not found") {
+				continue
+			}
+			return false, "", err
+		}
+
+		for _, ds := range dsList.Items {
+			name := ds.Name
+			for _, sub := range knownSubstrings {
+				if strings.Contains(name, sub) {
+					return true, fmt.Sprintf("%s/%s", ns, name), nil
+				}
+			}
+
+			// 2) Label-based detection (helps for flannel and others)
+			labels := ds.Labels
+			if utils.HasAnyLabelValue(labels, []string{"k8s-app", "app"}, []string{"flannel", "kube-flannel"}) {
+				return true, fmt.Sprintf("%s/%s", ns, name), nil
+			}
+			if utils.HasAnyLabelValue(labels, []string{"k8s-app", "app"}, []string{"calico-node", "cilium", "weave-net", "antrea"}) {
+				return true, fmt.Sprintf("%s/%s", ns, name), nil
+			}
+		}
+	}
+
+	// 3) Fallback: look for CNI pods (covers cases where CNI isn't a DS, or DS is elsewhere)
+	// Try kube-system + kube-flannel; if flannel exists, it’s usually visible here.
+	for _, ns := range namespaces {
+		pods, err := clientset.CoreV1().Pods(ns).List(ctx, v1.ListOptions{})
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "not found") {
+				continue
+			}
+			return false, "", err
+		}
+		for _, p := range pods.Items {
+			name := p.Name
+			for _, sub := range knownSubstrings {
+				if strings.Contains(name, sub) {
+					return true, fmt.Sprintf("%s/%s", ns, name), nil
+				}
+			}
+			if utils.HasAnyLabelValue(p.Labels, []string{"k8s-app", "app"}, []string{"flannel", "kube-flannel"}) {
+				return true, fmt.Sprintf("%s/%s", ns, name), nil
+			}
+		}
+	}
+
+	return false, "", nil
+}
+
+func CheckCPUManagerPolicyStatic(ctx context.Context, clientset *kubernetes.Clientset, nodes []v3.Node) (bool, string) {
+	var notStatic []string
+	var unknown []string
+	var skipped []string
+
+	for i := range nodes {
+		n := &nodes[i]
+
+		// Skip nodes that are not ready
+		if !kubernetes2.IsNodeReady(*n) {
+			skipped = append(skipped, n.Name)
+			continue
+		}
+
+		pol, err := getCPUManagerPolicyViaConfigz(ctx, clientset, n.Name)
+		if err != nil {
+			unknown = append(unknown, fmt.Sprintf("%s=%s", n.Name, utils.ShortErr(err)))
+			continue
+		}
+
+		if strings.ToLower(strings.TrimSpace(pol)) != "static" {
+			notStatic = append(notStatic, fmt.Sprintf("%s=%s", n.Name, pol))
+		}
+	}
+
+	// Success only if all ready nodes are static AND no unknown errors
+	if len(notStatic) == 0 && len(unknown) == 0 {
+		if len(skipped) == 0 {
+			return true, ""
+		}
+		// All ready nodes ok, but some skipped - still PASS with note
+		return true, fmt.Sprintf("%d nodes skipped (NotReady)", len(skipped))
+	}
+
+	// FAIL if there are non-static nodes or unknown errors
+	parts := make([]string, 0, 3)
+	readyCount := len(nodes) - len(skipped)
+	passCount := readyCount - len(notStatic) - len(unknown)
+
+	if passCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d nodes ok", passCount))
+	}
+	if len(notStatic) > 0 {
+		parts = append(parts, fmt.Sprintf("%d nodes not static: %s", len(notStatic), utils.JoinLimited(notStatic, 3)))
+	}
+	if len(unknown) > 0 {
+		parts = append(parts, fmt.Sprintf("%d nodes unknown: %s", len(unknown), utils.JoinLimited(unknown, 3)))
+	}
+	if len(skipped) > 0 {
+		parts = append(parts, fmt.Sprintf("%d nodes skipped (NotReady)", len(skipped)))
+	}
+
+	return false, strings.Join(parts, ", ")
+}

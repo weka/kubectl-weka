@@ -120,7 +120,7 @@ else
   fi
 fi
 
-go build -ldflags="-X main.version=$VERSION -X main.commit=$COMMIT -X main.date=$DATE" -o kubectl-weka .
+go build -ldflags="-X github.com/weka/kubectl-weka/pkg/version.Version=$VERSION -X github.com/weka/kubectl-weka/pkg/version.Commit=$COMMIT -X github.com/weka/kubectl-weka/pkg/version.Date=$DATE" -o kubectl-weka .
 
 # Verify the version
 ./kubectl-weka version
