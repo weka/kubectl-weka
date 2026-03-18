@@ -107,13 +107,111 @@ make install
 
 ```bash
 # Run all tests
-go test ./...
+make test
 
-# Run tests with coverage
-go test -cover ./...
+# Run tests with verbose output
+make test-verbose
 
 # Run specific test
 go test -run TestName ./...
+
+# Run tests with coverage
+go test -cover ./...
+```
+
+### Available Makefile Targets
+
+The project includes a comprehensive Makefile for building, testing, and releasing:
+
+```bash
+# Display available targets and their descriptions
+make help
+
+# Build the binary
+make build
+
+# Build and install to GOPATH/bin
+make install
+
+# Run unit tests
+make test
+
+# Run tests with verbose output
+make test-verbose
+
+# Build multi-architecture binaries
+make build-all
+
+# Clean build artifacts
+make clean
+
+# Format code (if configured)
+make fmt
+
+# Run linters (if configured)
+make lint
+```
+
+#### Version String Generation
+
+The Makefile automatically generates version strings based on git state:
+
+**Release Build (tag on HEAD):**
+```bash
+git tag v1.0.0
+make build
+# Result: kubectl-weka version v1.0.0
+```
+
+**Development Build (tag before HEAD):**
+```bash
+# Make 5 commits after v1.0.0 tag
+make build
+# Result: kubectl-weka version v1.0.0-5-abc123d
+```
+
+**Dirty Build (uncommitted changes):**
+```bash
+echo "debug" >> main.go  # Uncommitted change
+make build
+# Result: kubectl-weka version v1.0.0-5-abc123d-dirty
+```
+
+#### Multi-Architecture Builds
+
+The build system supports cross-compilation for multiple platforms:
+
+```bash
+make build-all
+```
+
+Produces binaries for:
+- linux/amd64
+- linux/arm64
+- linux/arm/v7
+- darwin/amd64 (macOS)
+- darwin/arm64 (macOS Apple Silicon)
+- windows/amd64
+
+### CI/CD Pipeline
+
+The project includes GitHub Actions workflows for automated testing and building:
+
+**Workflows:**
+- `.github/workflows/build.yml` – Multi-arch builds on tag/release
+- `.github/workflows/test.yml` – Unit tests on every commit
+- `.github/workflows/lint.yml` – Code quality checks
+
+**Local CI/CD Simulation:**
+```bash
+# Simulate build workflow
+make build-all
+
+# Simulate test workflow
+make test
+
+# Check code formatting
+make fmt
 ```
 
 ---

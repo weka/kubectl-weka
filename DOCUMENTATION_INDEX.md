@@ -11,13 +11,14 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 | **[README.md](README.md)** | Complete command reference | Main documentation - start here |
 | **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** | Command cheat sheet | Quick lookup of commands and flags |
 | **[CHANGELOG.md](CHANGELOG.md)** | Release history | Check what's new in each version |
+| **[docs/network-configuration.md](docs/network-configuration.md)** | Network setup guide | Understanding Ethernet/InfiniBand, speed/rate metrics, validation |
 
 ### For Developers
 
 | Document | Purpose | When to Use |
 |----------|---------|-------------|
 | **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** | Extension and development guide | Adding new features or checks |
-| **[DOCUMENTATION_SUMMARY.md](DOCUMENTATION_SUMMARY.md)** | Documentation update log | Track documentation changes |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Contribution guidelines | How to contribute (UPDATED) |
 
 ### Legal
 
@@ -48,6 +49,21 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 
 #### Inspect WEKA resources
 → See [README.md - Get Commands](README.md#get-commands)
+
+#### Understand network configuration
+→ See [README.md - Network Configuration](README.md#network-configuration) or [docs/network-configuration.md](docs/network-configuration.md)
+
+#### Build from source
+→ See [README.md - Building from Source](README.md#building-from-source) or [CONTRIBUTING.md - Building and Testing](CONTRIBUTING.md#building-and-testing)
+
+#### Contribute to the project
+→ See [CONTRIBUTING.md](CONTRIBUTING.md)
+
+#### Understand Ethernet speed vs InfiniBand rate
+→ See [docs/network-configuration.md - Speed and Rate Metrics](docs/network-configuration.md#speed-and-rate-metrics)
+
+#### Check recent code changes
+→ See [COMMITS_SINCE_d0b716b.md](COMMITS_SINCE_d0b716b.md)
 
 #### Monitor CSI drivers
 → See [README.md - get csi-drivers](README.md#get-csi-drivers)

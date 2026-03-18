@@ -1801,9 +1801,112 @@ go vet ./...
 
 ---
 
+## Network Configuration
+
+### Network Interface Speed and Rate
+
+`kubectl-weka` properly distinguishes between **Ethernet speed** (measured in Gbps) and **InfiniBand rate** (measured in GB/s). This separation ensures accurate detection and reporting of high-speed network capabilities.
+
+#### Supported Network Types
+
+| Type | Speed Metric | Units | Storage | Display Format |
+|------|--------------|-------|---------|----------------|
+| **Ethernet** | Speed | Mbps | Integer Mbps | "100Gbps", "400Gbps" |
+| **InfiniBand** | Rate | MB/s | Integer MB/s | "100GB/s 2xHDR", "400GB/s 2xXDR" |
+| **Bond** | Inherited | Inherited | Inherited | Inherited from slaves |
+| **VLAN** | Inherited | Inherited | Inherited | Inherited from parent |
+
+#### Speed/Rate Conversion Reference
+
+**Ethernet Speeds (to Mbps):**
+- 1 Gbps = 1,000 Mbps
+- 10 Gbps = 10,000 Mbps
+- 25 Gbps = 25,000 Mbps
+- 40 Gbps = 40,000 Mbps
+- 100 Gbps = 100,000 Mbps
+- 400 Gbps = 400,000 Mbps
+
+**InfiniBand Rates (Gbps to MB/s, using formula: `MB/s = Gbps × 125`):**
+- 8 Gbps = 1,000 MB/s (SDR)
+- 40 Gbps = 5,000 MB/s (EDR/FDR)
+- 100 Gbps = 12,500 MB/s (HDR)
+- 200 Gbps = 25,000 MB/s (NDR)
+- 400 Gbps = 50,000 MB/s (XDR)
+
+#### InfiniBand Generation Suffixes
+
+`kubectl-weka` includes InfiniBand generation information in network display output for better capability identification:
+
+| Generation | Rate Range | Notation |
+|-----------|-----------|----------|
+| SDR | 2-4 Gbps | 2xSDR |
+| DDR | 8 Gbps | 2xDDR |
+| QDR | 16-32 Gbps | 2xQDR |
+| FDR | 40-56 Gbps | 2xFDR |
+| EDR | 100 Gbps | 2xEDR |
+| HDR | 200 Gbps | 2xHDR |
+| NDR | 400 Gbps | 2xNDR |
+| XDR | 800+ Gbps | 2xXDR |
+
+#### Network Interface Validation
+
+Preflight node checks validate network configuration including:
+
+1. **Speed Requirements**: Minimum 10 Gbps (Ethernet) or 10 Gbps equivalent (InfiniBand)
+2. **MTU Configuration**:
+   - Ethernet: ≥ 9000 bytes recommended
+   - InfiniBand: ≥ 2048 bytes (defaults to 4096)
+3. **Bond Configuration** (if applicable):
+   - Mode: LACP (802.3ad) required
+   - Slave Count: 2+ slaves required
+   - PCI Placement: Can be on same or different NIC cards
+4. **DPDK Support**: Detects Mellanox and Intel NICs with DPDK capabilities
+
+#### Example Network Output
+
+```
+📊 Network Interfaces Summary
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ eth0 (Ethernet)
+   Speed: 100Gbps | MTU: 9000 | Type: DPDK-capable (Mellanox)
+   IP: 10.0.1.10/24 | MAC: 52:54:00:12:34:56
+   Model: ConnectX-7 (15b3:1021)
+
+⚠️  ib0 (InfiniBand)
+   Rate: 400GB/s 2xXDR | MTU: 4096 | Type: DPDK-capable
+   IP: 192.168.1.10/24 | MAC: 80:00:00:02:fe:80
+   Model: ConnectX-7 (15b3:1021)
+
+✅ bond0 (Bond/LACP)
+   Speed: 400Gbps | Slaves: [eth0, eth1] | Mode: 802.3ad
+   MTU: 9000 | IP: 10.0.2.10/24
+```
+
+### Network Troubleshooting
+
+**Issue: "No high-speed NICs detected"**
+- Verify network interface speed: `ethtool eth0`
+- Check for InfiniBand: `ibstat` (requires InfiniBand Utils)
+- Use `kubectl weka preflight nodes --summary-only` to see interface details
+
+**Issue: "Network Interfaces Configuration: Some interfaces failed validation"**
+- Check MTU configuration: `ip link show <interface>`
+- For bonds: Verify LACP mode is enabled
+- Check driver compatibility in NIC database
+
+**Issue: "UDP mode only" warning**
+- Indicates DPDK-capable NICs not detected
+- Verify vendor/model identification
+- Check driver compatibility
+
+For detailed network configuration documentation, see [Network Configuration Guide](./docs/network-configuration.md).
+
+---
+
 ## Troubleshooting
 
-### Common Issues
+````### Common Issues
 
 **"No WekaCluster resources found"**
 - Check namespace with `-n <namespace>` or `-A` for all namespaces
