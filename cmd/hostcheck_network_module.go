@@ -16,7 +16,8 @@ type NetworkInterfaceValidation struct {
 	DeviceModel string      `json:"device_model"`
 	Type        string      `json:"type"`
 	IPAddress   string      `json:"ip_address"`
-	Speed       string      `json:"speed"`
+	Speed       int         `json:"speed"`
+	Rate        string      `json:"rate"`
 	MTU         int         `json:"mtu"`
 	Supported   string      `json:"supported"` // "DPDK", "UDP", or "-"
 	Reason      string      `json:"reason"`    // Error reason if not supported
@@ -211,6 +212,7 @@ func (m *NetworkInterfacesModule) validateInterface(iface *NetworkInterface) *Ne
 		Type:        iface.Type,
 		IPAddress:   iface.IP,
 		Speed:       iface.EffectiveSpeed,
+		Rate:        iface.EffectiveRate,
 		MTU:         iface.MTU,
 		Supported:   "-",
 		Reason:      "",
@@ -223,7 +225,7 @@ func (m *NetworkInterfacesModule) validateInterface(iface *NetworkInterface) *Ne
 		reasons = append(reasons, "No IP address")
 	}
 
-	if validation.Speed == "" {
+	if validation.Speed == 0 {
 		validation.setStatus(statusFail)
 		reasons = append(reasons, "Speed is not reported, disconnected?")
 	}
@@ -332,7 +334,8 @@ func FormatNetworkInterfacesTable(data *NetworkInterfacesModuleData, visibleColu
 		{Name: "Device Model", VisibleInWide: false},
 		{Name: "Type", VisibleInWide: false},
 		{Name: "IP Address/CIDR", VisibleInWide: false},
-		{Name: "Speed", VisibleInWide: false},
+		{Name: "Speed", VisibleInWide: false, formatFuncs: TableFormatFunctions{FormatMbpsToHuman}},
+		{Name: "Rate", VisibleInWide: false},
 		{Name: "MTU", VisibleInWide: false},
 		{Name: "Supported", VisibleInWide: false},
 		{Name: "Reason", VisibleInWide: false},
@@ -364,6 +367,7 @@ func FormatNetworkInterfacesTable(data *NetworkInterfacesModuleData, visibleColu
 			"Device Model":    iface.DeviceModel,
 			"Type":            iface.Type,
 			"IP Address/CIDR": iface.IPAddress,
+			"Rate":            iface.Rate,
 			"Speed":           iface.Speed,
 			"MTU":             iface.MTU,
 			"Supported":       iface.Supported,

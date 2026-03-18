@@ -16,7 +16,8 @@ func TestValidateInterface(t *testing.T) {
 		Type:           "ethernet",
 		IP:             "192.168.1.10",
 		VendorModel:    "15b3:1021",
-		EffectiveSpeed: "100Gbps",
+		EffectiveSpeed: 100000, // 100Gbps in Mbps (for Ethernet)
+		EffectiveRate:  0,      // Not used for Ethernet
 		MTU:            9000,
 	}
 	// Normal case
@@ -30,7 +31,7 @@ func TestValidateInterface(t *testing.T) {
 
 	// Missing VendorModel
 	ifaceMissingModel := &NetworkInterface{
-		Name: "eth1", Type: "ethernet", IP: "192.168.1.11", EffectiveSpeed: "100Gbps", MTU: 9000,
+		Name: "eth1", Type: "ethernet", IP: "192.168.1.11", EffectiveSpeed: 100000, MTU: 9000,
 	}
 	v = m.validateInterface(ifaceMissingModel)
 	if v.Status != statusFail {
@@ -42,7 +43,7 @@ func TestValidateInterface(t *testing.T) {
 
 	// Missing IP
 	ifaceMissingIP := &NetworkInterface{
-		Name: "eth2", Type: "ethernet", VendorModel: "15b3:1021", EffectiveSpeed: "100Gbps", MTU: 9000,
+		Name: "eth2", Type: "ethernet", VendorModel: "15b3:1021", EffectiveSpeed: 100000, MTU: 9000,
 	}
 	v = m.validateInterface(ifaceMissingIP)
 	if v.Status != statusFail {
@@ -66,7 +67,7 @@ func TestValidateInterface(t *testing.T) {
 
 	// MTU too small
 	ifaceSmallMTU := &NetworkInterface{
-		Name: "eth4", Type: "ethernet", VendorModel: "15b3:1021", IP: "192.168.1.13", EffectiveSpeed: "100Gbps", MTU: 1500,
+		Name: "eth4", Type: "ethernet", VendorModel: "15b3:1021", IP: "192.168.1.13", EffectiveSpeed: 100000, MTU: 1500,
 	}
 	v = m.validateInterface(ifaceSmallMTU)
 	if v.Status != statusWarn {
@@ -78,7 +79,7 @@ func TestValidateInterface(t *testing.T) {
 
 	// Bond interface with wrong slave count
 	bondIface := &NetworkInterface{
-		Name: "bond0", Type: "bond", VendorModel: "15b3:1021", IP: "192.168.1.14", EffectiveSpeed: "100Gbps", MTU: 9000,
+		Name: "bond0", Type: "bond", VendorModel: "15b3:1021", IP: "192.168.1.14", EffectiveSpeed: 100000, MTU: 9000,
 		BondSlaves: []string{"eth0"},
 	}
 	v = m.validateInterface(bondIface)

@@ -569,7 +569,10 @@ func TestNetworkInterfacesModule_NoSupportedDevices(t *testing.T) {
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "10.0.0.10/24",
-				EffectiveSpeed: "1Gbps",
+				MaxSpeed:       1000, // 1Gbps in Mbps
+				MaxRate:        "",   // Not used for Ethernet
+				EffectiveSpeed: 1000,
+				EffectiveRate:  "",
 				MTU:            1500,
 				VendorModel:    "", // Unknown/unsupported device
 			},
@@ -577,7 +580,10 @@ func TestNetworkInterfacesModule_NoSupportedDevices(t *testing.T) {
 				Name:           "eth1",
 				Type:           "ethernet",
 				IP:             "10.0.0.11/24",
-				EffectiveSpeed: "1Gbps",
+				MaxSpeed:       1000, // 1Gbps in Mbps
+				MaxRate:        "",   // Not used for Ethernet
+				EffectiveSpeed: 1000,
+				EffectiveRate:  "",
 				MTU:            1500,
 				VendorModel:    "", // Unknown/unsupported device
 			},
@@ -615,8 +621,8 @@ func TestNetworkInterfacesModule_MultipleUDPOnlyInterfaces(t *testing.T) {
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "10.0.0.10/24",
-				MaxSpeed:       "20Gbps",
-				EffectiveSpeed: "20Gbps",
+				MaxSpeed:       20000, // 20Gbps in Mbps
+				EffectiveSpeed: 20000, // 20Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0007", // Test device: UDP-only with LACP support
 			},
@@ -624,8 +630,8 @@ func TestNetworkInterfacesModule_MultipleUDPOnlyInterfaces(t *testing.T) {
 				Name:           "eth1",
 				Type:           "ethernet",
 				IP:             "10.0.0.11/24",
-				MaxSpeed:       "20Gbps",
-				EffectiveSpeed: "20Gbps",
+				MaxSpeed:       20000, // 20Gbps in Mbps
+				EffectiveSpeed: 20000, // 20Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0007", // Test device: UDP-only with LACP support
 			},
@@ -662,8 +668,8 @@ func TestNetworkInterfacesModule_SingleDPDKPerProcessInterface(t *testing.T) {
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "10.0.0.10/24",
-				MaxSpeed:       "25Gbps",
-				EffectiveSpeed: "25Gbps",
+				MaxSpeed:       25000, // 25Gbps in Mbps
+				EffectiveSpeed: 25000, // 25Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0006", // Test device: PerProcess DPDK, no LACP
 			},
@@ -700,8 +706,8 @@ func TestNetworkInterfacesModule_MultipleDPDKPerProcessInterfaces(t *testing.T) 
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "10.0.0.10/24",
-				MaxSpeed:       "100Gbps",
-				EffectiveSpeed: "100Gbps",
+				MaxSpeed:       100000, // 100Gbps in Mbps
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0004", // Test device: PerProcess DPDK
 			},
@@ -709,8 +715,8 @@ func TestNetworkInterfacesModule_MultipleDPDKPerProcessInterfaces(t *testing.T) 
 				Name:           "eth1",
 				Type:           "ethernet",
 				IP:             "10.0.0.11/24",
-				MaxSpeed:       "100Gbps",
-				EffectiveSpeed: "100Gbps",
+				MaxSpeed:       100000, // 100Gbps in Mbps
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0004", // Test device: PerProcess DPDK
 			},
@@ -748,8 +754,8 @@ func TestNetworkInterfacesModule_MixedTypesSameSubnetFails(t *testing.T) {
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "10.0.0.10/24",
-				MaxSpeed:       "100Gbps",
-				EffectiveSpeed: "100Gbps",
+				MaxSpeed:       100000, // 100Gbps in Mbps
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1017", // Mellanox ConnectX-4
 			},
@@ -757,8 +763,8 @@ func TestNetworkInterfacesModule_MixedTypesSameSubnetFails(t *testing.T) {
 				Name:           "ib0",
 				Type:           "infiniband",
 				IP:             "10.0.0.11/24", // Same subnet!
-				MaxSpeed:       "100Gbps",
-				EffectiveSpeed: "100Gbps",
+				MaxSpeed:       100000,         // 100Gbps in Mbps
+				EffectiveSpeed: 100000,         // 100Gbps in Mbps
 				MTU:            2048,
 				VendorModel:    "15b3:1017", // Mellanox MT2892 (IB)
 			},
@@ -795,7 +801,7 @@ func TestNetworkInterfacesModule_BondDPDKSingleNicPass(t *testing.T) {
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0002", // Supports DPDK SingleNIC
 				IsBondSlave:    true,
@@ -805,7 +811,7 @@ func TestNetworkInterfacesModule_BondDPDKSingleNicPass(t *testing.T) {
 				Name:           "eth1",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0002", // Supports DPDK SingleNIC
 				IsBondSlave:    true,
@@ -815,8 +821,8 @@ func TestNetworkInterfacesModule_BondDPDKSingleNicPass(t *testing.T) {
 				Name:           "bond0",
 				Type:           "bond",
 				IP:             "10.0.0.10/24",
-				MaxSpeed:       "100Gbps",
-				EffectiveSpeed: "100Gbps",
+				MaxSpeed:       100000,    // 100Gbps in Mbps
+				EffectiveSpeed: 100000,    // 100Gbps in Mbps
 				BondMode:       "802.3ad", // LACP
 				BondSlaves:     []string{"eth0", "eth1"},
 				MTU:            9000,
@@ -854,7 +860,7 @@ func TestNetworkInterfacesModule_BondDPDKPerProcessFails(t *testing.T) {
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1017", // Mellanox per-process only
 				IsBondSlave:    true,
@@ -864,7 +870,7 @@ func TestNetworkInterfacesModule_BondDPDKPerProcessFails(t *testing.T) {
 				Name:           "eth1",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1017", // Mellanox per-process only
 				IsBondSlave:    true,
@@ -874,7 +880,7 @@ func TestNetworkInterfacesModule_BondDPDKPerProcessFails(t *testing.T) {
 				Name:        "bond0",
 				Type:        "bond",
 				IP:          "10.0.0.10/24",
-				MaxSpeed:    "100Gbps",
+				MaxSpeed:    100000,    // 100Gbps in Mbps
 				BondMode:    "802.3ad", // LACP
 				BondSlaves:  []string{"eth0", "eth1"},
 				MTU:         9000,
@@ -917,7 +923,7 @@ func TestNetworkInterfacesModule_BondNonLACP(t *testing.T) {
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1018",
 				IsBondSlave:    true,
@@ -927,7 +933,7 @@ func TestNetworkInterfacesModule_BondNonLACP(t *testing.T) {
 				Name:           "eth1",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1018",
 				IsBondSlave:    true,
@@ -937,7 +943,7 @@ func TestNetworkInterfacesModule_BondNonLACP(t *testing.T) {
 				Name:        "bond0",
 				Type:        "bond",
 				IP:          "10.0.0.10/24",
-				MaxSpeed:    "100Gbps",
+				MaxSpeed:    100000,       // 100Gbps in Mbps
 				BondMode:    "balance-rr", // Non-LACP mode!
 				BondSlaves:  []string{"eth0", "eth1"},
 				MTU:         9000,
@@ -975,7 +981,7 @@ func TestNetworkInterfacesModule_BondWrongSlaveCount(t *testing.T) {
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1018",
 				IsBondSlave:    true,
@@ -985,7 +991,7 @@ func TestNetworkInterfacesModule_BondWrongSlaveCount(t *testing.T) {
 				Name:        "bond0",
 				Type:        "bond",
 				IP:          "10.0.0.10/24",
-				MaxSpeed:    "100Gbps",
+				MaxSpeed:    100000, // 100Gbps in Mbps
 				BondMode:    "802.3ad",
 				BondSlaves:  []string{"eth0"}, // Only 1 slave!
 				MTU:         9000,
@@ -1017,7 +1023,7 @@ func TestNetworkInterfacesModule_BondWrongSlaveCount(t *testing.T) {
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1018",
 				IsBondSlave:    true,
@@ -1027,7 +1033,7 @@ func TestNetworkInterfacesModule_BondWrongSlaveCount(t *testing.T) {
 				Name:           "eth1",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1018",
 				IsBondSlave:    true,
@@ -1037,7 +1043,7 @@ func TestNetworkInterfacesModule_BondWrongSlaveCount(t *testing.T) {
 				Name:           "eth2",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1018",
 				IsBondSlave:    true,
@@ -1047,7 +1053,7 @@ func TestNetworkInterfacesModule_BondWrongSlaveCount(t *testing.T) {
 				Name:        "bond0",
 				Type:        "bond",
 				IP:          "10.0.0.10/24",
-				MaxSpeed:    "100Gbps",
+				MaxSpeed:    100000, // 100Gbps in Mbps
 				BondMode:    "802.3ad",
 				BondSlaves:  []string{"eth0", "eth1", "eth2"}, // 3 slaves!
 				MTU:         9000,
@@ -1079,7 +1085,7 @@ func TestNetworkInterfacesModule_BondSameCardLACP(t *testing.T) {
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1018",
 				PCIAddress:     "0000:50:00.0", // Same card, function 0
@@ -1090,7 +1096,7 @@ func TestNetworkInterfacesModule_BondSameCardLACP(t *testing.T) {
 				Name:           "eth1",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1018",
 				PCIAddress:     "0000:50:00.1", // Same card, function 1
@@ -1101,7 +1107,7 @@ func TestNetworkInterfacesModule_BondSameCardLACP(t *testing.T) {
 				Name:        "bond0",
 				Type:        "bond",
 				IP:          "10.0.0.10/24",
-				MaxSpeed:    "100Gbps",
+				MaxSpeed:    100000,    // 100Gbps in Mbps
 				BondMode:    "802.3ad", // LACP
 				BondSlaves:  []string{"eth0", "eth1"},
 				MTU:         9000,
@@ -1143,7 +1149,7 @@ func TestNetworkInterfacesModule_BondDifferentCardsLACP(t *testing.T) {
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1018",
 				PCIAddress:     "0000:50:00.0", // First NIC
@@ -1154,7 +1160,7 @@ func TestNetworkInterfacesModule_BondDifferentCardsLACP(t *testing.T) {
 				Name:           "eth1",
 				Type:           "ethernet",
 				IP:             "",
-				EffectiveSpeed: "100Gbps",
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "15b3:1018",
 				PCIAddress:     "0000:51:00.0", // Different NIC
@@ -1165,7 +1171,7 @@ func TestNetworkInterfacesModule_BondDifferentCardsLACP(t *testing.T) {
 				Name:        "bond0",
 				Type:        "bond",
 				IP:          "10.0.0.10/24",
-				MaxSpeed:    "100Gbps",
+				MaxSpeed:    100000,    // 100Gbps in Mbps
 				BondMode:    "802.3ad", // LACP
 				BondSlaves:  []string{"eth0", "eth1"},
 				MTU:         9000,
@@ -1480,8 +1486,8 @@ func TestSourceBasedRoutingModule_ValidSBRRulesOnBothInterfaces(t *testing.T) {
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "10.0.0.10/24",
-				MaxSpeed:       "100Gbps",
-				EffectiveSpeed: "100Gbps",
+				MaxSpeed:       100000, // 100Gbps in Mbps
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0001", // Test device with full support
 			},
@@ -1489,8 +1495,8 @@ func TestSourceBasedRoutingModule_ValidSBRRulesOnBothInterfaces(t *testing.T) {
 				Name:           "eth1",
 				Type:           "ethernet",
 				IP:             "10.0.0.11/24",
-				MaxSpeed:       "100Gbps",
-				EffectiveSpeed: "100Gbps",
+				MaxSpeed:       100000, // 100Gbps in Mbps
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0001", // Test device with full support
 			},
@@ -1579,8 +1585,8 @@ func TestSourceBasedRoutingModule_MissingOrInvalidSBRRulesOnOneInterface(t *test
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "10.0.0.10/24",
-				MaxSpeed:       "100Gbps",
-				EffectiveSpeed: "100Gbps",
+				MaxSpeed:       100000, // 100Gbps in Mbps
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0001", // Test device with full support
 			},
@@ -1588,8 +1594,8 @@ func TestSourceBasedRoutingModule_MissingOrInvalidSBRRulesOnOneInterface(t *test
 				Name:           "eth1",
 				Type:           "ethernet",
 				IP:             "10.0.0.11/24",
-				MaxSpeed:       "100Gbps",
-				EffectiveSpeed: "100Gbps",
+				MaxSpeed:       100000, // 100Gbps in Mbps
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0001", // Test device with full support
 			},
@@ -1663,8 +1669,8 @@ func TestSourceBasedRoutingModule_AllRulesMissingOnBothInterfaces(t *testing.T) 
 				Name:           "eth0",
 				Type:           "ethernet",
 				IP:             "10.0.0.10/24",
-				MaxSpeed:       "100Gbps",
-				EffectiveSpeed: "100Gbps",
+				MaxSpeed:       100000, // 100Gbps in Mbps
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0001", // Test device with full support
 			},
@@ -1672,8 +1678,8 @@ func TestSourceBasedRoutingModule_AllRulesMissingOnBothInterfaces(t *testing.T) 
 				Name:           "eth1",
 				Type:           "ethernet",
 				IP:             "10.0.0.11/24",
-				MaxSpeed:       "100Gbps",
-				EffectiveSpeed: "100Gbps",
+				MaxSpeed:       100000, // 100Gbps in Mbps
+				EffectiveSpeed: 100000, // 100Gbps in Mbps
 				MTU:            9000,
 				VendorModel:    "ffff:0001", // Test device with full support
 			},

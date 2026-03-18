@@ -247,46 +247,50 @@ iface_bond_master() {
 }
 
 human_mbps() {
-  # input: Mbps number, output: "100Gb/s" etc.
+  # input: Mbps number, output: raw Mbps integer (no units)
+  # Formatting is done at display layer, not here
   n="$1"
   if [ -z "$n" ] || [ "$n" = "-1" ]; then
-    echo ""
+    echo "0"
     return
   fi
-  if [ "$n" -ge 1000 ]; then
-    g=$((n/1000))
-    echo "${g}Gb/s"
-  else
-    echo "${n}Mb/s"
-  fi
+  # Output raw Mbps value as integer
+  echo "$n"
 }
 
 iface_speed() {
   ifn="$1"
-  # Ethernet-style
+  # Ethernet-style - returns speed in Mbps
+  # For InfiniBand, returns 0 (rate should be used instead)
   if [ -f "/host-sys/class/net/$ifn/speed" ]; then
     s="$(cat "/host-sys/class/net/$ifn/speed" 2>/dev/null || true)"
-    hs="$(human_mbps "$s")"
-    if [ -n "$hs" ]; then
-      echo "$hs"
+    # Speed file contains Mbps as integer
+    if [ -n "$s" ] && [ "$s" != "-1" ]; then
+      echo "$s"
       return
     fi
   fi
+  echo "0"
+}
 
-  # InfiniBand-style (rate string)
-  for r in /host-sys/class/net/"$ifn"/device/infiniband/*/ports/*/rate; do
-    [ -f "$r" ] || continue
-    # example: "200 Gb/sec (4X HDR)"
-    rate="$(cat "$r" 2>/dev/null || true)"
-    gb="$(echo "$rate" | awk '{print $1}' 2>/dev/null || true)"
-    unit="$(echo "$rate" | awk '{print $2}' 2>/dev/null || true)"
-    if [ -n "$gb" ] && echo "$unit" | grep -qi '^gb'; then
-      echo "${gb}Gb/s"
-      return
-    fi
-  done
+iface_rate() {
+  ifn="$1"
+  # InfiniBand-style rate - returns rate in MB/s (bytes/sec not bits/sec)
+  # Returns 0 for non-InfiniBand interfaces
 
-  echo "unknown"
+  # Use find to locate rate file(s) for this interface
+  # InfiniBand rate file is typically at:
+  # /sys/class/net/<ifname>/device/infiniband/<dev_name>/ports/<port_num>/rate
+  rate_file=$(find /host-sys/class/net/"$ifn"/device/infiniband -name "rate" -type f 2>/dev/null | head -n1)
+
+  if [ -z "$rate_file" ]; then
+    echo "0"
+    return
+  fi
+
+  # example: "200 Gb/sec (4X HDR)" - this is 200 Gbps
+  rate="$(cat "$rate_file" 2>/dev/null || true)"
+  echo -n $rate
 }
 
 # helper: check if interface is used as default route
@@ -919,8 +923,10 @@ for iface_dir in /host-sys/class/net/*; do
   bond_master="$(iface_bond_master "$ifname")"
   is_bond_slave=false
   [ -n "$bond_master" ] && is_bond_slave=true
-  max_speed="$(iface_speed "$ifname")"
-  effective_speed="$max_speed"  # TODO: Could be extended to read negotiated speed separately
+  max_speed="$(iface_speed "$ifname")"       # Ethernet speed in Mbps (0 for IB)
+  max_rate="$(iface_rate "$ifname")"         # InfiniBand rate in MB/s (0 for Ethernet)
+  effective_speed="$max_speed"               # TODO: Could be extended to read negotiated speed separately
+  effective_rate="$max_rate"                 # TODO: Could be extended to read negotiated rate separately
   metrics="$(get_iface_metrics "$ifname")"
   is_default_route="$(is_default_route_iface "$ifname")"
   associated_routes="$(get_routes_for_iface "$ifname")"
@@ -952,8 +958,11 @@ for iface_dir in /host-sys/class/net/*; do
     obj="$obj\"vlan_id\":$vlan_id,"
   fi
 
-  obj="$obj\"max_speed\":\"$(json_escape "$max_speed")\","
-  obj="$obj\"effective_speed\":\"$(json_escape "$effective_speed")\","
+  obj="$obj\"max_speed\":$max_speed,"
+  obj="$obj\"effective_speed\":$effective_speed,"
+  # Rate: for InfiniBand interfaces (in MB/s)
+  obj="$obj\"max_rate\":\"$(json_escape "$max_rate")\","
+  obj="$obj\"effective_rate\":\"$(json_escape "$effective_rate")\","
   obj="$obj\"pci_address\":\"$(json_escape "$pci_addr")\","
   obj="$obj\"numa_node\":$numa_node,"
   obj="$obj\"vendor_model\":\"$(json_escape "$vendor_model")\","

@@ -420,7 +420,7 @@ func (m *SourceBasedRoutingModule) SuggestedResolutionTemplate() string {
 // FormatSourceBasedRoutingTable formats the source-based routing interface data as a pretty table
 func FormatSourceBasedRoutingTable(data *SourceBasedRoutingModuleData) string {
 	if data == nil || len(data.InterfaceGroups) == 0 {
-		return "\n📋 Summary: No multi-interface subnets detected. Single interface per subnet configuration.\n"
+		return "📋 Summary: No multi-interface subnets detected. Single interface per subnet configuration."
 	}
 
 	// Define columns for the interface groups table

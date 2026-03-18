@@ -1,6 +1,7 @@
 package device_support
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -917,4 +918,195 @@ var NICCapabilityMap = map[string]*NICCapabilities{
 		SupportedByWekaForLacpSameCard:  false,
 		SupportedByWekaForLacpDiffCards: false,
 	},
+}
+
+// SpeedMbpsToDisplayString converts a speed value in Mbps to a human-readable display string
+// For Ethernet interfaces, returns format like "100Gbps", "400Gbps"
+// For InfiniBand interfaces, returns format like "400GB/s 2xNDR"
+// interfaceType should be "ethernet" or "infiniband"
+func SpeedMbpsToDisplayString(speedMbps int, interfaceType string) string {
+	if speedMbps <= 0 {
+		return "unknown"
+	}
+
+	if strings.ToLower(interfaceType) == "infiniband" {
+		// InfiniBand uses GB/s (bytes/sec) which is 1/8 of Gbps
+		// Also add the generation suffix
+		gbps := speedMbps
+		gbs := gbps / 8
+
+		// Map speeds to InfiniBand generations
+		var suffix string
+		switch gbps {
+		case 2000: // SDR
+			suffix = "2xSDR"
+		case 4000: // DDR
+			suffix = "2xDDR"
+		case 10000: // QDR (approx)
+			suffix = "2xQDR"
+		case 20000: // FDR (approx)
+			suffix = "2xFDR"
+		case 40000: // EDR (approx)
+			suffix = "2xEDR"
+		case 100000: // HDR (approx)
+			suffix = "2xHDR"
+		case 200000: // NDR (approx)
+			suffix = "2xNDR"
+		case 400000: // XDR (approx)
+			suffix = "2xXDR"
+		default:
+			// Generic format if we don't know the generation
+			return strings.TrimSpace(fmt.Sprintf("%dGB/s", gbs))
+		}
+
+		return fmt.Sprintf("%dGB/s %s", gbs, suffix)
+	}
+
+	// Default: Ethernet format (Gbps, not GB/s)
+	if speedMbps >= 1000 {
+		gbps := speedMbps / 1000
+		return fmt.Sprintf("%dGbps", gbps)
+	}
+
+	// For speeds less than 1Gbps
+	return fmt.Sprintf("%dMbps", speedMbps)
+}
+
+// RateMBsToDisplayString converts an InfiniBand rate in MB/s to a human-readable display string
+// Format includes the generation suffix: "100GB/s 2xHDR", "400GB/s 2xNDR", etc.
+// Only used for InfiniBand interfaces
+func RateMBsToDisplayString(rateMBs int, interfaceType string) string {
+	if rateMBs <= 0 {
+		return "unknown"
+	}
+
+	if strings.ToLower(interfaceType) != "infiniband" {
+		// Not an InfiniBand interface
+		return "unknown"
+	}
+
+	// Convert MB/s to Gbps to determine generation
+	// MB/s * 8 bits/byte / 1000 = Gbps
+	gbps := rateMBs * 8 / 1000
+	if gbps*1000 != rateMBs*8 {
+		// Not a clean conversion, use raw format
+		return fmt.Sprintf("%dGB/s", rateMBs/1000)
+	}
+
+	// Map speeds to InfiniBand generations based on the effective Gbps
+	var suffix string
+	switch gbps {
+	case 2, 4, 8: // SDR/DDR (single or dual port approximations)
+		suffix = "2xSDR"
+	case 10, 20: // QDR/FDR approximations
+		suffix = "2xQDR"
+	case 40: // EDR
+		suffix = "2xEDR"
+	case 100: // HDR
+		suffix = "2xHDR"
+	case 200: // NDR
+		suffix = "2xNDR"
+	case 400: // XDR
+		suffix = "2xXDR"
+	default:
+		// For 800 (25Gb/s per port), 1600, etc., use the rate directly
+		if gbps > 400 {
+			suffix = "2xXDR+" // Beyond XDR
+		} else {
+			// For other values, calculate based on Gbps
+			suffix = fmt.Sprintf("2x%dGbps", gbps)
+		}
+	}
+
+	gbs := rateMBs / 1000
+	return fmt.Sprintf("%dGB/s %s", gbs, suffix)
+}
+
+// ParseSpeedStringToMbps converts a speed string to Mbps integer value
+// Supports formats: "100Gbps", "100GB/s", "100Mb/s", "100Gbit/s", etc.
+// Returns 0 if the string cannot be parsed
+func ParseSpeedStringToMbps(speedStr string) int {
+	if speedStr == "" || strings.ToLower(speedStr) == "unknown" {
+		return 0
+	}
+
+	// Normalize the string
+	speedStr = strings.TrimSpace(speedStr)
+
+	// Try different patterns
+	var value int
+	var unit string
+
+	// Parse "400Gbps" or "400 Gbps"
+	if _, err := fmt.Sscanf(speedStr, "%dGbps", &value); err == nil {
+		return value * 1000
+	}
+	if _, err := fmt.Sscanf(speedStr, "%d Gbps", &value); err == nil {
+		return value * 1000
+	}
+
+	// Parse "400GB/s" or "400 GB/s"
+	if _, err := fmt.Sscanf(speedStr, "%dGB/s", &value); err == nil {
+		return value * 8 * 1000 // GB/s to Mbps: * 8 (bytes to bits) * 1000 (GB to Mb)
+	}
+	if _, err := fmt.Sscanf(speedStr, "%d GB/s", &value); err == nil {
+		return value * 8 * 1000
+	}
+
+	// Parse "400Gbit/s" or "400 Gbit/s"
+	if _, err := fmt.Sscanf(speedStr, "%dGbit/s", &value); err == nil {
+		return value * 1000
+	}
+	if _, err := fmt.Sscanf(speedStr, "%d Gbit/s", &value); err == nil {
+		return value * 1000
+	}
+
+	// Parse "400Mb/s" or "400 Mb/s"
+	if _, err := fmt.Sscanf(speedStr, "%dMb/s", &value); err == nil {
+		return value
+	}
+	if _, err := fmt.Sscanf(speedStr, "%d Mb/s", &value); err == nil {
+		return value
+	}
+
+	// Parse "400Mbps" or "400 Mbps"
+	if _, err := fmt.Sscanf(speedStr, "%dMbps", &value); err == nil {
+		return value
+	}
+	if _, err := fmt.Sscanf(speedStr, "%d Mbps", &value); err == nil {
+		return value
+	}
+
+	// Parse "400Gbit" or "400 Gbit"
+	if _, err := fmt.Sscanf(speedStr, "%dGbit", &value); err == nil {
+		return value * 1000
+	}
+	if _, err := fmt.Sscanf(speedStr, "%d Gbit", &value); err == nil {
+		return value * 1000
+	}
+
+	// Parse "400Gb/sec" or "400 Gb/sec" (InfiniBand format)
+	if _, err := fmt.Sscanf(speedStr, "%dGb/sec", &value); err == nil {
+		return value * 1000
+	}
+	if _, err := fmt.Sscanf(speedStr, "%d Gb/sec", &value); err == nil {
+		return value * 1000
+	}
+
+	// Parse just a number followed by unit
+	parts := strings.Fields(speedStr)
+	if len(parts) >= 1 {
+		if n, err := fmt.Sscanf(parts[0], "%d", &value); err == nil && n == 1 {
+			if len(parts) >= 2 {
+				unit = strings.ToLower(parts[1])
+			}
+			if strings.HasPrefix(unit, "g") {
+				return value * 1000
+			} else if strings.HasPrefix(unit, "m") {
+				return value
+			}
+		}
+	}
+
+	return 0
 }

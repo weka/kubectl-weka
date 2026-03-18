@@ -652,3 +652,16 @@ func formatQuantityToGB(val interface{}) string {
 		return fmt.Sprintf("%d", bytes)
 	}
 }
+
+func FormatMbpsToHuman(r interface{}) string {
+	if num, ok := r.(int); ok {
+		if num <= 0 {
+			return "Unknown/No link"
+		}
+		if num >= 1000 {
+			return strconv.Itoa(num/1000) + " Gbps"
+		}
+		return strconv.Itoa(num) + " Mbps"
+	}
+	return fmt.Sprintf("%v", r)
+}

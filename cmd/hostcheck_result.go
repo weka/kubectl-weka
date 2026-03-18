@@ -96,8 +96,10 @@ type NetworkInterface struct {
 	BondSlaves       []string                 `json:"bond_slaves,omitempty"`     // Slave interfaces (only for bonds)
 	VLANParent       string                   `json:"vlan_parent,omitempty"`     // Parent interface for VLAN (e.g., "eth0" for "eth0.100")
 	VLANID           int                      `json:"vlan_id,omitempty"`         // VLAN ID (only for VLAN interfaces)
-	MaxSpeed         string                   `json:"max_speed,omitempty"`       // Maximum speed (e.g., "100Gbps")
-	EffectiveSpeed   string                   `json:"effective_speed,omitempty"` // Current speed (e.g., "40Gbps")
+	MaxSpeed         int                      `json:"max_speed,omitempty"`       // Maximum speed in Mbps for Ethernet (0 if N/A)
+	EffectiveSpeed   int                      `json:"effective_speed,omitempty"` // Current speed in Mbps for Ethernet (0 if N/A)
+	MaxRate          string                   `json:"max_rate,omitempty"`        // Maximum rate in MB/s for InfiniBand (0 if N/A)
+	EffectiveRate    string                   `json:"effective_rate,omitempty"`  // Current rate in MB/s for InfiniBand (0 if N/A)
 	PCIAddress       string                   `json:"pci_address"`               // PCI address (e.g., "0000:3d:00.0")
 	NUMANode         int                      `json:"numa_node"`                 // NUMA node (-1 if unknown)
 	Model            string                   `json:"model,omitempty"`           // NIC model (e.g., "CX-7")
@@ -862,18 +864,18 @@ func (ni NetworkInterfaces) GetCandidateInterfacesForWeka(forWekaVersion ...stri
 
 	for _, iface := range ni {
 
-		// Filter: Exclude interfaces with MaxSpeed < 10Gbps
-		minSpeedGbps := 10
-		speedStr := iface.MaxSpeed
-		speedGbps := 0
-		if len(speedStr) > 0 {
-			var n int
-			_, err := fmt.Sscanf(speedStr, "%dGbps", &n)
-			if err == nil {
-				speedGbps = n
-			}
+		// Filter: Exclude interfaces with insufficient speed
+		// For Ethernet: check MaxSpeed >= 10Gbps (10000 Mbps)
+		// For InfiniBand: check MaxRate >= 1250 MB/s (which is 10Gbps)
+		minSpeedMbps := 1000 // 10Gbps in Mbps
+
+		if iface.MaxSpeed < minSpeedMbps {
+			continue
 		}
-		if speedGbps < minSpeedGbps {
+
+		// Filter interfaces that are not supported even in UDP mode
+		sup, err := iface.IsSupportedByWekaInUdpMode(forWekaVersion...)
+		if err != nil || !sup {
 			continue
 		}
 
