@@ -62,9 +62,6 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 #### Understand Ethernet speed vs InfiniBand rate
 → See [docs/network-configuration.md - Speed and Rate Metrics](docs/network-configuration.md#speed-and-rate-metrics)
 
-#### Check recent code changes
-→ See [COMMITS_SINCE_d0b716b.md](COMMITS_SINCE_d0b716b.md)
-
 #### Monitor CSI drivers
 → See [README.md - get csi-drivers](README.md#get-csi-drivers)
 
