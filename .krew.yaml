@@ -14,7 +14,7 @@ spec:
         matchLabels:
           os: linux
           arch: amd64
-      uri: https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .Version }}_linux_amd64.tar.gz
+      uri: https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .TagName }}_linux_amd64.tar.gz
       sha256: {{ .Checksums.linux_amd64_tar_gz }}
       files:
         - from: "kubectl-weka"
@@ -25,7 +25,7 @@ spec:
         matchLabels:
           os: linux
           arch: arm64
-      uri: https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .Version }}_linux_arm64.tar.gz
+      uri: https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .TagName }}_linux_arm64.tar.gz
       sha256: {{ .Checksums.linux_arm64_tar_gz }}
       files:
         - from: "kubectl-weka"
@@ -36,7 +36,7 @@ spec:
         matchLabels:
           os: darwin
           arch: amd64
-      uri: https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .Version }}_darwin_amd64.tar.gz
+      uri: https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .TagName }}_darwin_amd64.tar.gz
       sha256: {{ .Checksums.darwin_amd64_tar_gz }}
       files:
         - from: "kubectl-weka"
@@ -47,7 +47,7 @@ spec:
         matchLabels:
           os: darwin
           arch: arm64
-      uri: https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .Version }}_darwin_arm64.tar.gz
+      uri: https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .TagName }}_darwin_arm64.tar.gz
       sha256: {{ .Checksums.darwin_arm64_tar_gz }}
       files:
         - from: "kubectl-weka"
@@ -58,7 +58,7 @@ spec:
         matchLabels:
           os: windows
           arch: amd64
-      uri: https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .Version }}_windows_amd64.zip
+      uri: https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .TagName }}_windows_amd64.zip
       sha256: {{ .Checksums.windows_amd64_zip }}
       files:
         - from: "kubectl-weka.exe"
@@ -69,7 +69,7 @@ spec:
         matchLabels:
           os: windows
           arch: arm64
-      uri: https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .Version }}_windows_arm64.zip
+      uri: https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .TagName }}_windows_arm64.zip
       sha256: {{ .Checksums.windows_arm64_zip }}
       files:
         - from: "kubectl-weka.exe"

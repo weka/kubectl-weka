@@ -59,6 +59,11 @@ builds:
       - -X github.com/weka/kubectl-weka/pkg/version.Date={{.Date}}
 
 archives:
+  # Raw binaries (unarchived)
+  - id: binaries
+    format: binary
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
   # Linux and macOS: tar.gz format (compatible with Krew)
   - id: unix
     builds:
@@ -79,3 +84,9 @@ checksum:
 
 changelog:
   use: github
+
+release:
+  skip_upload: false
+  # Allow skipping files that already exist in the release
+  allow_different_user: true
+  replace_existing_artifacts: true
