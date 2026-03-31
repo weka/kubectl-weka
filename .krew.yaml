@@ -7,7 +7,7 @@ spec:
   homepage: https://github.com/weka/kubectl-weka
   shortDescription: "WEKA kubectl plugin"
   description: |
-    Kubectl plugin for WEKA operator and cluster management (status, preflight, logs, instances).
+    Kubectl plugin for WEKA operator and cluster management (status, preflight, logs, instances, support bundles).
 
   platforms:
     - selector:
@@ -49,3 +49,24 @@ spec:
         - from: "kubectl-weka"
           to: "."
       bin: "kubectl-weka"
+
+    - selector:
+        matchLabels:
+          os: windows
+          arch: amd64
+      {{addURIAndSha "https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .Version }}_windows_amd64.zip"}}
+      files:
+        - from: "kubectl-weka.exe"
+          to: "."
+      bin: "kubectl-weka.exe"
+
+    - selector:
+        matchLabels:
+          os: windows
+          arch: arm64
+      {{addURIAndSha "https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .Version }}_windows_arm64.zip"}}
+      files:
+        - from: "kubectl-weka.exe"
+          to: "."
+      bin: "kubectl-weka.exe"
+

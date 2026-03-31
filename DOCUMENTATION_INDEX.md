@@ -24,7 +24,7 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 
 | Document | Purpose |
 |----------|---------|
-| **[LICENSE.md](LICENSE.md)** | Apache 2.0 License |
+| **[LICENSE](LICENSE)** | Apache 2.0 License |
 
 ---
 
@@ -62,9 +62,6 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 #### Understand Ethernet speed vs InfiniBand rate
 → See [docs/network-configuration.md - Speed and Rate Metrics](docs/network-configuration.md#speed-and-rate-metrics)
 
-#### Check recent code changes
-→ See [COMMITS_SINCE_d0b716b.md](COMMITS_SINCE_d0b716b.md)
-
 #### Monitor CSI drivers
 → See [README.md - get csi-drivers](README.md#get-csi-drivers)
 
@@ -73,6 +70,15 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 
 #### Collect diagnostic data
 → See [README.md - Support Bundle Commands](README.md#support-bundle-commands)
+
+#### Stream cluster container logs
+→ See [README.md - logs wekacluster](README.md#logs-wekacluster)
+
+#### Stream client container logs
+→ See [README.md - logs wekaclient](README.md#logs-wekaclient)
+
+#### Stream arbitrary WekaContainer logs
+→ See [README.md - logs wekacontainer](README.md#logs-wekacontainer)
 
 #### Troubleshoot issues
 → See [README.md - Troubleshooting](README.md#troubleshooting)
@@ -182,6 +188,9 @@ Automatically generated release notes using Release Please.
 
 ### Logs Commands
 - [logs operator](README.md#logs-operator) - Stream operator logs
+- [logs wekacluster](README.md#logs-wekacluster) - Stream cluster container logs
+- [logs wekaclient](README.md#logs-wekaclient) - Stream client container logs
+- [logs wekacontainer](README.md#logs-wekacontainer) - Stream arbitrary container logs
 
 ### Support Bundle Commands
 - [support-bundle operator](README.md#support-bundle-operator) - Operator diagnostics

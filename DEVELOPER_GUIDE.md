@@ -146,10 +146,10 @@ else
 fi
 
 # Build
-go build -ldflags="-X main.version=$VERSION -X main.commit=$COMMIT -X main.date=$DATE" -o kubectl-weka .
+go build -ldflags="-X github.com/weka/kubectl-weka/pkg/version.Version=$VERSION -X github.com/weka/kubectl-weka/pkg/version.Commit=$COMMIT -X github.com/weka/kubectl-weka/pkg/version.Date=$DATE" -o kubectl-weka .
 
 # Install
-go install -ldflags="-X main.version=$VERSION -X main.commit=$COMMIT -X main.date=$DATE" .
+go install -ldflags="-X github.com/weka/kubectl-weka/pkg/version.Version=$VERSION -X github.com/weka/kubectl-weka/pkg/version.Commit=$COMMIT -X github.com/weka/kubectl-weka/pkg/version.Date=$DATE" .
 ```
 
 ### Tagged Releases
@@ -1025,7 +1025,7 @@ func (c *ExampleCollector) Name() ModuleName {
 }
 
 func (c *ExampleCollector) Start(ctx context.Context) {
-	logger := getLogger(ctx)
+	logger := GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	logger.Info("Will collect", "items", "example data files")
 }
@@ -1034,7 +1034,7 @@ func (c *ExampleCollector) Collect(ctx context.Context) CollectorResult {
 	var filesCreated []string
 	var warnings []string
 	
-	logger := getLogger(ctx)
+	logger := GetLogger(ctx)
 	clients := getClients(ctx)
 	bundlePath := getBundlePath(ctx)
 	namespace := getNamespace(ctx)
@@ -1081,7 +1081,7 @@ func (c *ExampleCollector) Collect(ctx context.Context) CollectorResult {
 }
 
 func (c *ExampleCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := getLogger(ctx)
+	logger := GetLogger(ctx)
 	
 	switch result.Status {
 	case StatusSuccess:
@@ -1256,7 +1256,7 @@ The `NodesDescriptionCollector` includes a specialized `collectHostChecks()` met
 
 1. **Use Context Helpers**
    ```go
-   logger := getLogger(ctx)
+   logger := GetLogger(ctx)
    clients := getClients(ctx)
    bundlePath := getBundlePath(ctx)
    namespace := getNamespace(ctx)
@@ -1443,7 +1443,7 @@ ctx = withLogger(ctx, logger)
 // Get values
 clients := getClients(ctx)
 bundlePath := getBundlePath(ctx)
-logger := getLogger(ctx)
+logger := GetLogger(ctx)
 ```
 
 ---

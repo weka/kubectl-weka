@@ -15,29 +15,35 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
     ldflags:
       - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
+      - -X github.com/weka/kubectl-weka/pkg/version.Version={{.Version}}
+      - -X github.com/weka/kubectl-weka/pkg/version.Commit={{.Commit}}
+      - -X github.com/weka/kubectl-weka/pkg/version.Date={{.Date}}
 
 archives:
-  # 1) Keep tar.gz archives (for Krew + standard)
-  - id: tgz
-    formats: [tar.gz]
+  # Linux and macOS: tar.gz format (compatible with Krew)
+  - id: unix
+    format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    goos:
+      - linux
+      - darwin
     files:
-      - LICENSE*
-      - README*
-      - CHANGELOG.md
+      - none
 
-  # 2) Also upload the raw binaries (no archive)
-  - id: raw
-    format: binary
+  # Windows: zip format (compatible with Krew)
+  - id: windows
+    format: zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    goos:
+      - windows
+    files:
+      - none
 
 checksum:
   name_template: "checksums.txt"

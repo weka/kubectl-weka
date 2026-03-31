@@ -109,7 +109,7 @@ jobs:
           
           echo "Building ${BINARY_NAME} for ${{ matrix.goos }}/${{ matrix.goarch }}"
           go build \
-            -ldflags="-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+            -ldflags="-X github.com/weka/kubectl-weka/pkg/version.Version=${VERSION} -X github.com/weka/kubectl-weka/pkg/version.Commit=${COMMIT} -X github.com/weka/kubectl-weka/pkg/version.Date=${DATE}" \
             -o ${BINARY_NAME} \
             .
           

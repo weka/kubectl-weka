@@ -1,8 +1,58 @@
 # Changelog
 
-## Unreleased
+## Version 0.1.0 (2026-03-31)
 
 ### Features
+
+* **logs wekacluster Command** – Stream logs from all containers in a WEKA cluster:
+  * Real-time streaming with proper timestamp ordering across multiple pods
+  * Parallel log fetching with configurable concurrency control
+  * Flexible filtering: role (compute|s3|drive|envoy|nfs), container name, container ID, node labels
+  * Optional container name prefix in output
+  * All standard log options: --follow, --tail, --since, --previous
+  * Time-window buffering ensures correct timestamp ordering with minimal latency
+  * Graceful error handling - continues with available logs on failures
+
+* **logs wekaclient Command** – Stream logs from all containers in a WEKA client:
+  * Identical functionality to logs wekacluster but for client resources
+  * Same filtering, streaming, and output options
+  * Proper client ownership filtering using refactored FilterOwnerContainers
+
+* **logs wekacontainer Command** – Stream logs from arbitrary WekaContainers:
+  * No cluster or client ownership filtering - streams all WekaContainers
+  * Search across single namespace or all namespaces with `-A` flag
+  * Filter by container name and container ID
+  * Same real-time streaming and filtering as other log commands
+  * Node selector filtering support
+  * Useful for cross-namespace container inspection and generic access
+
+* **Real-Time Log Synchronization** – Improved log streaming architecture:
+  * Time-window buffering (2-second default) maintains timestamp order while allowing real-time output
+  * Logs appear immediately without artificial delays
+  * Safe output detection prevents log reordering
+  * Final flush ensures no logs are lost
+  * Works seamlessly with --follow mode
+
+* **Container Prefix Support** – Optional container identification in log output:
+  * Default: includes pod and container name prefix: `[pod/container]`
+  * `--no-prefix` flag for clean output without prefixes
+  * Helps identify log sources in multi-container deployments
+
+* **Node Selector Filtering** – Filter logs by node labels:
+  * Comma-separated key=value pairs (e.g., `disk=ssd,region=us-west`)
+  * AND logic - all labels must match
+  * Works with all log commands
+
+* **Concurrency Control** – Limit parallel log streams:
+  * `--limit-concurrent` flag (default: 10, 0=unlimited)
+  * Semaphore pattern prevents resource exhaustion
+  * Useful for large clusters with many containers
+
+* **Generic Object List Handler** – Eliminated code duplication:
+  * `createEmptyListForKind()` factory function for creating appropriate ObjectList types
+  * `getItemsFromObjectList()` generic helper using reflection to extract items
+  * ~60% reduction in boilerplate code for handling multiple object types
+  * Works with any ObjectList type: WekaClusterList, WekaClientList, WekaPolicyList, DeploymentList
 
 * **Unified Output Format Flags** – All `kubectl weka get` commands now use standard `-o/--output` flag:
   * Replaces previous `--wide` boolean flag across all get subcommands
@@ -48,8 +98,8 @@
   * Version information automatically extracted from git tags and embedded via ldflags
 
 * **Intelligent Versioning** – Version string adapts to git state:
-  * Release version (tag on HEAD): uses tag as-is (e.g., `v1.0.0`)
-  * Development version (commits after tag): includes commit count and hash (e.g., `v1.0.0-5-abc123d`)
+  * Release version (tag on HEAD): uses tag as-is (e.g., `v0.1.0`)
+  * Development version (commits after tag): includes commit count and hash (e.g., `v0.1.0-5-abc123d`)
   * Dirty detection: appends `-dirty` flag if working directory has uncommitted changes
   * Preserves 'v' prefix for consistency with kubectl utilities
 
@@ -83,8 +133,42 @@
   * Filters for unhealthy pods (>1 restart in 5 minutes)
   * Wide view mode shows detailed restart timing
 
-## 1.0.0 (2026-02-02)
+* **Preflight Checks** – Validation commands for cluster and node readiness:
+  * `kubectl weka preflight cluster` – Validate Kubernetes cluster readiness for WEKA deployment
+  * `kubectl weka preflight nodes` – Check individual node readiness and hardware
+  * Kernel validation, CPU/memory availability checks
+  * Storage and network configuration validation
 
+* **Planning Commands** – Resource requirement and deployment planning:
+  * `kubectl weka plan cluster` – Calculate resource requirements for cluster deployment
+  * `kubectl weka plan client` – Calculate resource requirements for client deployment
+  * `kubectl weka plan converged` – Plan combined cluster and client deployment
+  * Network and placement analysis, mutual compatibility checks, and detailed output
+
+* **Get Commands** – Comprehensive resource listing with flexible output:
+  * `kubectl weka get cluster-instances` – List WEKA clusters
+  * `kubectl weka get client-instances` – List WEKA clients
+  * `kubectl weka get nodes` – List Kubernetes nodes with WEKA-specific details
+  * `kubectl weka get policies` – List WEKA policies
+  * Multiple output formats: table, wide, JSON, YAML, custom columns
+
+* **Support Bundle** – Comprehensive diagnostic collection:
+  * `kubectl weka support-bundle operator` – Operator diagnostics
+  * `kubectl weka support-bundle cluster` – Cluster component logs and diagnostics
+  * `kubectl weka support-bundle client` – Client component logs and diagnostics
+  * `kubectl weka support-bundle csi` – CSI driver diagnostics
+  * `kubectl weka support-bundle k8s` – Kubernetes configuration validation
+  * `kubectl weka support-bundle all` – Complete diagnostic collection
+  * Organized archives with timestamped output
+  * Host checks integration for hardware information
+  * Graceful error handling to maximize collected data
+  * Detailed logging of support bundle execution and results
+  * Validation of collected data with error reporting in console and logs
+  * Comprehensive documentation for support bundle usage and contents
+  * Extensible architecture for adding new support bundle types and data collectors in the future
+  * Optional collection of sensitive data with user confirmation and secure handling. Usually not required for standard support bundles, but available for advanced diagnostics when needed.
+
+## Prototype (2026-02-02)
 
 ### Features
 
@@ -98,4 +182,3 @@
 * rudimentary verify node ([25e1122](https://github.com/weka/kubectl-weka/commit/25e112271e39301bc70f65fc1bc219d71f34c52f))
 * rudimentary verify node ([2550a9c](https://github.com/weka/kubectl-weka/commit/2550a9c7542dfe8d52383d0abe56d798549f0d29))
 
-## Changelog

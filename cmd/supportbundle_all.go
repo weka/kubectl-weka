@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
+	"github.com/weka/kubectl-weka/pkg/supportbundle"
+	"github.com/weka/kubectl-weka/pkg/types"
 )
 
 var supportBundleAllCmd = &cobra.Command{
@@ -19,11 +21,9 @@ var supportBundleAllCmd = &cobra.Command{
 func init() {
 	supportBundleCmd.AddCommand(supportBundleAllCmd)
 
-	supportBundleAllCmd.Flags().StringVar(&supportBundleCaseID, "case-id", "", "Case ID (Salesforce/Jira) to include in bundle name")
-	supportBundleAllCmd.Flags().StringVarP(&supportBundleOutput, "output", "o", ".", "Output directory for the support bundle archive")
-	supportBundleAllCmd.Flags().BoolVarP(&supportBundleAllNS, "all-namespaces", "A", false, "Collect resources from all namespaces")
-	supportBundleAllCmd.Flags().StringVarP(&supportBundleNamespace, "namespace", "n", "", "Namespace (defaults to current kubeconfig namespace)")
-	supportBundleAllCmd.Flags().BoolVar(&supportBundleIncludeSensitive, "include-sensitive-data", false, "Include sensitive data such as Secrets and credentials (⚠️  INSECURE - use with caution)")
+	supportBundleAllCmd.Flags().StringVarP(&flagOutput, "output", "o", ".", "Output directory for the support bundle archive")
+	supportBundleAllCmd.Flags().BoolVarP(&flagAllNamespaces, "all-namespaces", "A", false, "Collect resources from all namespaces")
+	supportBundleAllCmd.Flags().StringVarP(&flagNamespace, "namespace", "n", "", "Namespace (defaults to current kubeconfig namespace)")
 
 	supportBundleAllCmd.SilenceUsage = true
 }
@@ -31,5 +31,5 @@ func init() {
 func runSupportBundleAll(cmd *cobra.Command, args []string) error {
 	_ = cmd
 	_ = args
-	return runSupportBundleByMode(ModeAll, "", supportBundleNamespace, supportBundleAllNS)
+	return supportbundle.RunSupportBundleByMode(KubeClients, types.CollectionModeAll, "", flagNamespace, flagAllNamespaces, flagIncludeSensitive)
 }
