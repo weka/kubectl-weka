@@ -108,6 +108,39 @@ kubectl weka logs operator --since=5m
 
 # Show previous logs (if restarted)
 kubectl weka logs operator --previous
+
+# Stream cluster logs
+kubectl weka logs wekacluster my-cluster -f
+
+# Filter cluster logs by role
+kubectl weka logs wekacluster my-cluster --role=drive
+
+# Limit concurrent streams
+kubectl weka logs wekacluster my-cluster -l 5
+
+# Filter by node labels
+kubectl weka logs wekacluster my-cluster --node-selector="disk=ssd"
+
+# Stream client logs
+kubectl weka logs wekaclient my-client -f
+
+# Filter client logs by container name
+kubectl weka logs wekaclient my-client --wekacontainer=my-container
+
+# Combined: role + node selector + concurrency limit
+kubectl weka logs wekacluster my-cluster --role=compute --node-selector="disk=nvme" -l 8
+
+# Stream arbitrary WekaContainer logs
+kubectl weka logs wekacontainer -n default
+
+# Stream all WekaContainers across namespaces
+kubectl weka logs wekacontainer -A
+
+# Filter WekaContainers by name
+kubectl weka logs wekacontainer --wekacontainer=my-container -f
+
+# Filter by container ID across all namespaces
+kubectl weka logs wekacontainer -A --wekacontainer-id=42
 ```
 
 ### Collect Support Bundles

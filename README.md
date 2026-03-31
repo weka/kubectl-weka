@@ -1027,6 +1027,181 @@ kubectl weka logs operator --previous
 
 ---
 
+### `logs wekacluster`
+
+**Purpose:** Stream logs from all containers in a WEKA cluster with flexible filtering and real-time synchronization.
+
+**Usage:**
+```bash
+kubectl weka logs wekacluster <cluster-name> [flags]
+```
+
+**Flags:**
+- `-n, --namespace <string>` – Kubernetes namespace (default: `default`)
+- `-r, --role <role>` – Filter by container role: `compute|s3|drive|envoy|nfs`
+- `-c, --wekacontainer <name>` – Filter by specific WekaContainer name
+- `-i, --wekacontainerID <int>` – Filter by WekaContainer ID (ClusterContainerID)
+- `-s, --node-selector <labels>` – Filter by node labels (comma-separated, e.g., `disk=ssd,region=us-west`)
+- `-f, --follow` – Stream logs continuously in real-time
+- `-t, --tail <int>` – Recent lines to display (default: `50`, use `-1` for all)
+- `--since <duration>` – Show logs newer than relative duration (e.g., `5s`, `2m`, `3h`)
+- `-p, --previous` – Show logs from previous container instance
+- `-l, --limit-concurrent <int>` – Max concurrent log streams (default: `10`, use `0` for unlimited)
+- `--no-prefix` – Don't prepend pod/container names to log lines
+
+**Key Features:**
+- ✅ Real-time log streaming with proper timestamp ordering across all pods
+- ✅ Parallel log collection from multiple containers
+- ✅ Configurable concurrency control
+- ✅ Multiple filtering options (role, name, ID, node labels)
+- ✅ Optional container name prefix in output
+- ✅ Graceful error handling with warnings
+
+**Examples:**
+```bash
+# Show all cluster logs
+kubectl weka logs wekacluster my-cluster -n default
+
+# Stream logs from compute containers only
+kubectl weka logs wekacluster my-cluster --role=compute -f
+
+# Filter by container name
+kubectl weka logs wekacluster my-cluster --wekacontainer=my-container
+
+# Show logs from specific node type
+kubectl weka logs wekacluster my-cluster --node-selector="disk=nvme"
+
+# Combined filters: drive containers on SSD nodes, limited concurrency
+kubectl weka logs wekacluster my-cluster --role=drive --node-selector="disk=ssd" -l 5
+
+# Show last 100 lines without streaming
+kubectl weka logs wekacluster my-cluster --tail=100
+
+# Stream with container prefix enabled (default)
+kubectl weka logs wekacluster my-cluster -f --no-prefix
+
+# Show logs from last 5 minutes with limited concurrency
+kubectl weka logs wekacluster my-cluster --since=5m -l 3
+```
+
+**Output Format:**
+```
+[pod-name/container-name] 2026-03-23 00:33:37 - INFO - CPU affinity management: adjusted 1 processes
+[pod-name/container-name] 2026-03-23 00:33:38 - DEBUG - Network setup in progress
+[pod-name/container-name] 2026-03-23 00:33:39 - INFO - All services ready
+```
+
+---
+
+### `logs wekaclient`
+
+**Purpose:** Stream logs from all containers in a WEKA client with flexible filtering and real-time synchronization.
+
+**Usage:**
+```bash
+kubectl weka logs wekaclient <client-name> [flags]
+```
+
+**Flags:** *(Identical to `logs wekacluster`)*
+- `-n, --namespace <string>` – Kubernetes namespace (default: `default`)
+- `-r, --role <role>` – Filter by container role
+- `-c, --wekacontainer <name>` – Filter by container name
+- `-i, --wekacontainerID <int>` – Filter by container ID
+- `-s, --node-selector <labels>` – Filter by node labels
+- `-f, --follow` – Stream continuously
+- `-t, --tail <int>` – Recent lines (default: `50`)
+- `--since <duration>` – Show from relative time
+- `-p, --previous` – Previous instance
+- `-l, --limit-concurrent <int>` – Max concurrent (default: `10`, `0`=unlimited)
+- `--no-prefix` – No pod/container prefix
+
+**Key Features:**
+- ✅ Same real-time streaming as wekacluster
+- ✅ Filters containers owned by the specified client
+- ✅ All same filtering and performance options
+- ✅ Identical output format and behavior
+
+**Examples:**
+```bash
+# Show all client logs
+kubectl weka logs wekaclient my-client -n default
+
+# Stream client logs with limited concurrency
+kubectl weka logs wekaclient my-client -f -l 5
+
+# Filter by role
+kubectl weka logs wekaclient my-client --role=compute
+
+# Show from specific node pool
+kubectl weka logs wekaclient my-client --node-selector="pool=gpu"
+
+# Show logs from last 10 minutes without container prefix
+kubectl weka logs wekaclient my-client --since=10m --no-prefix
+```
+
+---
+
+### `logs wekacontainer`
+
+**Purpose:** Stream logs from arbitrary WekaContainers across one or all namespaces without filtering by cluster or client ownership.
+
+**Usage:**
+```bash
+kubectl weka logs wekacontainer [flags]
+```
+
+**Flags:**
+- `-n, --namespace <string>` – Kubernetes namespace (default: `default`)
+- `-A, --all-namespaces` – Search across all namespaces (ignores --namespace if set)
+- `-c, --wekacontainer <name>` – Filter by specific WekaContainer name
+- `-i, --wekacontainer-id <int>` – Filter by WekaContainer ID (ClusterContainerID)
+- `-s, --node-selector <labels>` – Filter by node labels (comma-separated key=value)
+- `-f, --follow` – Stream logs continuously
+- `-t, --tail <int>` – Recent lines (default: `50`, use `-1` for all)
+- `--since <duration>` – Show logs newer than relative duration
+- `-p, --previous` – Show logs from previous container instance
+- `-l, --limit-concurrent <int>` – Max concurrent streams (default: `10`, use `0` for unlimited)
+- `--no-prefix` – Don't prepend pod/container names
+
+**Key Features:**
+- ✅ No cluster or client ownership filtering - streams ALL WekaContainers
+- ✅ Search across all namespaces with `-A` flag
+- ✅ Same real-time streaming as cluster/client commands
+- ✅ Filter by name and ID for precise targeting
+- ✅ All standard log streaming options
+
+**Use Cases:**
+- View logs from containers not filtered by cluster/client
+- Cross-namespace container inspection
+- Generic container log access
+- Troubleshooting containers regardless of ownership
+
+**Examples:**
+```bash
+# Show all WekaContainer logs in namespace
+kubectl weka logs wekacontainer -n default
+
+# Show logs from all WekaContainers across all namespaces
+kubectl weka logs wekacontainer -A
+
+# Stream specific container by name
+kubectl weka logs wekacontainer --wekacontainer=my-container -f
+
+# Filter by container ID across all namespaces
+kubectl weka logs wekacontainer -A --wekacontainer-id=42
+
+# Show logs from specific node type
+kubectl weka logs wekacontainer --node-selector="disk=nvme"
+
+# Combined: specific container, all namespaces, with concurrency control
+kubectl weka logs wekacontainer -A --wekacontainer=my-container -l 5
+
+# Show logs from last 5 minutes without container prefix
+kubectl weka logs wekacontainer -A --since=5m --no-prefix
+```
+
+---
+
 ## Support Bundle Commands
 
 Support bundle commands collect comprehensive diagnostic information for troubleshooting and support cases.

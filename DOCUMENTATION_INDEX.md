@@ -71,6 +71,15 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 #### Collect diagnostic data
 → See [README.md - Support Bundle Commands](README.md#support-bundle-commands)
 
+#### Stream cluster container logs
+→ See [README.md - logs wekacluster](README.md#logs-wekacluster)
+
+#### Stream client container logs
+→ See [README.md - logs wekaclient](README.md#logs-wekaclient)
+
+#### Stream arbitrary WekaContainer logs
+→ See [README.md - logs wekacontainer](README.md#logs-wekacontainer)
+
 #### Troubleshoot issues
 → See [README.md - Troubleshooting](README.md#troubleshooting)
 
@@ -179,6 +188,9 @@ Automatically generated release notes using Release Please.
 
 ### Logs Commands
 - [logs operator](README.md#logs-operator) - Stream operator logs
+- [logs wekacluster](README.md#logs-wekacluster) - Stream cluster container logs
+- [logs wekaclient](README.md#logs-wekaclient) - Stream client container logs
+- [logs wekacontainer](README.md#logs-wekacontainer) - Stream arbitrary container logs
 
 ### Support Bundle Commands
 - [support-bundle operator](README.md#support-bundle-operator) - Operator diagnostics

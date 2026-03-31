@@ -4,6 +4,56 @@
 
 ### Features
 
+* **logs wekacluster Command** – Stream logs from all containers in a WEKA cluster:
+  * Real-time streaming with proper timestamp ordering across multiple pods
+  * Parallel log fetching with configurable concurrency control
+  * Flexible filtering: role (compute|s3|drive|envoy|nfs), container name, container ID, node labels
+  * Optional container name prefix in output
+  * All standard log options: --follow, --tail, --since, --previous
+  * Time-window buffering ensures correct timestamp ordering with minimal latency
+  * Graceful error handling - continues with available logs on failures
+
+* **logs wekaclient Command** – Stream logs from all containers in a WEKA client:
+  * Identical functionality to logs wekacluster but for client resources
+  * Same filtering, streaming, and output options
+  * Proper client ownership filtering using refactored FilterOwnerContainers
+
+* **logs wekacontainer Command** – Stream logs from arbitrary WekaContainers:
+  * No cluster or client ownership filtering - streams all WekaContainers
+  * Search across single namespace or all namespaces with `-A` flag
+  * Filter by container name and container ID
+  * Same real-time streaming and filtering as other log commands
+  * Node selector filtering support
+  * Useful for cross-namespace container inspection and generic access
+
+* **Real-Time Log Synchronization** – Improved log streaming architecture:
+  * Time-window buffering (2-second default) maintains timestamp order while allowing real-time output
+  * Logs appear immediately without artificial delays
+  * Safe output detection prevents log reordering
+  * Final flush ensures no logs are lost
+  * Works seamlessly with --follow mode
+
+* **Container Prefix Support** – Optional container identification in log output:
+  * Default: includes pod and container name prefix: `[pod/container]`
+  * `--no-prefix` flag for clean output without prefixes
+  * Helps identify log sources in multi-container deployments
+
+* **Node Selector Filtering** – Filter logs by node labels:
+  * Comma-separated key=value pairs (e.g., `disk=ssd,region=us-west`)
+  * AND logic - all labels must match
+  * Works with all log commands
+
+* **Concurrency Control** – Limit parallel log streams:
+  * `--limit-concurrent` flag (default: 10, 0=unlimited)
+  * Semaphore pattern prevents resource exhaustion
+  * Useful for large clusters with many containers
+
+* **Generic Object List Handler** – Eliminated code duplication:
+  * `createEmptyListForKind()` factory function for creating appropriate ObjectList types
+  * `getItemsFromObjectList()` generic helper using reflection to extract items
+  * ~60% reduction in boilerplate code for handling multiple object types
+  * Works with any ObjectList type: WekaClusterList, WekaClientList, WekaPolicyList, DeploymentList
+
 * **Unified Output Format Flags** – All `kubectl weka get` commands now use standard `-o/--output` flag:
   * Replaces previous `--wide` boolean flag across all get subcommands
   * Supports multiple output formats: `table` (default), `wide`, `json`, `yaml`, `custom-columns=<COLS...>`
