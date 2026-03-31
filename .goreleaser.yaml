@@ -30,7 +30,7 @@ archives:
   - id: unix
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    goos:
+    os:
       - linux
       - darwin
     files:
@@ -40,7 +40,7 @@ archives:
   - id: windows
     format: zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    goos:
+    os:
       - windows
     files:
       - none
