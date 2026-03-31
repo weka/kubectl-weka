@@ -98,7 +98,8 @@ jobs:
           
           ls -lh ${BINARY_NAME}
 
-      - name: Rename binary with architecture
+      - name: Prepare release artifacts (Unix-like systems)
+        if: matrix.goos != 'windows'
         shell: bash
         run: |
           VERSION=${{ steps.version.outputs.version }}
@@ -106,28 +107,57 @@ jobs:
           GOARCH=${{ matrix.goarch }}
           
           BINARY_NAME=kubectl-weka
-          if [ "${{ matrix.goos }}" == "windows" ]; then
-            BINARY_NAME=${BINARY_NAME}.exe
-          fi
           
-          # Rename binary to include version, OS, and architecture
-          # Format: kubectl-weka-v1.0.0-linux-amd64 or kubectl-weka-v1.0.0-windows-amd64.exe
-          if [ "${{ matrix.goos }}" == "windows" ]; then
-            FINAL_NAME=kubectl-weka-${VERSION}-${GOOS}-${GOARCH}.exe
-          else
-            FINAL_NAME=kubectl-weka-${VERSION}-${GOOS}-${GOARCH}
-          fi
+          # Create raw binary with architecture suffix for direct download
+          RAW_NAME=kubectl-weka-${VERSION}-${GOOS}-${GOARCH}
+          cp ${BINARY_NAME} ${RAW_NAME}
           
-          mv ${BINARY_NAME} ${FINAL_NAME}
+          # Create krew-compatible tar.gz package (format: kubectl-weka_VERSION_OS_ARCH.tar.gz)
+          KREW_PACKAGE_NAME=kubectl-weka_${VERSION}_${GOOS}_${GOARCH}
+          mkdir -p ${KREW_PACKAGE_NAME}
+          cp ${BINARY_NAME} ${KREW_PACKAGE_NAME}/
+          tar czf ${KREW_PACKAGE_NAME}.tar.gz ${KREW_PACKAGE_NAME}
           
-          echo "FINAL_NAME=${FINAL_NAME}" >> $GITHUB_ENV
+          echo "RAW_BINARY=${RAW_NAME}" >> $GITHUB_ENV
+          echo "KREW_PACKAGE=${KREW_PACKAGE_NAME}.tar.gz" >> $GITHUB_ENV
           
-          ls -lh ${FINAL_NAME}
+          echo "Created raw binary: ${RAW_NAME}"
+          echo "Created krew package: ${KREW_PACKAGE_NAME}.tar.gz"
+          ls -lh ${RAW_NAME} ${KREW_PACKAGE_NAME}.tar.gz
 
-      - name: Upload release asset
+      - name: Prepare release artifacts (Windows)
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          $VERSION = "${{ steps.version.outputs.version }}"
+          $GOOS = "${{ matrix.goos }}"
+          $GOARCH = "${{ matrix.goarch }}"
+          
+          $BINARY_NAME = "kubectl-weka.exe"
+          
+          # Create raw binary with architecture suffix for direct download
+          $RAW_NAME = "kubectl-weka-${VERSION}-${GOOS}-${GOARCH}.exe"
+          Copy-Item $BINARY_NAME $RAW_NAME
+          
+          # Create krew-compatible zip package (format: kubectl-weka_VERSION_OS_ARCH.zip)
+          $KREW_PACKAGE_NAME = "kubectl-weka_${VERSION}_${GOOS}_${GOARCH}"
+          New-Item -ItemType Directory -Path $KREW_PACKAGE_NAME -Force | Out-Null
+          Copy-Item $BINARY_NAME $KREW_PACKAGE_NAME/
+          Compress-Archive -Path $KREW_PACKAGE_NAME -DestinationPath "${KREW_PACKAGE_NAME}.zip"
+          
+          Add-Content -Path $env:GITHUB_ENV -Value "RAW_BINARY=${RAW_NAME}"
+          Add-Content -Path $env:GITHUB_ENV -Value "KREW_PACKAGE=${KREW_PACKAGE_NAME}.zip"
+          
+          Write-Host "Created raw binary: ${RAW_NAME}"
+          Write-Host "Created krew package: ${KREW_PACKAGE_NAME}.zip"
+          Get-Item $RAW_NAME, "${KREW_PACKAGE_NAME}.zip"
+
+      - name: Upload release assets
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ env.FINAL_NAME }}
+          files: |
+            ${{ env.RAW_BINARY }}
+            ${{ env.KREW_PACKAGE }}
           fail_on_unmatched_files: true
 
 
