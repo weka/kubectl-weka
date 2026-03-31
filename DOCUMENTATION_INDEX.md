@@ -24,7 +24,7 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 
 | Document | Purpose |
 |----------|---------|
-| **[LICENSE.md](LICENSE.md)** | Apache 2.0 License |
+| **[LICENSE](LICENSE)** | Apache 2.0 License |
 
 ---
 
