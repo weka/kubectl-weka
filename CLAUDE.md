@@ -1053,54 +1053,6 @@ With many pods, this might overflow. Should calculate buffer size or use unbuffe
 logsChan := make(chan LogLine)  // Unbuffered, forces synchronization
 ```
 
----
-
-## Performance Bottlenecks to Watch
-
-### 1. Node Listing (filterPodsByNodeSelector)
-```go
-// Currently: Lists ALL nodes for each filter call
-nodes, _ := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-```
-
-**Problem**: With 100 pods and node-selector filtering, lists nodes 100+ times
-
-**Fix**: Cache node labels with TTL, or list once and reuse
-
-### 2. Pod Gets (getPodsForContainers)
-```go
-// Currently: Individual Get for each pod
-err := crclient.Get(ctx, types.NamespacedName{...}, &pod)
-```
-
-**Problem**: 1000 pods = 1000 Get calls
-
-**Fix**: Batch gets or use label selector to fetch all at once
-
-### 3. Reflection (getItemsFromObjectList)
-```go
-listValue := reflect.ValueOf(list).Elem()  // Per-list reflection
-```
-
-**Problem**: Reflection has overhead (though minimal here)
-
-**Fix**: Cache reflection results (unlikely bottleneck in practice)
-
-### 4. String Parsing (parseLogLineTimestamp)
-```go
-for _, format := range formats {  // Tries 6+ formats per line
-    if t, err := time.Parse(format, timeStr); err == nil {
-        return t, timeStr
-    }
-}
-```
-
-**Problem**: With 10,000 lines, tries 6+ formats each
-
-**Fix**: Detect format once (first line), reuse for subsequent lines
-
----
-
 ## Next Steps for Maintenance
 
 ### Short-term (1-2 weeks)
