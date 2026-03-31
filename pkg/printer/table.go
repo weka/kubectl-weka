@@ -2,6 +2,7 @@ package printer
 
 import (
 	"fmt"
+	"github.com/weka/kubectl-weka/pkg/utils"
 	"io"
 	"strings"
 
@@ -118,7 +119,7 @@ func (tp *TablePrinter) Print(columns []TableColumn, rows []TableRow, w io.Write
 	tw.Render()
 	tableStr := sb.String()
 	if opts.IndentByNumSpaces > 0 {
-		tableStr = indentText(tableStr, opts.IndentByNumSpaces)
+		tableStr = utils.IndentText(tableStr, opts.IndentByNumSpaces)
 	}
 	_, err := io.WriteString(w, tableStr)
 	return err
