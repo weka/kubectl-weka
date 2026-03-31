@@ -1,4 +1,4 @@
-version: 1
+version: 2
 
 project_name: kubectl-weka
 
@@ -7,51 +7,39 @@ before:
     - go mod tidy
 
 builds:
-  # Linux builds
   - id: linux
     main: .
     binary: kubectl-weka
     env:
       - CGO_ENABLED=0
-    goos:
-      - linux
-    goarch:
-      - amd64
-      - arm64
+    goos: [linux]
+    goarch: [amd64, arm64]
     ldflags:
       - -s -w
       - -X github.com/weka/kubectl-weka/pkg/version.Version={{.Version}}
       - -X github.com/weka/kubectl-weka/pkg/version.Commit={{.Commit}}
       - -X github.com/weka/kubectl-weka/pkg/version.Date={{.Date}}
 
-  # macOS builds
   - id: darwin
     main: .
     binary: kubectl-weka
     env:
       - CGO_ENABLED=0
-    goos:
-      - darwin
-    goarch:
-      - amd64
-      - arm64
+    goos: [darwin]
+    goarch: [amd64, arm64]
     ldflags:
       - -s -w
       - -X github.com/weka/kubectl-weka/pkg/version.Version={{.Version}}
       - -X github.com/weka/kubectl-weka/pkg/version.Commit={{.Commit}}
       - -X github.com/weka/kubectl-weka/pkg/version.Date={{.Date}}
 
-  # Windows builds
   - id: windows
     main: .
     binary: kubectl-weka
     env:
       - CGO_ENABLED=0
-    goos:
-      - windows
-    goarch:
-      - amd64
-      - arm64
+    goos: [windows]
+    goarch: [amd64, arm64]
     ldflags:
       - -s -w
       - -X github.com/weka/kubectl-weka/pkg/version.Version={{.Version}}
@@ -59,24 +47,18 @@ builds:
       - -X github.com/weka/kubectl-weka/pkg/version.Date={{.Date}}
 
 archives:
-  # Raw binaries (unarchived)
-  - id: binaries
-    format: binary
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-
-  # Linux and macOS: tar.gz format (compatible with Krew)
   - id: unix
-    builds:
+    ids:
       - linux
       - darwin
-    format: tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-
-  # Windows: zip format (compatible with Krew)
-  - id: windows
-    builds:
       - windows
-    format: zip
+    format_overrides:
+      - goos: windows
+        formats: [ "binary", "zip" ]
+      - goos: linux
+        formats: [ "binary", "tar.gz" ]
+      - goos: darwin
+        formats: [ "binary", "tar.gz" ]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
@@ -87,6 +69,4 @@ changelog:
 
 release:
   skip_upload: false
-  # Allow skipping files that already exist in the release
-  allow_different_user: true
   replace_existing_artifacts: true
