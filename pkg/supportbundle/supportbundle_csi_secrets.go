@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	types2 "github.com/weka/kubectl-weka/pkg/types"
-	"github.com/weka/kubectl-weka/pkg/utils"
 	"os"
 	"path/filepath"
 	"strings"
@@ -204,7 +203,7 @@ func (c *CSISecretsCollector) collectSecret(ctx context.Context, baseDir, driver
 	}
 
 	// Validate and process secret data
-	secretFile := filepath.Join(secretDir, fmt.Sprintf("Secret_%s-%s.yaml", utils.SanitizeName(secretRef.Namespace), utils.SanitizeName(secretRef.Name)))
+	secretFile := filepath.Join(secretDir, fmt.Sprintf("Secret_%s-%s.yaml", kubernetes.SanitizeName(secretRef.Namespace), kubernetes.SanitizeName(secretRef.Name)))
 	var content string
 	var validationErrors []string
 	includeSensitive := getCollectSensitiveData(ctx)

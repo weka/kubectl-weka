@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
-	"github.com/weka/kubectl-weka/pkg/utils"
+	"github.com/weka/kubectl-weka/pkg/wekaversion"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"strings"
@@ -779,7 +779,7 @@ func (m *ClusterClientCompatibilityModule) Validate(ctx context.Context, _ *kube
 	}
 
 	// Parse versions from images
-	clusterVersion, err := utils.ParseWekaVersion(clusterImage)
+	clusterVersion, err := wekaversion.ParseWekaVersion(clusterImage)
 	if err != nil {
 		return map[string]interface{}{
 			"Status": "warning",
@@ -789,7 +789,7 @@ func (m *ClusterClientCompatibilityModule) Validate(ctx context.Context, _ *kube
 		}, nil
 	}
 
-	clientVersion, err := utils.ParseWekaVersion(clientImage)
+	clientVersion, err := wekaversion.ParseWekaVersion(clientImage)
 	if err != nil {
 		return map[string]interface{}{
 			"Status": "warning",

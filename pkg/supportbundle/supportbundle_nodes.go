@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/getters"
 	"github.com/weka/kubectl-weka/pkg/hostcheck"
+	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/printer"
-	"github.com/weka/kubectl-weka/pkg/utils"
 	"log/slog"
 	"path/filepath"
 	"sync"
@@ -46,7 +46,7 @@ func (c *NodesDescriptionCollector) Collect(ctx context.Context) CollectorResult
 	var nodeList corev1.NodeList
 	opts := []client.ListOption{}
 	if c.NodeSelector != "" {
-		opts = append(opts, client.MatchingLabels(utils.ParseSelector(c.NodeSelector)))
+		opts = append(opts, client.MatchingLabels(kubernetes.ParseSelector(c.NodeSelector)))
 	}
 	if err := clients.CRClient.List(ctx, &nodeList, opts...); err != nil {
 		return CollectorResult{

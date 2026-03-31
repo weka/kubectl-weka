@@ -171,7 +171,7 @@ func RunHostChecks(ctx context.Context, clients *kubernetes.K8sClients, nodes []
 	// Create pods in the namespace
 	createdPods := make(map[string]*corev1.Pod)
 	for _, node := range nodes {
-		podName := fmt.Sprintf("hostchk-%s-%s", utils.SanitizeName(node.Name), utils.RandomString(5))
+		podName := fmt.Sprintf("hostchk-%s-%s", kubernetes.SanitizeName(node.Name), utils.RandomString(5))
 		pod := makeHostChecksPod(namespace, node.Name, podName, opts.LabelKey, opts.LabelValue)
 
 		if err := clients.CRClient.Create(ctx, pod); err != nil {

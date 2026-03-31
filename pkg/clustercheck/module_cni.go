@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
-	"github.com/weka/kubectl-weka/pkg/utils"
 	v3 "k8s.io/api/apps/v1"
 	"k8s.io/api/core/v1"
 	v2 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -230,10 +229,10 @@ func detectKnownCNIDaemonSet(ctx context.Context, clients *kubernetes.K8sClients
 
 			// 2) Label-based detection (helps for flannel and others)
 			labels := ds.Labels
-			if utils.HasAnyLabelValue(labels, []string{"k8s-app", "app"}, []string{"flannel", "kube-flannel"}) {
+			if kubernetes.HasAnyLabelValue(labels, []string{"k8s-app", "app"}, []string{"flannel", "kube-flannel"}) {
 				return true, fmt.Sprintf("%s/%s", ns, name), nil
 			}
-			if utils.HasAnyLabelValue(labels, []string{"k8s-app", "app"}, []string{"calico-node", "cilium", "weave-net", "antrea"}) {
+			if kubernetes.HasAnyLabelValue(labels, []string{"k8s-app", "app"}, []string{"calico-node", "cilium", "weave-net", "antrea"}) {
 				return true, fmt.Sprintf("%s/%s", ns, name), nil
 			}
 		}
@@ -257,7 +256,7 @@ func detectKnownCNIDaemonSet(ctx context.Context, clients *kubernetes.K8sClients
 					return true, fmt.Sprintf("%s/%s", ns, name), nil
 				}
 			}
-			if utils.HasAnyLabelValue(p.Labels, []string{"k8s-app", "app"}, []string{"flannel", "kube-flannel"}) {
+			if kubernetes.HasAnyLabelValue(p.Labels, []string{"k8s-app", "app"}, []string{"flannel", "kube-flannel"}) {
 				return true, fmt.Sprintf("%s/%s", ns, name), nil
 			}
 		}

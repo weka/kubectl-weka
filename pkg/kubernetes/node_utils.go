@@ -3,7 +3,6 @@ package kubernetes
 import (
 	"context"
 	"fmt"
-	"github.com/weka/kubectl-weka/pkg/utils"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -135,7 +134,7 @@ func PrintNodeList(indent string, nodeNames []string) {
 // e.g., h1, h2, h10, h11 instead of h1, h10, h11, h2
 func SortNodeNamesNumerically(names []string) {
 	sort.Slice(names, func(i, j int) bool {
-		return utils.CompareNodeNames(names[i], names[j]) < 0
+		return CompareNodeNames(names[i], names[j]) < 0
 	})
 }
 
@@ -187,7 +186,7 @@ func ResolveNodes(ctx context.Context, clients *K8sClients, names []string, sele
 
 	// Apply selector filtering if provided
 	if selector != "" {
-		selectorMap := utils.ParseSelector(selector)
+		selectorMap := ParseSelector(selector)
 		return FilterNodesBySelector(allNodes, selectorMap), nil
 	}
 

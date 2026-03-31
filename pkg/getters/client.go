@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/printer"
-	"github.com/weka/kubectl-weka/pkg/utils"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -86,7 +85,7 @@ func GenerateClientInstancesOutput(
 		clientName := wcClient.GetName()
 
 		selectorMap := wcClient.Spec.NodeSelector
-		selectorStr := utils.SelectorMapToSelector(selectorMap)
+		selectorStr := kubernetes.SelectorMapToSelector(selectorMap)
 
 		// Use controller-runtime client instead of clientset for better caching
 		var nodeList corev1.NodeList

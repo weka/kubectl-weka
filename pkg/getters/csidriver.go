@@ -210,7 +210,7 @@ func GenerateCSIDriversOutput(ctx context.Context, clients *kubernetes.K8sClient
 
 	// Sort by driver name (numerically aware)
 	sort.Slice(deployments, func(i, j int) bool {
-		return utils.CompareNodeNames(deployments[i].DriverName, deployments[j].DriverName) < 0
+		return kubernetes.CompareNodeNames(deployments[i].DriverName, deployments[j].DriverName) < 0
 	})
 
 	// Build columns

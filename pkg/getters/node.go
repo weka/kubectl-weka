@@ -20,7 +20,7 @@ func GenerateNodesOutput(ctx context.Context, clients *kubernetes.K8sClients, pr
 	var nodeList v1.NodeList
 	var opts []client.ListOption
 	if nodeSelector != "" {
-		opts = append(opts, client.MatchingLabels(utils.ParseSelector(nodeSelector)))
+		opts = append(opts, client.MatchingLabels(kubernetes.ParseSelector(nodeSelector)))
 	}
 	if err := crClient.List(ctx, &nodeList, opts...); err != nil {
 		return "", err
@@ -47,15 +47,15 @@ func GenerateNodesOutput(ctx context.Context, clients *kubernetes.K8sClients, pr
 		{Name: "ARCH", VisibleInWide: false},
 		{Name: "KERNEL", VisibleInWide: false},
 		{Name: "STATUS", VisibleInWide: false},
-		{Name: "HP2MI_USABLE", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{utils.FormatQuantityToGB}},
-		{Name: "HP2MI_ALLOC", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{utils.FormatQuantityToGB}},
-		{Name: "HP2MI_FREE", VisibleInWide: false, FormatFuncs: printer.TableFormatFunctions{utils.FormatQuantityToGB}},
-		{Name: "CORES_USABLE", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{utils.FormatQuantityToGB}},
-		{Name: "CORES_ALLOC", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{utils.FormatQuantityToGB}},
-		{Name: "CORES_FREE", VisibleInWide: false, FormatFuncs: printer.TableFormatFunctions{utils.FormatQuantityToGB}},
-		{Name: "RAM_USABLE", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{utils.FormatQuantityToGB}},
-		{Name: "RAM_ALLOC", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{utils.FormatQuantityToGB}},
-		{Name: "RAM_FREE", VisibleInWide: false, FormatFuncs: printer.TableFormatFunctions{utils.FormatQuantityToGB}},
+		{Name: "HP2MI_USABLE", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{kubernetes.FormatQuantityToGB}},
+		{Name: "HP2MI_ALLOC", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{kubernetes.FormatQuantityToGB}},
+		{Name: "HP2MI_FREE", VisibleInWide: false, FormatFuncs: printer.TableFormatFunctions{kubernetes.FormatQuantityToGB}},
+		{Name: "CORES_USABLE", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{kubernetes.FormatQuantityToGB}},
+		{Name: "CORES_ALLOC", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{kubernetes.FormatQuantityToGB}},
+		{Name: "CORES_FREE", VisibleInWide: false, FormatFuncs: printer.TableFormatFunctions{kubernetes.FormatQuantityToGB}},
+		{Name: "RAM_USABLE", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{kubernetes.FormatQuantityToGB}},
+		{Name: "RAM_ALLOC", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{kubernetes.FormatQuantityToGB}},
+		{Name: "RAM_FREE", VisibleInWide: false, FormatFuncs: printer.TableFormatFunctions{kubernetes.FormatQuantityToGB}},
 	}
 
 	var rows []printer.TableRow

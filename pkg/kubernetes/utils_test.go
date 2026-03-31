@@ -47,7 +47,7 @@ func TestParseSelector(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := utils.ParseSelector(tt.selector)
+			result := ParseSelector(tt.selector)
 
 			// Check length
 			if len(result) != len(tt.expected) {

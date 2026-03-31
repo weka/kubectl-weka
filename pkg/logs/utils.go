@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
-	"github.com/weka/kubectl-weka/pkg/utils"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -125,7 +124,7 @@ func filterPodsByNodeSelector(ctx context.Context, clients *kubernetes.K8sClient
 	}
 
 	// Parse nodeSelector into map of key=value pairs
-	selectorMap := utils.ParseSelector(nodeSelector)
+	selectorMap := kubernetes.ParseSelector(nodeSelector)
 	// Get all nodes to match labels
 	node := &v1.Node{}
 	var opts []client.ListOption

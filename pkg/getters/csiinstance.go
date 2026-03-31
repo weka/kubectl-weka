@@ -153,13 +153,13 @@ func GenerateCSIInstancesOutput(ctx context.Context, clients *kubernetes.K8sClie
 	// Sort by driver name, then namespace, then node, then role, then pod name
 	sort.Slice(instances, func(i, j int) bool {
 		if instances[i].DriverName != instances[j].DriverName {
-			return utils.CompareNodeNames(instances[i].DriverName, instances[j].DriverName) < 0
+			return kubernetes.CompareNodeNames(instances[i].DriverName, instances[j].DriverName) < 0
 		}
 		if instances[i].Namespace != instances[j].Namespace {
 			return instances[i].Namespace < instances[j].Namespace
 		}
 		if instances[i].NodeName != instances[j].NodeName {
-			return utils.CompareNodeNames(instances[i].NodeName, instances[j].NodeName) < 0
+			return kubernetes.CompareNodeNames(instances[i].NodeName, instances[j].NodeName) < 0
 		}
 		if instances[i].Role != instances[j].Role {
 			// "controller" before "node"
