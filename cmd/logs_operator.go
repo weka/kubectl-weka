@@ -49,5 +49,5 @@ func runLogsOperator(cmd *cobra.Command, args []string) error {
 		TailFlagSet: cmd.Flags().Changed("tail"),
 	}
 
-	return logs.StreamOperatorLogs(ctx, KubeClients.Clientset, opts)
+	return logs.StreamOperatorLogs(ctx, KubeClients, opts)
 }

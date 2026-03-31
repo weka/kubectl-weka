@@ -3,14 +3,14 @@ package logs
 import (
 	"context"
 	"fmt"
+	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"io"
 	"os"
 	"sort"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // OperatorLogsOptions contains options for fetching operator logs
@@ -24,7 +24,7 @@ type OperatorLogsOptions struct {
 }
 
 // StreamOperatorLogs streams logs from the WEKA operator controller manager pod
-func StreamOperatorLogs(ctx context.Context, clientset kubernetes.Interface, opts OperatorLogsOptions) error {
+func StreamOperatorLogs(ctx context.Context, clients *kubernetes.K8sClients, opts OperatorLogsOptions) error {
 	// Labels for WEKA operator pod
 	selector := "" +
 		"app=weka-operator," +
@@ -32,16 +32,20 @@ func StreamOperatorLogs(ctx context.Context, clientset kubernetes.Interface, opt
 		"app.kubernetes.io/created-by=weka-operator," +
 		"control-plane=controller-manager"
 
-	// List operator pods
-	pods, err := clientset.CoreV1().Pods(opts.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: selector,
-	})
+	// List operator pods using controller-runtime client
+	var podList corev1.PodList
+	err := clients.CRClient.List(ctx, &podList, client.InNamespace(opts.Namespace), client.MatchingLabels(map[string]string{
+		"app":                         "weka-operator",
+		"app.kubernetes.io/component": "weka-operator",
+		"control-plane":               "controller-manager",
+	}))
 	if err != nil {
 		return fmt.Errorf("failed to list operator pods in namespace %q: %w", opts.Namespace, err)
 	}
-	if len(pods.Items) == 0 {
+	if len(podList.Items) == 0 {
 		return fmt.Errorf("no operator pods found in namespace %q with selector %q", opts.Namespace, selector)
 	}
+	pods := &podList
 
 	// Prefer Running; among them prefer newest
 	sort.Slice(pods.Items, func(i, j int) bool {
@@ -82,8 +86,8 @@ func StreamOperatorLogs(ctx context.Context, clientset kubernetes.Interface, opt
 		logOpts.SinceSeconds = &sec
 	}
 
-	// Get log stream
-	req := clientset.CoreV1().Pods(opts.Namespace).GetLogs(pod.Name, logOpts)
+	// Get log stream using clientset (required for pod logs streaming)
+	req := clients.Clientset.CoreV1().Pods(opts.Namespace).GetLogs(pod.Name, logOpts)
 	stream, err := req.Stream(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to stream logs from pod %s/%s: %w", opts.Namespace, pod.Name, err)

@@ -7,6 +7,7 @@ import (
 	"github.com/weka/kubectl-weka/pkg/printer"
 	"github.com/weka/kubectl-weka/pkg/utils"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -87,10 +88,13 @@ func GenerateClientInstancesOutput(
 		selectorMap := wcClient.Spec.NodeSelector
 		selectorStr := utils.SelectorMapToSelector(selectorMap)
 
-		nodes, err := k8s.CoreV1().Nodes().List(ctx, v1.ListOptions{LabelSelector: selectorStr})
+		// Use controller-runtime client instead of clientset for better caching
+		var nodeList corev1.NodeList
+		err := crClient.List(ctx, &nodeList, client.MatchingLabels(selectorMap))
 		if err != nil {
 			return "", fmt.Errorf("failed to fetch nodes: %w", err)
 		}
+		nodes := &nodeList
 
 		for _, n := range nodes.Items {
 			var (

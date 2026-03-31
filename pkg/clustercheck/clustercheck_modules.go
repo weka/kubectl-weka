@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/kubernetes"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // K8sVersionModule validates Kubernetes version is 1.24+
@@ -45,13 +44,13 @@ func (m *K8sVersionModule) SuggestedResolutionTemplate() string {
 	return "Upgrade Kubernetes cluster to version 1.24 or higher. Current version: {{.Version}}"
 }
 
-func (m *K8sVersionModule) Validate(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client) (interface{}, error) {
-	sv, err := clientset.Discovery().ServerVersion()
+func (m *K8sVersionModule) Validate(ctx context.Context, clients *kubernetes.K8sClients) (interface{}, error) {
+	sv, err := clients.Clientset.Discovery().ServerVersion()
 	if err != nil {
 		return nil, err
 	}
 
-	ok, detail, err := CheckK8sVersion124Plus(ctx, clientset)
+	ok, detail, err := CheckK8sVersion124Plus(ctx, clients)
 	if err != nil {
 		return nil, err
 	}
@@ -74,8 +73,8 @@ func (m *K8sVersionModule) Validate(ctx context.Context, clientset *kubernetes.C
 	}, nil
 }
 
-func (m *K8sVersionModule) ValidateWithParams(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client, params map[string]interface{}) (interface{}, error) {
-	return m.Validate(ctx, clientset, crClient)
+func (m *K8sVersionModule) ValidateWithParams(ctx context.Context, clients *kubernetes.K8sClients, params map[string]interface{}) (interface{}, error) {
+	return m.Validate(ctx, clients)
 }
 
 // OpenShiftModule validates cluster is not ROSA or managed OpenShift
@@ -113,8 +112,8 @@ func (m *OpenShiftModule) SuggestedResolutionTemplate() string {
 	return "WEKA does not support ROSA or managed OpenShift clusters. Use a standard Kubernetes cluster or self-managed OpenShift."
 }
 
-func (m *OpenShiftModule) Validate(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client) (interface{}, error) {
-	ok, detail, err := CheckNotOpenShiftOrROSA(ctx, clientset)
+func (m *OpenShiftModule) Validate(ctx context.Context, clients *kubernetes.K8sClients) (interface{}, error) {
+	ok, detail, err := CheckNotOpenShiftOrROSA(ctx, clients)
 	if err != nil {
 		return nil, err
 	}
@@ -134,8 +133,8 @@ func (m *OpenShiftModule) Validate(ctx context.Context, clientset *kubernetes.Cl
 	}, nil
 }
 
-func (m *OpenShiftModule) ValidateWithParams(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client, params map[string]interface{}) (interface{}, error) {
-	return m.Validate(ctx, clientset, crClient)
+func (m *OpenShiftModule) ValidateWithParams(ctx context.Context, clients *kubernetes.K8sClients, params map[string]interface{}) (interface{}, error) {
+	return m.Validate(ctx, clients)
 }
 
 // HelmPermissionsModule validates permissions for Helm install
@@ -173,8 +172,8 @@ func (m *HelmPermissionsModule) SuggestedResolutionTemplate() string {
 	return "Ensure the current user/service account has cluster-admin permissions or the required RBAC permissions for WEKA deployment."
 }
 
-func (m *HelmPermissionsModule) Validate(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client) (interface{}, error) {
-	ok, detail, err := CheckHelmClusterPermissions(ctx, clientset)
+func (m *HelmPermissionsModule) Validate(ctx context.Context, clients *kubernetes.K8sClients) (interface{}, error) {
+	ok, detail, err := CheckHelmClusterPermissions(ctx, clients.Clientset)
 	if err != nil {
 		return nil, err
 	}
@@ -194,8 +193,8 @@ func (m *HelmPermissionsModule) Validate(ctx context.Context, clientset *kuberne
 	}, nil
 }
 
-func (m *HelmPermissionsModule) ValidateWithParams(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client, params map[string]interface{}) (interface{}, error) {
-	return m.Validate(ctx, clientset, crClient)
+func (m *HelmPermissionsModule) ValidateWithParams(ctx context.Context, clients *kubernetes.K8sClients, params map[string]interface{}) (interface{}, error) {
+	return m.Validate(ctx, clients)
 }
 
 // CNIModule validates CNI is configured
@@ -233,11 +232,11 @@ func (m *CNIModule) SuggestedResolutionTemplate() string {
 	return "Ensure a CNI plugin (Calico, Flannel, Cilium, etc.) is installed and configured on the cluster."
 }
 
-func (m *CNIModule) Validate(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client) (interface{}, error) {
+func (m *CNIModule) Validate(ctx context.Context, clients *kubernetes.K8sClients) (interface{}, error) {
 	return nil, fmt.Errorf("CNI module requires nodes parameter - use ValidateWithParams")
 }
 
-func (m *CNIModule) ValidateWithParams(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client, params map[string]interface{}) (interface{}, error) {
+func (m *CNIModule) ValidateWithParams(ctx context.Context, clients *kubernetes.K8sClients, params map[string]interface{}) (interface{}, error) {
 	// Extract ready nodes from params - skip NotReady nodes to avoid timeouts
 	var nodes []corev1.Node
 	if readyNodesParam, ok := params["readyNodes"].([]corev1.Node); ok {
@@ -250,7 +249,7 @@ func (m *CNIModule) ValidateWithParams(ctx context.Context, clientset *kubernete
 	}
 
 	// Detect CNI
-	hasKnownCNI, cniName, err := DetectKnownCNIDaemonSet(ctx, clientset)
+	hasKnownCNI, cniName, err := DetectKnownCNIDaemonSet(ctx, clients)
 	if err != nil {
 		return nil, err
 	}
@@ -329,11 +328,11 @@ func (m *CPUManagerConfigModule) SuggestedResolutionTemplate() string {
 	return "Set cpuManagerPolicy to 'static' in kubelet configuration on affected nodes. See: https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/"
 }
 
-func (m *CPUManagerConfigModule) Validate(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client) (interface{}, error) {
+func (m *CPUManagerConfigModule) Validate(ctx context.Context, clients *kubernetes.K8sClients) (interface{}, error) {
 	return nil, fmt.Errorf("CPU manager config module requires nodes parameter - use ValidateWithParams")
 }
 
-func (m *CPUManagerConfigModule) ValidateWithParams(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client, params map[string]interface{}) (interface{}, error) {
+func (m *CPUManagerConfigModule) ValidateWithParams(ctx context.Context, clients *kubernetes.K8sClients, params map[string]interface{}) (interface{}, error) {
 	// Extract ready nodes from params - skip NotReady nodes to avoid timeouts
 	var nodes []corev1.Node
 	if readyNodesParam, ok := params["readyNodes"].([]corev1.Node); ok {
@@ -352,7 +351,7 @@ func (m *CPUManagerConfigModule) ValidateWithParams(ctx context.Context, clients
 	for i := range nodes {
 		n := &nodes[i]
 
-		pol, err := getCPUManagerPolicyViaConfigz(ctx, clientset, n.Name)
+		pol, err := getCPUManagerPolicyViaConfigz(ctx, clients.Clientset, n.Name)
 		if err != nil {
 			unknownNodes = append(unknownNodes, n.Name)
 			continue
@@ -435,11 +434,11 @@ func (m *CPUManagerPolicyModule) SuggestedResolutionTemplate() string {
 	return "Restart kubelet on affected nodes after setting cpuManagerPolicy to 'static'. May require node drain and restart."
 }
 
-func (m *CPUManagerPolicyModule) Validate(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client) (interface{}, error) {
+func (m *CPUManagerPolicyModule) Validate(ctx context.Context, clients *kubernetes.K8sClients) (interface{}, error) {
 	return nil, fmt.Errorf("CPU manager policy module requires nodes parameter - use ValidateWithParams")
 }
 
-func (m *CPUManagerPolicyModule) ValidateWithParams(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client, params map[string]interface{}) (interface{}, error) {
+func (m *CPUManagerPolicyModule) ValidateWithParams(ctx context.Context, clients *kubernetes.K8sClients, params map[string]interface{}) (interface{}, error) {
 	// Extract ready nodes from params - skip NotReady nodes to avoid timeouts
 	var nodes []corev1.Node
 	if readyNodesParam, ok := params["readyNodes"].([]corev1.Node); ok {
@@ -451,7 +450,7 @@ func (m *CPUManagerPolicyModule) ValidateWithParams(ctx context.Context, clients
 		return nil, fmt.Errorf("nodes parameter is required for CPU manager policy check")
 	}
 
-	ok, detail := CheckCPUManagerPolicyStatic(ctx, clientset, nodes)
+	ok, detail := CheckCPUManagerPolicyStatic(ctx, clients.Clientset, nodes)
 
 	status := "success"
 	issue := ""
@@ -524,11 +523,11 @@ func (m *NotReadyNodesModule) SuggestedResolutionTemplate() string {
 	return "Preflight node validation cannot check NotReady nodes. Fix the following nodes and rerun validation to ensure they meet WEKA requirements: {{.NotReadyNodesList}}"
 }
 
-func (m *NotReadyNodesModule) Validate(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client) (interface{}, error) {
+func (m *NotReadyNodesModule) Validate(ctx context.Context, clients *kubernetes.K8sClients) (interface{}, error) {
 	return nil, fmt.Errorf("NotReady nodes module requires nodes parameter - use ValidateWithParams")
 }
 
-func (m *NotReadyNodesModule) ValidateWithParams(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client, params map[string]interface{}) (interface{}, error) {
+func (m *NotReadyNodesModule) ValidateWithParams(ctx context.Context, clients *kubernetes.K8sClients, params map[string]interface{}) (interface{}, error) {
 	// Extract nodes from params
 	var nodes []corev1.Node
 	if nodesParam, ok := params["nodes"].([]corev1.Node); ok {

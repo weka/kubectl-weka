@@ -9,7 +9,6 @@ import (
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sort"
@@ -49,7 +48,6 @@ func GetClusterInstancesOutput(
 	targetCluster string,
 	printerObj printer.ResourcePrinter,
 ) (string, error) {
-	k8s := clients.Clientset
 	crClient := clients.CRClient
 
 	clusters, err := GetWekaClusters(ctx, crClient, namespace, allNamespaces, targetCluster)
@@ -73,7 +71,8 @@ func GetClusterInstancesOutput(
 		}
 		nsToContainers[ns] = contList.Items
 
-		podList, err := k8s.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
+		var podList v1.PodList
+		err := crClient.List(ctx, &podList, client.InNamespace(ns))
 		if err != nil {
 			return "", fmt.Errorf("failed to list pods in namespace %q: %w", ns, err)
 		}

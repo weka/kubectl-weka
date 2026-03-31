@@ -22,9 +22,6 @@ func GeneratePreflightK8sClusterOutput(
 	output.Println("Performing preflight verification for Kubernetes cluster")
 	output.Println("")
 
-	clientset := clients.Clientset
-	crClient := clients.CRClient
-
 	// Resolve nodes once using cached client (used for node-scoped cluster checks: cpu policy, CNI health)
 	output.Printf("🔍 Connecting to cluster and discovering nodes... ")
 	nodes, err := kubernetes.ResolveNodes(ctx, clients, nodeArgs, nodeSelector)
@@ -58,7 +55,7 @@ func GeneratePreflightK8sClusterOutput(
 	output.Println("")
 
 	// Run all cluster checks using the registry
-	results, err := clustercheck.GlobalClusterCheckRegistry.ValidateAll(ctx, clientset, crClient, validationParams)
+	results, err := clustercheck.GlobalClusterCheckRegistry.ValidateAll(ctx, clients, validationParams)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to validate cluster: %w", err)
 		return result

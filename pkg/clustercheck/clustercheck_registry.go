@@ -6,8 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"k8s.io/client-go/kubernetes"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	k8sclients "github.com/weka/kubectl-weka/pkg/kubernetes"
 )
 
 // ClusterCheckRegistry manages cluster check modules
@@ -52,8 +51,7 @@ func (r *ClusterCheckRegistry) GetAllModules() []string {
 // ValidateAll runs all registered modules
 func (r *ClusterCheckRegistry) ValidateAll(
 	ctx context.Context,
-	clientset *kubernetes.Clientset,
-	crClient client.Client,
+	clients *k8sclients.K8sClients,
 	params map[string]interface{},
 ) (map[string]*ClusterCheckResult, error) {
 	moduleNames := r.GetAllModules()
@@ -78,9 +76,9 @@ func (r *ClusterCheckRegistry) ValidateAll(
 		var result interface{}
 		var err error
 		if len(params) > 0 {
-			result, err = module.ValidateWithParams(ctx, clientset, crClient, params)
+			result, err = module.ValidateWithParams(ctx, clients, params)
 		} else {
-			result, err = module.Validate(ctx, clientset, crClient)
+			result, err = module.Validate(ctx, clients)
 		}
 
 		if err != nil {

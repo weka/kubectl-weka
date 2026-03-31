@@ -4,19 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	kubernetes2 "github.com/weka/kubectl-weka/pkg/kubernetes"
+	k8sclients "github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/utils"
+	v3 "k8s.io/api/apps/v1"
 	v2 "k8s.io/api/authorization/v1"
-	v3 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strings"
 	"time"
 )
 
-func CheckK8sVersion124Plus(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
-	sv, err := clientset.Discovery().ServerVersion()
+func CheckK8sVersion124Plus(ctx context.Context, clients *k8sclients.K8sClients) (bool, string, error) {
+	sv, err := clients.Clientset.Discovery().ServerVersion()
 	if err != nil {
 		return false, "", err
 	}
@@ -38,10 +40,10 @@ func CheckK8sVersion124Plus(ctx context.Context, clientset *kubernetes.Clientset
 	return true, "", nil
 }
 
-func CheckNotOpenShiftOrROSA(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
+func CheckNotOpenShiftOrROSA(ctx context.Context, clients *k8sclients.K8sClients) (bool, string, error) {
 	// Detect OpenShift by API groups exposed by the apiserver.
 	// If any are present, it's OpenShift (including ROSA / managed OpenShift).
-	grps, err := clientset.Discovery().ServerGroups()
+	grps, err := clients.Clientset.Discovery().ServerGroups()
 	if err != nil {
 		return false, "", err
 	}
@@ -64,7 +66,7 @@ func CheckNotOpenShiftOrROSA(ctx context.Context, clientset *kubernetes.Clientse
 	// Best-effort ROSA hints:
 	// - "openshift-rosa" or "openshift-addon-operator" namespaces often exist on ROSA,
 	//   but not guaranteed. We'll keep the message helpful either way.
-	rosaHint := detectROSAHint(ctx, clientset)
+	rosaHint := detectROSAHint(ctx, clients)
 
 	if rosaHint != "" {
 		return false, fmt.Sprintf("OpenShift detected (%s); ROSA hint: %s", strings.Join(found, ","), rosaHint), nil
@@ -72,9 +74,10 @@ func CheckNotOpenShiftOrROSA(ctx context.Context, clientset *kubernetes.Clientse
 	return false, fmt.Sprintf("OpenShift detected (%s)", strings.Join(found, ",")), nil
 }
 
-func detectROSAHint(ctx context.Context, clientset *kubernetes.Clientset) string {
+func detectROSAHint(ctx context.Context, clients *k8sclients.K8sClients) string {
 	// This is heuristic: safe and optional.
-	nsList, err := clientset.CoreV1().Namespaces().List(ctx, v1.ListOptions{})
+	var nsList corev1.NamespaceList
+	err := clients.CRClient.List(ctx, &nsList)
 	if err != nil {
 		return ""
 	}
@@ -221,7 +224,7 @@ func getCPUManagerPolicyViaConfigz(ctx context.Context, clientset *kubernetes.Cl
 	return "", fmt.Errorf("failed to get CPU manager policy after %d retries: %w", maxRetries, lastErr)
 }
 
-func getNodeConditionStatus(n *v3.Node, t v3.NodeConditionType) v3.ConditionStatus {
+func getNodeConditionStatus(n *corev1.Node, t corev1.NodeConditionType) corev1.ConditionStatus {
 	for _, c := range n.Status.Conditions {
 		if c.Type == t {
 			return c.Status
@@ -230,17 +233,19 @@ func getNodeConditionStatus(n *v3.Node, t v3.NodeConditionType) v3.ConditionStat
 	return ""
 }
 
-func detectK3s(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
+func detectK3s(ctx context.Context, clients *k8sclients.K8sClients) (bool, string, error) {
 	// K3s detection strategies:
 	// 1. Check for k3s nodes via labels (node.kubernetes.io/instance-type=k3s or provider contains k3s)
 	// 2. Check for k3s-server service in kube-system
 	// 3. Check for k3s components (coredns with k3s labels, etc.)
 
 	// Strategy 1: Check nodes for k3s labels or provider ID
-	nodes, err := clientset.CoreV1().Nodes().List(ctx, v1.ListOptions{})
+	var nodeList corev1.NodeList
+	err := clients.CRClient.List(ctx, &nodeList)
 	if err != nil {
 		return false, "", err
 	}
+	nodes := &nodeList
 
 	for _, node := range nodes.Items {
 		// Check labels
@@ -265,9 +270,10 @@ func detectK3s(ctx context.Context, clientset *kubernetes.Clientset) (bool, stri
 	}
 
 	// Strategy 2: Check for k3s services in kube-system
-	svcs, err := clientset.CoreV1().Services("kube-system").List(ctx, v1.ListOptions{})
+	var svcList corev1.ServiceList
+	err = clients.CRClient.List(ctx, &svcList, client.InNamespace("kube-system"))
 	if err == nil {
-		for _, svc := range svcs.Items {
+		for _, svc := range svcList.Items {
 			if svc.Name == "k3s" || svc.Name == "k3s-server" || strings.HasPrefix(svc.Name, "k3s-") {
 				return true, fmt.Sprintf("detected via service kube-system/%s", svc.Name), nil
 			}
@@ -275,7 +281,7 @@ func detectK3s(ctx context.Context, clientset *kubernetes.Clientset) (bool, stri
 	}
 
 	// Strategy 3: Check for k3s-specific deployments or pods
-	deploys, err := clientset.AppsV1().Deployments("kube-system").List(ctx, v1.ListOptions{})
+	deploys, err := clients.Clientset.AppsV1().Deployments("kube-system").List(ctx, v1.ListOptions{})
 	if err == nil {
 		for _, deploy := range deploys.Items {
 			// K3s typically runs coredns with specific labels
@@ -293,9 +299,9 @@ func detectK3s(ctx context.Context, clientset *kubernetes.Clientset) (bool, stri
 	return false, "", nil
 }
 
-func DetectKnownCNIDaemonSet(ctx context.Context, clientset *kubernetes.Clientset) (bool, string, error) {
+func DetectKnownCNIDaemonSet(ctx context.Context, clients *k8sclients.K8sClients) (bool, string, error) {
 	// Check for K3s built-in CNI (Flannel is integrated into k3s-agent, not a separate daemonset)
-	isK3s, k3sHint, err := detectK3s(ctx, clientset)
+	isK3s, k3sHint, err := detectK3s(ctx, clients)
 	if err != nil {
 		return false, "", err
 	}
@@ -320,7 +326,8 @@ func DetectKnownCNIDaemonSet(ctx context.Context, clientset *kubernetes.Clientse
 
 	// 1) DaemonSet name substring check in likely namespaces
 	for _, ns := range namespaces {
-		dsList, err := clientset.AppsV1().DaemonSets(ns).List(ctx, v1.ListOptions{})
+		var dsList v3.DaemonSetList
+		err := clients.CRClient.List(ctx, &dsList, client.InNamespace(ns))
 		if err != nil {
 			// If namespace doesn't exist, ignore; other errors bubble up
 			if strings.Contains(strings.ToLower(err.Error()), "not found") {
@@ -349,16 +356,17 @@ func DetectKnownCNIDaemonSet(ctx context.Context, clientset *kubernetes.Clientse
 	}
 
 	// 3) Fallback: look for CNI pods (covers cases where CNI isn't a DS, or DS is elsewhere)
-	// Try kube-system + kube-flannel; if flannel exists, it’s usually visible here.
+	// Try kube-system + kube-flannel; if flannel exists, it's usually visible here.
 	for _, ns := range namespaces {
-		pods, err := clientset.CoreV1().Pods(ns).List(ctx, v1.ListOptions{})
+		var podList corev1.PodList
+		err := clients.CRClient.List(ctx, &podList, client.InNamespace(ns))
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "not found") {
 				continue
 			}
 			return false, "", err
 		}
-		for _, p := range pods.Items {
+		for _, p := range podList.Items {
 			name := p.Name
 			for _, sub := range knownSubstrings {
 				if strings.Contains(name, sub) {
@@ -374,7 +382,7 @@ func DetectKnownCNIDaemonSet(ctx context.Context, clientset *kubernetes.Clientse
 	return false, "", nil
 }
 
-func CheckCPUManagerPolicyStatic(ctx context.Context, clientset *kubernetes.Clientset, nodes []v3.Node) (bool, string) {
+func CheckCPUManagerPolicyStatic(ctx context.Context, clientset *kubernetes.Clientset, nodes []corev1.Node) (bool, string) {
 	var notStatic []string
 	var unknown []string
 	var skipped []string
@@ -383,7 +391,7 @@ func CheckCPUManagerPolicyStatic(ctx context.Context, clientset *kubernetes.Clie
 		n := &nodes[i]
 
 		// Skip nodes that are not ready
-		if !kubernetes2.IsNodeReady(*n) {
+		if !k8sclients.IsNodeReady(*n) {
 			skipped = append(skipped, n.Name)
 			continue
 		}

@@ -2,11 +2,9 @@ package clustercheck
 
 import (
 	"context"
+	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"strings"
 	"text/template"
-
-	"k8s.io/client-go/kubernetes"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // ClusterCheckModule defines the interface for cluster validation modules
@@ -34,10 +32,10 @@ type ClusterCheckModule interface {
 
 	// Validate performs the cluster validation check
 	// Returns a map with Status, Detail, Issue, and other relevant fields
-	Validate(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client) (interface{}, error)
+	Validate(ctx context.Context, clients *kubernetes.K8sClients) (interface{}, error)
 
 	// ValidateWithParams performs validation with additional parameters
-	ValidateWithParams(ctx context.Context, clientset *kubernetes.Clientset, crClient client.Client, params map[string]interface{}) (interface{}, error)
+	ValidateWithParams(ctx context.Context, clients *kubernetes.K8sClients, params map[string]interface{}) (interface{}, error)
 }
 
 // ClusterCheckResult holds the result of a cluster check validation
