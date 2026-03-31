@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## Version 0.1.0 (2026-03-31)
 
 ### Features
 
@@ -98,8 +98,8 @@
   * Version information automatically extracted from git tags and embedded via ldflags
 
 * **Intelligent Versioning** – Version string adapts to git state:
-  * Release version (tag on HEAD): uses tag as-is (e.g., `v1.0.0`)
-  * Development version (commits after tag): includes commit count and hash (e.g., `v1.0.0-5-abc123d`)
+  * Release version (tag on HEAD): uses tag as-is (e.g., `v0.1.0`)
+  * Development version (commits after tag): includes commit count and hash (e.g., `v0.1.0-5-abc123d`)
   * Dirty detection: appends `-dirty` flag if working directory has uncommitted changes
   * Preserves 'v' prefix for consistency with kubectl utilities
 
@@ -133,8 +133,42 @@
   * Filters for unhealthy pods (>1 restart in 5 minutes)
   * Wide view mode shows detailed restart timing
 
-## 1.0.0 (2026-02-02)
+* **Preflight Checks** – Validation commands for cluster and node readiness:
+  * `kubectl weka preflight cluster` – Validate Kubernetes cluster readiness for WEKA deployment
+  * `kubectl weka preflight nodes` – Check individual node readiness and hardware
+  * Kernel validation, CPU/memory availability checks
+  * Storage and network configuration validation
 
+* **Planning Commands** – Resource requirement and deployment planning:
+  * `kubectl weka plan cluster` – Calculate resource requirements for cluster deployment
+  * `kubectl weka plan client` – Calculate resource requirements for client deployment
+  * `kubectl weka plan converged` – Plan combined cluster and client deployment
+  * Network and placement analysis, mutual compatibility checks, and detailed output
+
+* **Get Commands** – Comprehensive resource listing with flexible output:
+  * `kubectl weka get cluster-instances` – List WEKA clusters
+  * `kubectl weka get client-instances` – List WEKA clients
+  * `kubectl weka get nodes` – List Kubernetes nodes with WEKA-specific details
+  * `kubectl weka get policies` – List WEKA policies
+  * Multiple output formats: table, wide, JSON, YAML, custom columns
+
+* **Support Bundle** – Comprehensive diagnostic collection:
+  * `kubectl weka support-bundle operator` – Operator diagnostics
+  * `kubectl weka support-bundle cluster` – Cluster component logs and diagnostics
+  * `kubectl weka support-bundle client` – Client component logs and diagnostics
+  * `kubectl weka support-bundle csi` – CSI driver diagnostics
+  * `kubectl weka support-bundle k8s` – Kubernetes configuration validation
+  * `kubectl weka support-bundle all` – Complete diagnostic collection
+  * Organized archives with timestamped output
+  * Host checks integration for hardware information
+  * Graceful error handling to maximize collected data
+  * Detailed logging of support bundle execution and results
+  * Validation of collected data with error reporting in console and logs
+  * Comprehensive documentation for support bundle usage and contents
+  * Extensible architecture for adding new support bundle types and data collectors in the future
+  * Optional collection of sensitive data with user confirmation and secure handling. Usually not required for standard support bundles, but available for advanced diagnostics when needed.
+
+## Prototype (2026-02-02)
 
 ### Features
 
@@ -148,4 +182,3 @@
 * rudimentary verify node ([25e1122](https://github.com/weka/kubectl-weka/commit/25e112271e39301bc70f65fc1bc219d71f34c52f))
 * rudimentary verify node ([2550a9c](https://github.com/weka/kubectl-weka/commit/2550a9c7542dfe8d52383d0abe56d798549f0d29))
 
-## Changelog
