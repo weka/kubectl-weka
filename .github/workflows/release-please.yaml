@@ -16,3 +16,4 @@ jobs:
         with:
           release-type: go
           package-name: kubectl-weka
+          skip-github-release: true
