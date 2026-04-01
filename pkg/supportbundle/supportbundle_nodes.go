@@ -7,14 +7,14 @@ import (
 	"github.com/weka/kubectl-weka/pkg/getters"
 	"github.com/weka/kubectl-weka/pkg/hostcheck"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
+	"github.com/weka/kubectl-weka/pkg/logging"
 	"github.com/weka/kubectl-weka/pkg/printer"
-	"log/slog"
+	yamlv3 "gopkg.in/yaml.v3"
 	"path/filepath"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
 )
 
 // NodesDescriptionCollector collects descriptions of all Kubernetes nodes
@@ -27,7 +27,7 @@ func (c *NodesDescriptionCollector) Name() string {
 }
 
 func (c *NodesDescriptionCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	logger.Info("Will collect", "items", "node descriptions for all nodes")
 }
@@ -36,7 +36,7 @@ func (c *NodesDescriptionCollector) Collect(ctx context.Context) CollectorResult
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	clients := getClients(ctx)
 	bundlePath := getBundlePath(ctx)
 
@@ -72,12 +72,12 @@ func (c *NodesDescriptionCollector) Collect(ctx context.Context) CollectorResult
 	}
 
 	// Collect descriptions in parallel
-	descFiles, descWarnings := collectNodeDescriptionsParallel(ctx, &nodeList.Items, bundlePath, logger)
+	descFiles, descWarnings := collectNodeDescriptionsParallel(ctx, &nodeList.Items, bundlePath)
 	filesCreated = append(filesCreated, descFiles...)
 	warnings = append(warnings, descWarnings...)
 
 	// Collect host checks and dump as JSON
-	hostCheckFiles, hostCheckWarnings := c.collectHostChecks(ctx, &nodeList.Items, bundlePath, logger)
+	hostCheckFiles, hostCheckWarnings := c.collectHostChecks(ctx, &nodeList.Items, bundlePath)
 	filesCreated = append(filesCreated, hostCheckFiles...)
 	warnings = append(warnings, hostCheckWarnings...)
 
@@ -100,7 +100,7 @@ func (c *NodesDescriptionCollector) Collect(ctx context.Context) CollectorResult
 
 // collectNodesTable collects the output of get nodes command
 func (c *NodesDescriptionCollector) collectNodesTable(ctx context.Context) (string, string) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	bundlePath := getBundlePath(ctx)
 	clients := getClients(ctx)
 
@@ -130,7 +130,8 @@ func (c *NodesDescriptionCollector) collectNodesTable(ctx context.Context) (stri
 
 // collectHostChecks runs host checks on all nodes and dumps results as JSON
 // Uses the HostCheckModuleRegistry with caching to avoid redundant host check execution
-func (c *NodesDescriptionCollector) collectHostChecks(ctx context.Context, nodes *[]corev1.Node, bundlePath string, logger *slog.Logger) ([]string, []string) {
+func (c *NodesDescriptionCollector) collectHostChecks(ctx context.Context, nodes *[]corev1.Node, bundlePath string) ([]string, []string) {
+	logger := logging.GetLogger(ctx)
 	if len(*nodes) == 0 {
 		return []string{}, []string{}
 	}
@@ -184,7 +185,7 @@ func (c *NodesDescriptionCollector) collectHostChecks(ctx context.Context, nodes
 }
 
 func (c *NodesDescriptionCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 
 	switch result.Status {
 	case StatusSuccess:
@@ -203,7 +204,8 @@ func (c *NodesDescriptionCollector) Finish(ctx context.Context, result Collector
 }
 
 // collectNodeDescriptionsParallel collects descriptions from all nodes in parallel
-func collectNodeDescriptionsParallel(ctx context.Context, nodes *[]corev1.Node, bundlePath string, logger *slog.Logger) ([]string, []string) {
+func collectNodeDescriptionsParallel(ctx context.Context, nodes *[]corev1.Node, bundlePath string) ([]string, []string) {
+	logger := logging.GetLogger(ctx)
 	if len(*nodes) == 0 {
 		return []string{}, []string{}
 	}
@@ -222,7 +224,7 @@ func collectNodeDescriptionsParallel(ctx context.Context, nodes *[]corev1.Node, 
 			semaphore <- struct{}{}        // acquire
 			defer func() { <-semaphore }() // release
 
-			result := collectSingleNodeDescription(n, bundlePath, logger)
+			result := collectSingleNodeDescription(n, bundlePath)
 			resultsChan <- result
 		}(node)
 	}
@@ -257,13 +259,13 @@ type nodeDescriptionResult struct {
 }
 
 // collectSingleNodeDescription collects the description for a single node
-func collectSingleNodeDescription(node corev1.Node, bundlePath string, logger *slog.Logger) nodeDescriptionResult {
+func collectSingleNodeDescription(node corev1.Node, bundlePath string) nodeDescriptionResult {
 	result := nodeDescriptionResult{
 		NodeName: node.Name,
 	}
 
 	// Convert node to YAML for description
-	yamlData, err := yaml.Marshal(&node)
+	yamlData, err := yamlv3.Marshal(&node)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to marshal node to YAML: %w", err)
 		return result

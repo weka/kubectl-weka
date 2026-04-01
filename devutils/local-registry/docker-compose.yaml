@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  registry:
+    image: registry:2
+    container_name: registry
+    ports:
+      - "5000:5000"
+    networks:
+      - registry-net
+
+  registry-ui:
+    image: joxit/docker-registry-ui:latest
+    container_name: registry-ui
+    ports:
+      - "8080:80"
+    environment:
+      SINGLE_REGISTRY: "true"
+      NGINX_PROXY_PASS_URL: "http://registry:5000"
+      DELETE_IMAGES: "true"
+      SHOW_CONTENT_DIGEST: "true"
+      NGINX_RESOLVER: "127.0.0.11"
+    depends_on:
+      - registry
+    networks:
+      - registry-net
+
+
+networks:
+  registry-net:
+    driver: bridge

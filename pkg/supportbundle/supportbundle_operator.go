@@ -3,6 +3,7 @@ package supportbundle
 import (
 	"context"
 	"fmt"
+	"github.com/weka/kubectl-weka/pkg/logging"
 	corev1 "k8s.io/api/core/v1"
 	"path/filepath"
 
@@ -19,13 +20,13 @@ func (c *OperatorLogsCollector) Name() string {
 }
 
 func (c *OperatorLogsCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	logger.Info("Will collect", "items", "operator logs, pod descriptions")
 }
 
 func (c *OperatorLogsCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	switch result.Status {
 	case StatusSuccess:
 		logger.Info("Collector finished", "name", c.Name(), "status", "success", "files", len(result.FilesCreated))
@@ -40,7 +41,7 @@ func (c *OperatorLogsCollector) Collect(ctx context.Context) CollectorResult {
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 
 	// Collect operator controller manager logs
 	operatorNS := "weka-operator-system"
@@ -148,13 +149,13 @@ func (c *OperatorNodeAgentLogsCollector) Name() string {
 }
 
 func (c *OperatorNodeAgentLogsCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	logger.Info("Will collect", "items", "node-agent pod logs")
 }
 
 func (c *OperatorNodeAgentLogsCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	switch result.Status {
 	case StatusSuccess:
 		logger.Info("Collector finished", "name", c.Name(), "status", "success", "files", len(result.FilesCreated))
@@ -169,7 +170,7 @@ func (c *OperatorNodeAgentLogsCollector) Collect(ctx context.Context) CollectorR
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 
 	operatorNS := "weka-operator-system"
 	ns := getNamespace(ctx)
@@ -226,13 +227,13 @@ func (c *OperatorResourcesCollector) Name() string {
 }
 
 func (c *OperatorResourcesCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	logger.Info("Will collect", "items", "WekaPolicy resources, jobs")
 }
 
 func (c *OperatorResourcesCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	switch result.Status {
 	case StatusSuccess:
 		logger.Info("Collector finished", "name", c.Name(), "status", "success", "files", len(result.FilesCreated))
@@ -247,7 +248,7 @@ func (c *OperatorResourcesCollector) Collect(ctx context.Context) CollectorResul
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 
 	var policies wekaapi.WekaPolicyList
 	listOpts := []crclient.ListOption{}

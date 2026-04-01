@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/getters"
+	"github.com/weka/kubectl-weka/pkg/logging"
 	"github.com/weka/kubectl-weka/pkg/printer"
 	"os"
 	"path/filepath"
@@ -17,14 +18,14 @@ func (c *CSIResourcesCollector) Name() string {
 }
 
 func (c *CSIResourcesCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	logger.Info("Will collect",
 		"items", "CSI drivers list, CSI instances (pods), unhealthy instances (wide view)")
 }
 
 func (c *CSIResourcesCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	switch result.Status {
 	case StatusSuccess:
 		logger.Info("Collector finished", "name", c.Name(), "status", "success", "files_created", len(result.FilesCreated))
@@ -36,7 +37,7 @@ func (c *CSIResourcesCollector) Finish(ctx context.Context, result CollectorResu
 }
 
 func (c *CSIResourcesCollector) Collect(ctx context.Context) CollectorResult {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	clients := getClients(ctx)
 	bundlePath := getBundlePath(ctx)
 	var filesCreated []string

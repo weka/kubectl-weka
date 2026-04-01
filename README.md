@@ -33,28 +33,75 @@ The plugin is designed to feel **kubectl-native** and integrates cleanly with Ku
 
 ## Installation
 
-### Via Krew (recommended)
+### Via Krew (Recommended)
+
+**Krew** is the official kubectl plugin manager. It's the easiest and most reliable way to install `kubectl-weka`.
+
+#### 1. Install Krew (if not already installed)
+
+**macOS:**
+```bash
+brew install krew
+```
+
+**Linux:**
+```bash
+(
+  set -x; cd "$(mktemp -d)" &&
+  OS="$(uname | tr '[:upper:]' '[:lower:]')" &&
+  ARCH="$(uname -m | sed -e 's/x86_64/amd64/' -e 's/arm.*$/arm64/')" &&
+  KREW="krew-${OS}_${ARCH}" &&
+  curl -fsSLO "https://github.com/kubernetes-sigs/krew/releases/latest/download/${KREW}.tar.gz" &&
+  tar zxf "${KREW}.tar.gz" &&
+  ./"${KREW}" install krew
+)
+```
+
+**Windows (PowerShell):**
+```powershell
+choco install krew
+```
+
+#### 2. Install kubectl-weka
+
+After Krew is installed, run:
 
 ```bash
 kubectl krew install weka
 ```
+
 After installation, the plugin is available as:
 
 ```bash
 kubectl weka
 ```
 
-## Manual installation
-
-Download a prebuilt binary from the [GitHub releases](https://github.com/weka/kubectl-weka/releases)
-page and place it in your $PATH as kubectl-weka.
-
-### Example:
+**Verify Installation:**
 ```bash
-curl -LO https://github.com/weka/kubectl-weka/releases/download/vX.Y.Z/kubectl-weka_X.Y.Z_linux_amd64
-chmod +x kubectl-weka_X.Y.Z_linux_amd64
-mv kubectl-weka_X.Y.Z_linux_amd64 /usr/local/bin/kubectl-weka
+kubectl weka version
 ```
+
+**Upgrade Installation:**
+```bash
+kubectl krew upgrade weka
+```
+
+### Manual Installation
+
+For offline environments or when Krew is unavailable, download a prebuilt binary from the [GitHub releases](https://github.com/weka/kubectl-weka/releases) page.
+
+**Example (Linux amd64):**
+```bash
+VERSION="1.0.0"  # Replace with desired version
+curl -LO https://github.com/weka/kubectl-weka/releases/download/v${VERSION}/kubectl-weka-v${VERSION}-linux-amd64
+chmod +x kubectl-weka-v${VERSION}-linux-amd64
+sudo mv kubectl-weka-v${VERSION}-linux-amd64 /usr/local/bin/kubectl-weka
+```
+
+**Available Platforms:**
+- Linux: `amd64`, `arm64`
+- macOS: `amd64`, `arm64` (Apple Silicon)
+- Windows: `amd64`, `arm64`
 
 ### Building from Source
 
@@ -148,20 +195,21 @@ kubectl weka <command> [subcommand] [flags]
 
 ### Command Categories
 
-| Command | Purpose | Key Subcommands |
-|---------|---------|-----------------|
-| `version` | Display version information | None |
-| `preflight` | Pre-deployment validation | `cluster`, `nodes` |
-| `get` | Inspect WEKA resources | `cluster-instances`, `client-instances`, `nodes`, `policies`, `csi-drivers`, `csi-instances` |
-| `plan` | Deployment planning | `cluster`, `client`, `converged` |
-| `logs` | Stream logs | `operator` |
+| Command          | Purpose | Key Subcommands |
+|------------------|---------|-----------------|
+| `version`        | Display version information | None |
+| `preflight`      | Pre-deployment validation | `cluster`, `nodes` |
+| `get`            | Inspect WEKA resources | `cluster-instances`, `client-instances`, `nodes`, `policies`, `csi-drivers`, `csi-instances` |
+| `plan`           | Deployment planning | `cluster`, `client`, `converged` |
+| `logs`           | Stream logs | `operator`, `wekacluster`, `wekaclient`, `wekacontainer` |
 | `support-bundle` | Diagnostic data collection | `operator`, `cluster`, `client`, `csi`, `k8s`, `all` |
+| `air-gapped`     | Air-gapped deployment | `download`, `upload`, `help` |
 
 Get help for any command:
 ```bash
 kubectl weka help
 kubectl weka help preflight
-kubectl weka help support-bundle
+kubectl weka help air-gapped
 ```
 
 ---
@@ -1905,6 +1953,147 @@ The repository uses [release-please](https://github.com/googleapis/release-pleas
    - Version bump (major/minor/patch)
 3. When merged, a Git tag is created automatically
 4. Release build workflow is triggered
+
+---
+
+## Air-Gapped Deployment Commands
+
+Air-gapped deployment commands enable downloading and deploying WEKA in isolated (air-gapped) Kubernetes environments where internet access is not available.
+
+### `airgapped download`
+
+**Purpose:** Downloads WEKA images and Helm charts to create an offline deployment bundle.
+
+**Usage:**
+```bash
+kubectl weka airgapped download [flags]
+```
+
+**Flags:**
+- `--weka-version <version>` – WEKA version to download (e.g., `5.3.0`)
+- `--operator-chart-version <version>` – Operator Helm chart version (e.g., `1.10.0`)
+- `--csi-chart-version <version>` – CSI Helm chart version (e.g., `2.8.2`)
+- `--architectures <list>` – Comma-separated architectures (e.g., `amd64,arm64`)
+- `--bundle-file <path>` – Output bundle path (default: `weka-bundle.tar.gz`)
+- `--username <user>` – Registry username (optional, uses .docker/config.json if not provided)
+- `--password <pass>` – Registry password (optional, uses .docker/config.json if not provided)
+
+**Features:**
+- Multi-architecture support (amd64, arm64, etc.)
+- Parallel downloads for faster operation
+- SHA256 signature generation for bundle integrity
+- Comprehensive manifest with component tracking
+- Progress tracking during download
+
+**Examples:**
+```bash
+# Download with defaults
+kubectl weka airgapped download \
+    --weka-version 5.3.0 \
+    --operator-chart-version 1.10.0 \
+    --csi-chart-version 2.8.2
+
+# Download multiple architectures
+kubectl weka airgapped download \
+    --weka-version 5.3.0 \
+    --operator-chart-version 1.10.0 \
+    --csi-chart-version 2.8.2 \
+    --architectures amd64,arm64 \
+    --bundle-file weka-airgapped.tar.gz
+
+# Download with custom credentials
+kubectl weka airgapped download \
+    --weka-version 5.3.0 \
+    --operator-chart-version 1.10.0 \
+    --csi-chart-version 2.8.2 \
+    --username myuser \
+    --password mypass
+```
+
+**Output:**
+- `weka-{version}-operator-{operator-version}-offline-bundle.tar.gz` – Bundle file with all images and charts
+- `weka-{version}-operator-{operator-version}-offline-bundle.tar.gz.sha256` – SHA256 signature for verification
+
+---
+
+### `airgapped upload`
+
+**Purpose:** Uploads components from a bundle to an air-gapped registry and updates Helm charts with new image URLs.
+
+**Usage:**
+```bash
+kubectl weka airgapped upload [flags]
+```
+
+**Flags:**
+- `--bundle-file <path>` – Path to bundle file (required)
+- `--registry-url <url>` – Target registry URL (e.g., `registry.internal.com:5000`)
+- `--username <user>` – Registry username (optional, uses .docker/config.json if not provided)
+- `--password <pass>` – Registry password (optional, uses .docker/config.json if not provided)
+- `--architecture <arch>` – Optional: upload only specific architecture (e.g., `amd64`)
+
+**Features:**
+- Bundle validation with SHA256 verification
+- Image upload with progress tracking
+- Helm chart update with new registry references
+- Override values file generation for easy deployment
+- Updated chart archives for direct installation
+
+**Examples:**
+```bash
+# Upload to air-gapped registry
+kubectl weka airgapped upload \
+    --bundle-file weka-airgapped.tar.gz \
+    --registry-url registry.internal.com:5000
+
+# Upload with credentials
+kubectl weka airgapped upload \
+    --bundle-file weka-airgapped.tar.gz \
+    --registry-url registry.internal.com:5000 \
+    --username myuser \
+    --password mypass
+
+# Upload specific architecture only
+kubectl weka airgapped upload \
+    --bundle-file weka-airgapped.tar.gz \
+    --registry-url registry.internal.com:5000 \
+    --architecture amd64
+```
+
+**Output Files:**
+- `charts-updated/` – Directory with updated Helm charts
+  - `weka-operator-{version}-air-gapped.tgz` – Updated operator chart
+  - `csi-wekafsplugin-{version}-air-gapped.tgz` – Updated CSI chart
+- `values-overrides/` – Directory with override values files
+  - `values-operator.yaml` – Override values for operator
+  - `values-csi.yaml` – Override values for CSI
+
+**Deployment After Upload:**
+
+Using updated charts:
+```bash
+helm install weka-operator charts-updated/weka-operator-*.tgz
+helm install csi-weka charts-updated/csi-wekafsplugin-*.tgz
+```
+
+Using original charts with overrides:
+```bash
+helm install weka-operator oci://quay.io/weka.io/helm/weka-operator \
+  -f values-overrides/values-operator.yaml
+helm install csi-weka oci://quay.io/weka.io/helm/csi-wekafsplugin \
+  -f values-overrides/values-csi.yaml
+```
+
+---
+
+### `airgapped help`
+
+**Purpose:** Displays detailed help information for air-gapped commands.
+
+**Usage:**
+```bash
+kubectl weka airgapped help
+```
 
 ---
 

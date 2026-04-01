@@ -3,6 +3,7 @@ package supportbundle
 import (
 	"context"
 	"fmt"
+	"github.com/weka/kubectl-weka/pkg/logging"
 	"github.com/weka/kubectl-weka/pkg/preflight"
 	"path/filepath"
 )
@@ -17,13 +18,13 @@ func (c *K8sPreflightCollector) Name() string {
 }
 
 func (c *K8sPreflightCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	logger.Info("Will collect", "items", "cluster and node preflight checks")
 }
 
 func (c *K8sPreflightCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	switch result.Status {
 	case StatusSuccess:
 		logger.Info("Collector finished", "name", c.Name(), "status", "success", "files", len(result.FilesCreated))
@@ -44,7 +45,7 @@ func (c *K8sPreflightCollector) Collect(ctx context.Context) CollectorResult {
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	// Run cluster-level preflight checks
 	logger.Debug("✓ Running cluster-level preflight checks...")
 	clusterResults, err := c.runClusterPreflightChecks(ctx)

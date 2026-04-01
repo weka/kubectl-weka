@@ -106,7 +106,7 @@ func checkHelmClusterPermissions(ctx context.Context, clientset *kubernetes2.Cli
 		return true, "", nil
 	}
 
-	return false, fmt.Sprintf("missing permissions: %s", utils.JoinAndTruncate(missing, 5)), nil
+	return false, fmt.Sprintf("missing permissions: %s", utils.JoinWithTruncation(missing, 5)), nil
 }
 
 func ssarAllowed(ctx context.Context, clientset *kubernetes2.Clientset, verb, group, resource, namespace, name string) (bool, error) {

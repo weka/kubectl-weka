@@ -17,8 +17,8 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 
 | Document | Purpose | When to Use |
 |----------|---------|-------------|
-| **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** | Extension and development guide | Adding new features or checks |
-| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Contribution guidelines | How to contribute (UPDATED) |
+| **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** | Extension and development guide | Adding new features, packages, or commands |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Contribution guidelines | How to contribute to the project |
 
 ### Legal
 
@@ -80,7 +80,8 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 #### Stream arbitrary WekaContainer logs
 → See [README.md - logs wekacontainer](README.md#logs-wekacontainer)
 
-#### Troubleshoot issues
+#### Deploy WEKA in air-gapped environment
+→ See [DEVELOPER_GUIDE.md - Air-Gapped Deployment](DEVELOPER_GUIDE.md#air-gapped-deployment)
 → See [README.md - Troubleshooting](README.md#troubleshooting)
 
 #### Add a new preflight check
@@ -95,7 +96,20 @@ Welcome to the `kubectl-weka` documentation! This index will help you find the r
 #### Understand the architecture
 → See [DEVELOPER_GUIDE.md - Architecture Overview](DEVELOPER_GUIDE.md#architecture-overview)
 
-#### Contribute to the project
+#### Learn about Docker image handling
+→ See [DEVELOPER_GUIDE.md - Docker Package](DEVELOPER_GUIDE.md#docker-package)
+
+#### Understand progress tracking
+→ See [DEVELOPER_GUIDE.md - Progress Package](DEVELOPER_GUIDE.md#progress-package)
+
+#### Work with tar.gz operations
+→ See [DEVELOPER_GUIDE.md - Targzutils Package](DEVELOPER_GUIDE.md#targzutils-package)
+
+#### Integrate with Helm charts
+→ See [DEVELOPER_GUIDE.md - Helm Package](DEVELOPER_GUIDE.md#helm-package)
+
+#### Build air-gapped deployment features
+→ See [DEVELOPER_GUIDE.md - Air-Gapped Deployment](DEVELOPER_GUIDE.md#air-gapped-deployment)
 → See [README.md - Contributing](README.md#contributing)
 
 ---
@@ -133,39 +147,52 @@ A condensed reference for:
 ---
 
 ### DEVELOPER_GUIDE.md (Extension Guide)
-**~850+ lines** | Developer documentation
+**~1000+ lines** | Developer documentation
 
 Comprehensive guide for extending kubectl-weka:
-- Architecture overview
+- Building and versioning
+- Architecture overview with new packages
+- Docker package for image registry operations
+- Logging package for structured logging
+- Progress package for real-time progress display
+- Targzutils package for tar.gz operations
+- Helm package for chart manipulation
+- Air-gapped deployment subsystem
+- ResourcePrinter system for output formatting
 - Adding preflight checks (node & cluster)
 - Adding plan validations
 - Adding support bundle collectors
 - Adding new commands
 - Testing guidelines
+- Inline function documentation standards
 - Code organization best practices
-- Common patterns and debugging tips
+- Debugging tips
 
 **Use this** when developing new features or extending functionality.
 
 ---
 
-### DOCUMENTATION_SUMMARY.md (Update Log)
-**~300 lines** | Documentation change tracking
+### KNOWN_ISSUES.md (Current Issues)
 
-Summary of documentation updates including:
-- Files modified
-- Key improvements
-- Coverage statistics
-- Recommendations for future updates
+Known limitations and issues with kubectl-weka:
+- Log streaming time-window buffering
+- Air-gapped deployment limitations (authentication, bundle size, image format)
+- Progress tracking in pipes/redirects
+- Docker image handling (multi-layer, token expiry)
+- Helm chart updates (nested values, custom paths)
+- Kubernetes compatibility (RBAC, network policies)
+- Unsupported configurations
+- Troubleshooting guide
 
-**Use this** to understand what documentation changed and why.
+**Use this** to understand current limitations and find solutions.
 
 ---
 
 ### CHANGELOG.md (Release History)
-Automatically generated release notes using Release Please.
 
-**Use this** to see what's new in each version.
+Contains all feature additions, improvements, and changes per version.
+
+**Use this** to see what's new in each version and track changes.
 
 ---
 
@@ -293,7 +320,7 @@ All documentation follows these principles:
 | Metric | Count |
 |--------|-------|
 | Total markdown files | 8 |
-| User documentation files | 3 |
+| User documentation files | 4 |
 | Developer documentation files | 2 |
 | Total documented commands | 15+ |
 | Code examples | 50+ |

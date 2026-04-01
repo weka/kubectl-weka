@@ -1102,20 +1102,240 @@ logsChan := make(chan LogLine)  // Unbuffered, forces synchronization
 
 ---
 
+## Air-Gapped Deployment Subsystem (pkg/airgapped/)
+
+**Purpose**: Enable deployment of WEKA components in air-gapped (isolated) Kubernetes environments
+
+This subsystem handles the complete workflow for downloading, bundling, and deploying WEKA components offline.
+
+### Key Components
+
+**Download Phase** (`download.go`):
+- Downloads Docker images from internet-connected environment
+- Extracts images from Helm charts using Helm SDK
+- Packages images + charts into single tar.gz bundle with manifest
+- Creates SHA256 signatures for integrity verification
+
+**Upload Phase** (`upload.go`):
+- Extracts and validates bundle from download
+- Uploads images to target air-gapped registry
+- Updates Helm charts with new image URLs
+- Generates override values files for deployment
+
+**Helm Integration** (`helm.go`):
+- Loads Helm charts (local, HTTP, OCI sources)
+- Extracts image references from chart values
+- Creates updated chart archives with new image URLs
+- Supports both Operator (OCI) and CSI (GitHub) charts
+
+**YAML Utilities** (`yamlutils.go`):
+- `getNestedValue()` - Extract values using dot notation (e.g., "csi.image")
+- `setNestedValue()` - Set values in nested maps preserving structure
+- Comment-preserving YAML merging for value updates
+
+### Data Flow
+
+```
+Download Flow:
+internet → DownloadDockerImage() → bundle (images + manifest) → SHA256 signature
+
+Upload Flow:
+bundle → extractAndValidateBundle() → upload images → updateHelmCharts() 
+→ charts-updated/ + values-overrides/
+```
+
+### Key Functions
+
+**Download Functions**:
+```go
+func Download(ctx context.Context, opts DownloadOptions) error
+    // Main orchestration, downloads all components
+
+func downloadWekaComponent(ctx, version, archs, auth) (*ComponentManifest, error)
+    // Downloads WEKA images from quay.io/weka.io/weka-in-container
+
+func downloadOperatorImages(ctx, chart, architectures, auth) (*ComponentManifest, error)
+    // Extracts and downloads all images from Operator Helm chart
+
+func downloadCSIImages(ctx, chart, architectures, auth) (*ComponentManifest, error)
+    // Extracts and downloads all images from CSI Helm chart
+```
+
+**Upload Functions**:
+```go
+func Upload(ctx context.Context, opts UploadOptions) error
+    // Main orchestration: extract → upload → update charts
+
+func extractAndValidateBundle(ctx, bundlePath) (*DownloadManifest, string, error)
+    // Validates bundle integrity, extracts contents, updates paths
+
+func updateHelmCharts(ctx, manifest, registryURL, bundleFile) error
+    // Orchestrates helm chart updates after image upload
+
+func updateOperatorChart(ctx, chartPath, registryURL, imageMapping, outDirs) error
+    // Updates Operator chart with new image URLs
+
+func updateCSIChart(ctx, chartPath, registryURL, imageMapping, outDirs) error
+    // Updates CSI chart with new image URLs
+```
+
+**Chart Update Functions**:
+```go
+func updateOperatorChartValues(values, imageMapping) map[string]interface{}
+    // Updates operator image paths based on mapping
+    // Handles: simple paths, nested paths, repository+tag separation
+
+func updateCSIChartValues(values, imageMapping) map[string]interface{}
+    // Updates CSI sidecar and driver image paths
+
+func setNestedValue(values, path, value)
+    // Sets values in nested maps using "key.subkey" notation
+    // Creates intermediate maps as needed
+
+func createUpdatedChartArchive(ctx, chart, updatedValues, outputPath) error
+    // Creates new .tgz with updated values.yaml
+
+func createOverrideValuesFile(values, outputPath) error
+    // Creates values-*.yaml for helm install -f
+```
+
+**Helm Utilities**:
+```go
+func loadChartWithHelm(chartRef string) (*chart.Chart, error)
+    // Loads chart from local dir, .tgz, HTTP, or OCI
+
+func extractVersionFromHelmChart(chart *chart.Chart) (string, error)
+    // Gets appVersion or chart version
+
+func constructHelmChartURL(baseURL, chartPattern, version) string
+    // Builds proper URLs for OCI, GitHub, and standard repos
+```
+
+### Supported Image Sources
+
+**Multi-Architecture**:
+- Downloads images for multiple architectures (amd64, arm64)
+- Handles multi-arch manifest indexes correctly
+- Uploads individual platform images before creating index
+
+**Image Registries**:
+- quay.io (with authentication)
+- docker.io (with authentication)
+- Private registries
+- Localhost registries with custom ports
+
+**Registry Reference Rewriting**:
+- Extracts image name (after last `/`)
+- Appends to new registry URL
+- Preserves tags, replaces digest-based refs with `:latest`
+
+### Bundle Structure
+
+```
+bundle.tar.gz
+├── manifest.json              # Metadata about contents
+├── operator-{version}.tgz     # Helm chart archive
+├── csi-{version}.tgz          # Helm chart archive
+├── images/
+│   ├── weka-{arch}.tar        # WEKA component image
+│   ├── operator-{arch}.tar    # Operator image
+│   ├── csi-{arch}.tar         # CSI driver image
+│   └── ...                    # Other sidecar images
+├── manifest.json.sha256       # Bundle integrity signature
+└── images/*.tar.sha256        # Individual image signatures
+```
+
+### Manifest Format
+
+```json
+{
+  "version": "1",
+  "createdAt": "2026-04-03T10:30:00Z",
+  "components": {
+    "weka": {
+      "name": "weka",
+      "version": "5.3.0",
+      "image": [{
+        "filename": "images/weka-amd64.tar",
+        "sha256": "...",
+        "architecture": "amd64",
+        "originalReference": "quay.io/weka.io/weka-in-container:5.3.0"
+      }],
+      "size": 1234567890
+    }
+  },
+  "helmCharts": {
+    "operator": {
+      "name": "weka-operator",
+      "version": "1.10.0",
+      "filename": "weka-operator-1.10.0.tgz",
+      "sha256": "...",
+      "size": 5678901
+    }
+  }
+}
+```
+
+### Output After Upload
+
+After successful upload, three directories are created in same location as bundle:
+
+1. **charts-updated/** - Updated Helm charts with embedded image URLs
+   - `weka-operator-{version}-updated.tgz`
+   - `csi-wekafsplugin-{version}-updated.tgz`
+
+2. **values-overrides/** - Quick deployment values files
+   - `values-operator.yaml` - Only the changed image URLs
+   - `values-csi.yaml` - Only the changed image URLs
+
+3. **Usage**:
+```bash
+# Option 1: Use full updated chart
+helm install weka-operator charts-updated/weka-operator-*-updated.tgz
+
+# Option 2: Use original chart with override values
+helm install weka-operator oci://quay.io/weka.io/helm/weka-operator \
+  -f values-overrides/values-operator.yaml
+```
+
+### Error Handling
+
+- Non-fatal errors during download: logs warning, continues with available data
+- Bundle validation failures: stops immediately (data integrity)
+- Chart update failures: logs warning, doesn't stop upload
+- Registry authentication: tries .docker/config.json then prompts for credentials
+
+### Performance Characteristics
+
+- Bundle download: Parallel downloads (default: 10 concurrent)
+- Image upload: Parallel uploads with proper semaphore control
+- Chart updates: Sequential (typically fast, < 1 second per chart)
+- Bundle extraction: Progress feedback with formatBytes() utility
+
+---
+
 ## Summary
 
 This is a **well-architected, production-ready plugin** with:
 - ✅ Clean separation of concerns
 - ✅ Excellent error handling philosophy
 - ✅ Sophisticated real-time log synchronization
+- ✅ Complete air-gapped deployment workflow
 - ✅ Extensible design patterns
 - ✅ Good code quality overall
+
+Recent additions (April 2026):
+- ✅ Helm chart update functionality with image reference rewriting
+- ✅ Override values file generation for easy deployment
+- ✅ Updated chart archive creation with proper structure
+- ✅ Nested value manipulation with dot notation support
 
 The main areas for future improvement are:
 1. Testing (unit and integration)
 2. Configuration management
 3. Performance optimization (caching, batch operations)
 4. Advanced features (storage, structured logs, etc.)
+
 
 The codebase is well-positioned for both maintenance and expansion.
 

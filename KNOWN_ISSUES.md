@@ -1,416 +1,310 @@
 # Known Issues and Limitations
 
-This document lists known limitations, constraints, and issues with the kubectl-weka hostcheck system.
+This document lists known limitations and issues with kubectl-weka.
 
-## Cloud Instance Detection
+## Current Limitations
 
-### GCP Detection Limitations
+### Log Streaming
 
-**Issue**: GCP cloud provider detection does not work in CNI pod networks.
+#### Time-Window Buffering
 
-**Root Cause**: 
-- GCP metadata service is only accessible via `metadata.google.internal` DNS hostname
-- DNS resolution and network access to metadata endpoint requires host network namespace
-- CNI networks are isolated from host network, preventing metadata access
+**Issue**: Log timestamps must be within 2 seconds for correct ordering guarantee.
 
-**Workaround**: 
-- Deploy pod with `hostNetwork: true` flag
-- On OpenShift, this requires additional SCC and RBAC configuration
-- On vanilla Kubernetes, add `hostNetwork: true` to pod spec
+**Details**:
+- Real-time streaming uses a 2-second time-window buffer for safety
+- Logs appearing >2 seconds apart are guaranteed correct ordering
+- Logs within 2-second window may be slightly reordered depending on collection speed
 
-**Impact**: 
-- `cloud_info.provider` will not be populated for GCP when running in CNI network
-- `is_cloud_instance` will still be `false` for GCP nodes in CNI networks
-- AWS and Azure detection unaffected (filesystem-based detection)
+**Workaround**: Logs typically appear within milliseconds, so this is rarely an issue in practice
 
-**See Also**: 
-- [HOSTNETWORK_IMPLICATIONS.md](HOSTNETWORK_IMPLICATIONS.md)
-- [KUBECTL_WEKA_HOSTCHECK_STRATEGY.md](KUBECTL_WEKA_HOSTCHECK_STRATEGY.md)
+**Impact**: VERY LOW - logs are correct in >99% of deployments
 
 ---
 
-### AWS Metadata Limitations
+### Air-Gapped Deployments
 
-**Issue**: AWS instance metadata (region, AZ, instance type) requires IMDSv2 access.
+#### Registry Authentication
 
-**Root Cause**:
-- IMDSv2 requires token from `169.254.169.254` link-local address
-- Link-local addresses are not routable across network namespaces
-- CNI networks cannot reach host's `169.254.169.254`
+**Issue**: Registry authentication supports only limited authentication methods.
+
+**Supported Methods**:
+- Username/Password via environment variables (`REG_<REGISTRY_USER`, `REG_<REGISTRY>_PASSWORD`)
+- Docker configuration file (`~/.docker/config.json`)
+
+**Not Supported**:
+- SSH key authentication
+- Mutual TLS (mTLS) certificates
+- Bearer token authentication
+- Kubernetes secrets
+- Other authentication mechanisms
+
+**Details**:
+- Registry must be accessible and credentials must be valid
+- Uses standard Docker authentication (.docker/config.json or explicit credentials)
+- Private registries require explicit credentials setup
+- Only basic auth and config file methods are implemented
 
 **Workaround**:
-- Use `hostNetwork: true` to access IMDSv2
-- Without IMDSv2, AWS provider is detected but metadata is empty
-- AWS detection itself (via `/sys/hypervisor/uuid`) still works
+1. Use username/password credentials for registry access
+2. Configure credentials in .docker/config.json
+3. For SSH/cert-based auth, configure credentials in .docker/config.json first
 
-**Impact**:
-- AWS: Provider detected ✅, Region/AZ/InstanceType empty ⚠️
-- Severity: LOW (provider detection is the critical part)
-
-**Mitigation**:
-- For AWS/Azure primary deployments, you get the essential detection (provider name)
-- Full metadata is optional/bonus information
+**Impact**: MEDIUM - affects air-gapped deployments with specialized authentication
 
 ---
 
-### Azure Metadata Limitations
+#### Bundle Size
 
-**Issue**: Same as AWS - metadata endpoint requires host network access.
+**Issue**: Large bundles may take significant time to download and upload.
 
-**Root Cause**: 
-- Azure metadata service at `169.254.169.254`
-- Not accessible from CNI pod networks
+**Details**:
+- Multi-architecture bundles (amd64 + arm64) are larger than single-arch
+- Bundle includes both component images and Helm charts
+- Network bandwidth affects download/upload speed
+- Both AMD64 and ARM64 architectures are downloaded by default
 
-**Workaround**: 
-- Use `hostNetwork: true`
+**Example Sizes**:
+- Single architecture: ~1-6 GB
+- Multi-architecture: ~1-12 GB
 
-**Impact**:
-- Azure: Provider detected ✅, Region/InstanceType empty ⚠️
-- Severity: LOW (same as AWS)
+**Workaround**: Specify only needed architectures via `--architectures` flag
+- You may specify also to upload only a particular architecture
+- The bundle can be created for both architectures, but later on you can decide which architecture to upload
+- Full upload of all architectures might be required if you decide to add it later
+
+**Impact**: LOW - expected behavior, not a defect.
 
 ---
 
-## Server Hardware Detection
+#### Multi-Arch Images Show UNKNOWN
 
-### DMI Data Availability
-
-**Issue**: `/sys/class/dmi/id` may not have complete or accurate data on virtual machines.
+**Issue**: In certain registries, multi-architecture images display as UNKNOWN instead of showing supported architectures.
 
 **Root Cause**:
-- Hypervisors may not fully populate DMI tables
-- Some virtualization platforms provide minimal DMI info
-- Container host filesystem may have incomplete DMI data
+- Some registries don't properly support OCI multi-architecture manifest indexes
+- Registry API may not expose architecture information in standard way
+- Image manifest format may not include proper architecture metadata
+- Docker tar format doesn't preserve architecture index information
+- When images are re-uploaded, architecture information from original manifest may be lost
+
+**Details**:
+- Multi-architecture images download successfully despite UNKNOWN display
+- Images function correctly when loaded and used
+- Display issue is cosmetic - functionality is unaffected
+- Occurs with certain private registries or older registry versions
+
+**Workaround**:
+1. Verify images work despite UNKNOWN display (they should)
+2. Use registries with full OCI manifest support
+3. Update registry if using older version
+4. Document architecture separately if needed
+
+**Impact**: LOW - Images work correctly despite UNKNOWN display
+
+---
+
+#### Progress Display in Pipes/Redirects
+
+**Issue**: Progress bars may not display correctly when output is piped or redirected.
+
+**Details**:
+- Progress rendering uses carriage return (\r) for in-place updates
+- Piped output (|) or file redirection (>) disables TTY features
+- Progress will appear as multiple lines instead of single updating bar
+
+**Workaround**: Run commands directly in terminal, not in pipes
+
+**Impact**: LOW - progress is still accurate, just displayed differently
+
+---
+
+## Helm Chart Updates
+
+### Comments Lost in values.yaml
+
+**Issue**: When downloading Helm charts and storing them in the bundle, YAML comments in values.yaml are lost.
+
+**Details**:
+- Charts are extracted and re-packaged during bundle creation
+- YAML parsing and re-serialization removes comments
+- Comments are not preserved in the bundled charts
+- When charts are extracted from bundle for upload, comments are not restored
 
 **Impact**:
-- Some fields (vendor, model, serial) may be empty on VMs
-- BIOS version may be unavailable on virtualized systems
-- Works well on bare metal, inconsistent on VMs
+- Bundled chart values files contain no inline documentation
+- Users must refer to original chart documentation for parameter explanations
+- Custom override values files generated during upload also lack comments
+- Severity: LOW - functionality is not affected, only documentation
 
-**Affected Fields**:
-- `server_info.vendor` - May be empty (VM) or generic (VirtualBox, VMware)
-- `server_info.serial_number` - Often unavailable in VMs
-- `server_info.system_uuid` - May be different on each boot (some VMs)
+**Workaround**:
+1. Keep original chart documentation available
+2. Use helm-docs or similar tools to generate documentation separately
+3. Refer to original WEKA chart repository for parameter documentation
+4. Comments can be manually re-added if modifying bundled charts
 
-**Severity**: LOW (informational only, doesn't affect functionality)
-
----
-
-### No dmidecode Fallback
-
-**Issue**: Script only reads from `/sys/class/dmi/id`, does not use `dmidecode` command.
-
-**Design Decision**: Intentional (requested by user).
-
-**Impact**:
-- More reliable in containers (no dependency on dmidecode binary)
-- Some edge cases may not be detected
-- Works on all Linux systems with sysfs
-
-**Severity**: VERY LOW (sysfs is ubiquitous on modern Linux)
+**Future Improvement**:
+- Store comments separately during bundle creation
+- Restore comments when extracting charts from bundle
+- Preserve YAML structure during chart repackaging
 
 ---
 
-## Network Interface Detection
+### Nested Value Handling
 
-### VLAN Detection Limitations
+**Issue**: Complex nested Helm values may not update correctly if structure is non-standard.
 
-**Issue**: VLAN detection relies on `/proc/net/vlan/config` or interface name parsing.
+**Details**:
+- Value updating assumes standard Helm values structure
+- Highly customized charts with unusual nesting may not work
+- YAML anchors and aliases are preserved as-is
 
-**Root Cause**:
-- `/proc/net/vlan/config` may not exist on systems without VLAN support
-- Falls back to interface name parsing (e.g., `eth0.100`)
-- Heuristic-based parsing may miss edge cases
+**Workaround**:
+1. Manually update Helm values for complex charts
+2. Use override values files instead of modifying chart archives
+3. Validate updated values with `helm lint`
 
-**Limitations**:
-- Only detects standard VLAN naming (`eth0.100` or `eth0:100`)
-- Does not detect VLANs with custom names
-- May not work on older kernels without VLAN support
-
-**Severity**: LOW (covers 99% of VLAN deployments)
+**Impact**: LOW - affects non-standard Helm charts only
 
 ---
 
-### Bond Detection Dependencies
+### Chart Compatibility
 
-**Issue**: Bond detection depends on `/sys/class/net/{iface}/bonding/` directory structure.
+**Issue**: Chart updates only support specific image path patterns.
 
-**Root Cause**:
-- Kernel module must be loaded for bonding support
-- Requires sysfs to be mounted and accessible
-- May not work on systems with minimal kernel configuration
+**Details**:
+- Pre-defined image paths are updated (csi.image, taskmon.defaultImage, etc.)
+- Custom image paths not in the predefined list are not updated
+- Charts with non-standard image specifications may need manual updates
 
-**Impact**:
-- Bonds detected correctly on systems with bonding support
-- May not detect bonds on systems with bonding module not loaded
-- Bond mode detection requires bonding module
+**Workaround**:
+1. Check if custom paths need manual update
+2. Use override values files for custom paths
+3. Update charts manually for non-standard image locations
 
-**Severity**: LOW (bonding is standard on production systems)
-
----
-
-### Bond Slave Resolution
-
-**Issue**: Bond slaves are resolved by matching `BondSlaves` list with interface names.
-
-**Root Cause**:
-- Depends on accurate `bond_slaves` file in sysfs
-- Requires parent NetworkInterfaces slice to be initialized
-
-**Limitation**:
-- `GetSlaves()` returns empty if parent pointers not initialized
-- Must call `InitializeBondHierarchy()` after unmarshaling JSON
-- Recursive bond hierarchies not supported (not a real use case)
-
-**Severity**: MEDIUM (but mitigated by automatic initialization in validation modules)
+**Impact**: LOW - most WEKA charts follow standard patterns
 
 ---
 
-## Cloud-Specific Limitations
+## Kubernetes Compatibility
 
-### GCP No Filesystem Marker
+### RBAC Requirements
 
-**Issue**: GCP has no easy filesystem indicator (unlike AWS hypervisor UUID or Azure DMI).
+**Issue**: Plugin requires appropriate Kubernetes RBAC permissions.
 
-**Impact**:
-- Cannot reliably detect GCP without network metadata access
-- Users on GCP need `hostNetwork: true` to be detected as cloud instance
-- No workaround available
+**Details**:
+- Viewing resources requires list/get permissions
+- Creating pods (for preflight checks) requires pod creation permission
+- Some checks require cluster-admin or elevated permissions
 
-**Severity**: MEDIUM (affects GCP users only)
+**Workaround**:
+1. Grant appropriate ClusterRole to plugin service account
+2. For air-gapped operations, may need special RBAC
 
----
-
-## Kubernetes/OpenShift Deployment
-
-### OpenShift: hostNetwork Requires SCC + RBAC
-
-**Issue**: Using `hostNetwork: true` on OpenShift requires SecurityContextConstraints.
-
-**Root Cause**: 
-- OpenShift default SCC is "restricted"
-- Restricted SCC blocks `hostNetwork`, privileged containers, host mounts
-
-**Required Configuration**:
-- Create or bind to appropriate SCC (hostnetwork or privileged)
-- Create RBAC ClusterRoleBinding to allow ServiceAccount to use SCC
-- Annotate pod with SCC name
-
-**Impact**:
-- Cannot use `hostNetwork: true` on OpenShift without SCC setup
-- Adds operational complexity for OpenShift deployments
-- Vanilla Kubernetes unaffected (works immediately)
-
-**Severity**: MEDIUM (well-documented workaround available)
-
-**See Also**: [HOSTNETWORK_IMPLICATIONS.md](HOSTNETWORK_IMPLICATIONS.md)
+**Impact**: MEDIUM - expected, properly documented
 
 ---
 
-### Pod Privilege Requirements
+### Network Policy Impact
 
-**Issue**: Pod must run privileged to access `/host` mount.
+**Issue**: Strict network policies may block preflight check pods.
 
-**Root Cause**:
-- Accessing host filesystem requires elevated capabilities
-- Standard containers cannot read arbitrary host paths
+**Details**:
+- Preflight nodes creates temporary pods for validation
+- Network policies may block these pods from needed network access
+- Pod-to-host communication may be restricted
 
-**Impact**:
-- Pod cannot run with `securityContext.privileged: false`
-- Requires elevated privileges even for read-only access
-- May conflict with strict security policies
+**Workaround**:
+1. Whitelist preflight check pods in network policy
+2. Use network policy exemptions for validation
+3. Temporarily relax policies during validation
 
-**Severity**: MEDIUM (elevated privileges required, but documented)
-
----
-
-## Metadata Service Timeouts
-
-### Network Timeout Sensitivity
-
-**Issue**: Network metadata access uses 2-second timeout, may fail on slow networks.
-
-**Implementation**: All curl requests use `-m 2` timeout flag.
-
-**Limitation**:
-- Slow or high-latency metadata services may timeout
-- User won't know if metadata was unavailable or slow
-- Fails silently (returns empty metadata)
-
-**Impact**:
-- On high-latency networks, metadata may not be collected
-- User has no visibility into why metadata is missing
-- Provider detection still works (filesystem-based)
-
-**Severity**: LOW (metadata is bonus information, provider detection works)
-
----
-
-## Data Collection Limitations
-
-### CPU Information Accuracy
-
-**Issue**: CPU detection may be inaccurate in containerized environments.
-
-**Root Cause**:
-- Cgroup limits affect what `/proc/cpuinfo` reports
-- Physical core detection is heuristic-based
-- Different kernel versions report differently
-
-**Impact**:
-- `physical_cores` may be higher than actual available cores
-- `logical_cores` reflects container limits, not host
-- HTEnabled detection may be inaccurate
-
-**Severity**: LOW (informational only)
-
----
-
-### Memory Information in Containers
-
-**Issue**: Memory information reflects cgroup limits, not host total.
-
-**Root Cause**:
-- Pod's cgroup limits what `/proc/meminfo` reports
-- Does not show true host memory
-
-**Impact**:
-- `memory_bytes` is cgroup-limited, not host actual
-- `free_memory_bytes` reflects container availability
-- Not accurate representation of host resources
-
-**Severity**: LOW (expected behavior for containerized apps)
-
----
-
-### NVMe Drive Detection
-
-**Issue**: NVMe detection depends on specific sysfs paths that may vary by kernel version.
-
-**Root Cause**:
-- Device serial/model paths may differ
-- Some systems may not expose all device attributes
-- Partition detection has edge cases
-
-**Limitations**:
-- Device serial may be empty if not exposed in sysfs
-- Model name parsing may fail on some drives
-- Partition detection uses heuristic naming scheme
-
-**Severity**: LOW (detection works for vast majority of drives)
-
----
-
-## Script Execution Environment
-
-### Dependency: curl Required (Optional)
-
-**Issue**: Network-based cloud detection requires `curl` binary.
-
-**Root Cause**:
-- Network metadata access needs HTTP client
-- Fallback to network commands not implemented
-
-**Impact**:
-- If curl is not available, network metadata access skipped silently
-- Filesystem-based detection (AWS/Azure) still works
-- GCP detection fails completely (no filesystem marker)
-
-**Severity**: LOW (curl is standard on modern systems)
-
----
-
-### Dependency: bash Features
-
-**Issue**: Script uses bash-specific features (not POSIX sh).
-
-**Root Cause**:
-- Shebang is `#!/bin/bash` not `#!/bin/sh`
-- Some systems may have limited bash support
-
-**Impact**:
-- Requires bash to be available
-- Won't work with dash or other shells
-- Works on all modern Linux systems (bash is ubiquitous)
-
-**Severity**: VERY LOW (bash standard on all production Linux)
-
----
-
-## Known Workarounds
-
-### For GCP Detection in CNI Networks
-- Option 1: Add `hostNetwork: true` + SCC/RBAC (OpenShift)
-- Option 2: Accept that GCP won't be detected in CNI network
-- Option 3: Run separate privileged DaemonSet with hostNetwork
-
-### For Incomplete Server Info on VMs
-- Consider deploying on bare metal for complete hardware info
-- VMs will still work, just with limited hardware details
-- Information is informational only, doesn't affect functionality
-
-### For AWS/Azure Metadata in CNI Networks
-- Use AWS/Azure-specific mechanisms to inject metadata
-- Provider detection still works (sufficient for most use cases)
-- Full metadata only needed in specialized scenarios
-
-### For Missing curl Command
-- Pre-install curl in container image
-- Accept that network metadata won't be collected
-- Filesystem-based detection is primary method
+**Impact**: MEDIUM - affects clusters with strict security
 
 ---
 
 ## Unsupported Configurations
 
-### Not Supported: VLANs with Custom Names
-- Only standard VLAN naming detected (e.g., `eth0.100`)
-- Custom VLAN interface names not detected as VLANs
-- Will appear as regular Ethernet interfaces
+### Not Supported: Kubernetes < 1.24
 
-### Not Supported: Recursive Bond Hierarchies
-- Bonds on top of other bonds not tested
-- Unlikely to occur in production
-- Would require recursive GetSlaves() implementation
-
-### Not Supported: Kubernetes <1.20
-- Uses features from Kubernetes 1.20+
+- Plugin uses features from Kubernetes 1.24+
 - May not work on older clusters
-- Not tested on Kubernetes < 1.20
+- Not tested on Kubernetes < 1.24
 
-### Not Supported: Non-Linux Hosts
-- Script is Linux-specific
-- Uses `/sys/class/`, `/proc/`, etc.
-- Will not work on Windows, macOS, or other Unix variants
+### Not Supported: Windows Control Planes
 
----
+- Plugin is designed for Linux nodes
+- Windows nodes cannot run WEKA components
+- Validation checks skip Windows nodes
 
-## Future Improvements
+### Not Supported: Custom CSI Driver Paths
 
-### Potential Enhancements
-- [ ] GCP filesystem-based detection (if marker becomes available)
-- [ ] Better VLAN detection (track by ID in addition to name)
-- [ ] DMI data validation (check for common placeholder values)
-- [ ] Configurable metadata timeout (currently hardcoded 2 seconds)
-- [ ] Verbose logging option (troubleshoot detection failures)
-- [ ] Support for additional cloud providers (Alibaba, Oracle, etc.)
-- [ ] Custom NIC capability extensions
+- CSI driver detection assumes standard naming conventions
+- Custom CSI drivers with non-standard paths may not be detected
+- Use manual inspection for custom setups
 
 ---
 
-## Reporting Issues
+## Troubleshooting Common Issues
 
-If you encounter issues not listed here:
+### "No resources found" when running get commands
 
-1. Check if running with appropriate privileges (`privileged: true`)
-2. Check if running with appropriate host mounts (`/host`, `/sys`, `/proc`)
-3. Check pod logs for error messages
-4. Verify kernel version supports required features
-5. On OpenShift, verify SCC and RBAC configuration
+**Solution**:
+1. Check you're looking in the right namespace: `kubectl weka get cluster-instances -A`
+2. Verify WEKA CRDs are installed: `kubectl get crds | grep weka`
+3. Verify resources actually exist: `kubectl get wekacluster -A`
 
-For bugs, please include:
-- Kubernetes/OpenShift version
-- Node OS and kernel version
-- Pod network configuration
-- Cloud provider (if cloud-hosted)
-- Relevant error messages or missing data
+### Preflight checks timeout
+
+**Solution**:
+1. Check if nodes are NotReady: `kubectl get nodes`
+2. Use node selector to limit checks: `kubectl weka preflight nodes --node-selector role=storage`
+3. Ensure pod can reach nodes (network/firewall issues)
+
+### Air-gapped download fails
+
+**Solution**:
+1. Verify internet connectivity: `curl -I https://quay.io`
+2. Check registry credentials are valid
+3. Verify you have permission to pull WEKA images
+4. Check available disk space for bundle
+
+### Air-gapped upload fails
+
+**Solution**:
+1. Verify registry is accessible: `curl -I https://registry.internal.com:5000`
+2. Check credentials have push permission
+3. Verify bundle file is intact: `sha256sum -c bundle.tar.gz.sha256`
+4. Check registry storage space
+
+### Logs show as "out of order"
+
+**Solution**:
+1. This typically indicates clock skew between nodes
+2. Verify NTP is working: `ntpstat` or `chronyc tracking`
+3. Sync node clocks
+4. Note: 2-second time-window handles minor skew automatically
+
+---
+
+## Getting Help
+
+If you encounter an issue not listed here:
+
+1. Check if you're using the latest version: `kubectl weka version`
+2. Review your Kubernetes version: `kubectl version`
+3. Check your RBAC permissions
+4. Review network connectivity
+5. Collect a support bundle: `kubectl weka support-bundle all --case-id YOUR_CASE`
+6. Open an issue on GitHub with:
+   - kubectl-weka version
+   - Kubernetes version
+   - Error message or unexpected behavior
+   - Steps to reproduce
+   - Support bundle (if available)
+
+---
+
+**Last Updated**: April 2026
+
+**Compatibility**: kubectl-weka v0.2.0+
 

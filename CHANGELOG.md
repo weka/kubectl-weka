@@ -1,5 +1,79 @@
 # Changelog
 
+## Version 0.2.0 (Unreleased)
+
+### Features
+
+* **Air-Gapped Deployment Subsystem** (`pkg/airgapped/`) – Offline deployment workflow:
+  * Bundle creation with image downloading and chart packaging
+  * Bundle validation with SHA256 signature verification
+  * Image upload to air-gapped registries
+  * Helm chart update with new image URLs
+  * Override values file generation
+  * Support for multiple architectures (amd64, arm64)
+  * Comprehensive manifest with component tracking
+
+* **Progress Tracking for Download and Extraction** – Real-time progress updates during bundle operations:
+  * `download` command: Shows progress bar with bytes downloaded/total
+  * `extract` command: Tracks actual bytes extracted with per-file granularity
+  * Progress updates every 100ms for smooth user experience
+  * Accurate byte progress instead of file count estimates
+  * Periodic flushing ensures progress appears immediately
+
+* **Improved Tar.gz Handling** – Enhanced extraction and packing:
+  * `ProgressReader` wraps reader to track bytes during gzip decompression
+  * `TrackingReader` provides callbacks for fine-grained progress during file extraction
+  * Periodic progress updates during large file extractions
+  * Support for multiple tar entry types with proper handling
+  * Directory traversal attack prevention
+
+* **Docker Package** (`pkg/docker/`) – Docker image management:
+  * `DownloadDockerImage()` - Download images from registries with authentication
+  * `UploadDockerImage()` - Push images to target registries
+  * `UpdateTagForNewRegistry()` - Rewrite image references for air-gapped registries
+  * Authentication support (.docker/config.json and credentials)
+  * Multi-architecture image handling (amd64, arm64)
+  * Progress tracking during upload/download
+
+* **Logging Package** (`pkg/logging/`) – Structured logging framework:
+  * Structured logging with context-based logger management
+  * Log level configuration (debug, info, warn, error)
+  * Integration with `context.Context` for passing loggers
+  * Formatted output for console and files
+  * Support for log aggregation in support bundles
+
+* **Progress Package** (`pkg/progress/`) – Real-time progress tracking:
+  * `RenderProgress()` - Display progress bars with percentage and byte counts
+  * Human-readable byte formatting (B, KB, MB, GB, TB)
+  * Carriage return animation for smooth updates
+  * Automatic newline on completion
+  * Used by download, upload, and extract operations
+
+* **Targzutils Package** (`pkg/targzutils/`) – Tar.gz utilities:
+  * `Extract()` - Extract tar.gz with progress tracking
+  * `Pack()` - Create tar.gz archives
+  * `NewProgressReader()` - Track bytes during decompression
+  * `NewTrackingReader()` - Fine-grained progress tracking
+  * Security: Directory traversal prevention
+  * Performance: Periodic progress updates to avoid overhead
+
+* **Helm Package** (`pkg/helm/`) – Helm chart manipulation:
+  * `LoadChart()` - Load charts from local, HTTP, OCI sources
+  * `CreateUpdatedChartArchive()` - Create new chart with updated values
+  * `CreateOverrideValuesFile()` - Generate values-override files
+  * `GetNestedValue()` - Extract values using dot notation
+  * `SetNestedValue()` - Set nested values with structure preservation
+  * `ExtractVersionFromHelmChart()` - Get chart version info
+
+### Improvements
+
+* Better progress feedback during long-running operations
+* More accurate byte-level tracking instead of file count estimates
+* Enhanced error messages with actionable guidance
+* Improved code organization with focused packages
+
+---
+
 ## Version 0.1.0 (2026-03-31)
 
 ### Features

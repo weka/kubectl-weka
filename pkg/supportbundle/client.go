@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/getters"
+	"github.com/weka/kubectl-weka/pkg/logging"
 	"github.com/weka/kubectl-weka/pkg/printer"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
 	"path/filepath"
@@ -23,7 +24,7 @@ func (c *ClientResourcesCollector) Name() string {
 }
 
 func (c *ClientResourcesCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	if c.ClientName != "" {
 		logger.Info("Searching for client", "name", c.ClientName)
@@ -34,7 +35,7 @@ func (c *ClientResourcesCollector) Start(ctx context.Context) {
 }
 
 func (c *ClientResourcesCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	switch result.Status {
 	case StatusSuccess:
 		logger.Info("Collector finished", "name", c.Name(), "status", "success", "files", len(result.FilesCreated))
@@ -49,8 +50,7 @@ func (c *ClientResourcesCollector) Collect(ctx context.Context) CollectorResult 
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
-	logger.Debug("=== ClientResourcesCollector Debug Mode", "enabled", supportBundleDebug)
+	logger := logging.GetLogger(ctx)
 
 	// List WekaClient resources
 	var clients v1alpha1.WekaClientList
@@ -146,7 +146,7 @@ func (c *ClientResourcesCollector) Collect(ctx context.Context) CollectorResult 
 
 // collectClientInstances collects client instances information for a specific client
 func (c *ClientResourcesCollector) collectClientInstances(ctx context.Context, client *v1alpha1.WekaClient) (string, string) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	bundlePath := getBundlePath(ctx)
 	clients := getClients(ctx)
 
@@ -187,7 +187,7 @@ func (c *ClientResourcesCollector) collectClientContainers(ctx context.Context, 
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	clients := getClients(ctx)
 	bundlePath := getBundlePath(ctx)
 	collectSensitive := getCollectSensitiveData(ctx)

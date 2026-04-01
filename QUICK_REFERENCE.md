@@ -2,9 +2,34 @@
 
 ## Installation
 
+### Via Krew (Recommended)
+
 ```bash
+# Install Krew first (if not already installed)
+# macOS: brew install krew
+# Linux: see README.md for instructions
+
+# Then install kubectl-weka
 kubectl krew install weka
+
+# Verify
+kubectl weka version
+
+# Upgrade
+kubectl krew upgrade weka
 ```
+
+
+### Manual Installation
+
+```bash
+VERSION="1.0.0"
+curl -LO https://github.com/weka/kubectl-weka/releases/download/v${VERSION}/kubectl-weka-v${VERSION}-linux-amd64
+chmod +x kubectl-weka-v${VERSION}-linux-amd64
+sudo mv kubectl-weka-v${VERSION}-linux-amd64 /usr/local/bin/kubectl-weka
+```
+
+---
 
 ## Command Cheat Sheet
 
@@ -143,6 +168,28 @@ kubectl weka logs wekacontainer --wekacontainer=my-container -f
 kubectl weka logs wekacontainer -A --wekacontainer-id=42
 ```
 
+### Air-Gapped Deployment
+
+```bash
+# Download WEKA images and Helm charts for air-gapped deployment
+kubectl weka airgapped download \
+    --weka-version 5.3.0 \
+    --operator-chart-version 1.10.0 \
+    --csi-chart-version 2.8.2 \
+    --architectures amd64,arm64 \
+    --bundle-file weka-bundle.tar.gz
+
+# Upload bundle to air-gapped registry
+kubectl weka airgapped upload \
+    --bundle-file weka-bundle.tar.gz \
+    --registry-url registry.internal.com:5000 \
+    --username myuser \
+    --password mypass
+
+# Get help on air-gapped commands
+kubectl weka airgapped help
+```
+
 ### Collect Support Bundles
 
 ```bash
@@ -181,7 +228,7 @@ kubectl weka support-bundle all --case-id SF-12345 --debug
 | `--tail` | Last N lines | logs |
 | `--since` | Time duration | logs |
 | `--case-id` | Support case ID | support-bundle |
-| `-o, --output` | Output directory | support-bundle |
+| `-o, --output` | Output format/directory | get, support-bundle |
 | `--debug` | Debug logging | support-bundle |
 | `--node-selector` | Filter nodes | preflight, get |
 | `--summary-only` | Summary only | preflight |
