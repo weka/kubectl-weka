@@ -15,9 +15,6 @@ spec:
           os: linux
           arch: amd64
       {{addURIAndSha "https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .TagName }}_linux_amd64.tar.gz" .TagName | indent 6 }}
-      files:
-        - from: "kubectl-weka"
-          to: "."
       bin: "kubectl-weka"
 
     - selector:
@@ -25,9 +22,6 @@ spec:
           os: linux
           arch: arm64
       {{addURIAndSha "https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .TagName }}_linux_arm64.tar.gz" .TagName | indent 6 }}
-      files:
-        - from: "kubectl-weka"
-          to: "."
       bin: "kubectl-weka"
 
     - selector:
@@ -35,9 +29,6 @@ spec:
           os: darwin
           arch: amd64
       {{addURIAndSha "https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .TagName }}_darwin_amd64.tar.gz" .TagName | indent 6 }}
-      files:
-        - from: "kubectl-weka"
-          to: "."
       bin: "kubectl-weka"
 
     - selector:
@@ -45,9 +36,6 @@ spec:
           os: darwin
           arch: arm64
       {{addURIAndSha "https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .TagName }}_darwin_arm64.tar.gz" .TagName | indent 6 }}
-      files:
-        - from: "kubectl-weka"
-          to: "."
       bin: "kubectl-weka"
 
     - selector:
@@ -55,9 +43,6 @@ spec:
           os: windows
           arch: amd64
       {{addURIAndSha "https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .TagName }}_windows_amd64.zip" .TagName | indent 6 }}
-      files:
-        - from: "kubectl-weka.exe"
-          to: "."
       bin: "kubectl-weka.exe"
 
     - selector:
@@ -65,7 +50,4 @@ spec:
           os: windows
           arch: arm64
       {{addURIAndSha "https://github.com/weka/kubectl-weka/releases/download/{{ .TagName }}/kubectl-weka_{{ .TagName }}_windows_arm64.zip" .TagName | indent 6 }}
-      files:
-        - from: "kubectl-weka.exe"
-          to: "."
       bin: "kubectl-weka.exe"
