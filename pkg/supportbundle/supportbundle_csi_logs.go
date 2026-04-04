@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/getters"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
+	"github.com/weka/kubectl-weka/pkg/logging"
 	"os"
 	"path/filepath"
 	"sync"
@@ -21,14 +22,14 @@ func (c *CSIPodLogsCollector) Name() string {
 }
 
 func (c *CSIPodLogsCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	logger.Info("Will collect",
 		"items", "Current and previous logs from all CSI pods")
 }
 
 func (c *CSIPodLogsCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	switch result.Status {
 	case StatusSuccess:
 		logger.Info("Collector finished", "name", c.Name(), "status", "success", "files_created", len(result.FilesCreated))
@@ -40,7 +41,7 @@ func (c *CSIPodLogsCollector) Finish(ctx context.Context, result CollectorResult
 }
 
 func (c *CSIPodLogsCollector) Collect(ctx context.Context) CollectorResult {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	bundlePath := getBundlePath(ctx)
 	var filesCreated []string
 	var warnings []string
@@ -131,7 +132,7 @@ type podLogResult struct {
 }
 
 func (c *CSIPodLogsCollector) collectPodLogs(ctx context.Context, baseDir string, pod *corev1.Pod, results chan<- podLogResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	clients := getClients(ctx)
 	result := podLogResult{podName: pod.Name}
 

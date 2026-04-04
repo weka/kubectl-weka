@@ -3,7 +3,6 @@ package supportbundle
 import (
 	"context"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
-	"log/slog"
 )
 
 // ============================================================================
@@ -19,7 +18,6 @@ const (
 	ctxKeyNamespace            contextKey = "weka:namespace"
 	ctxKeyAllNamespaces        contextKey = "weka:all-namespaces"
 	ctxKeyCollectSensitiveData contextKey = "weka:collect-sensitive-data"
-	ctxKeyLogger               contextKey = "weka:logger"
 )
 
 // ============================================================================
@@ -91,19 +89,4 @@ func getCollectSensitiveData(ctx context.Context) bool {
 		return collect
 	}
 	return false
-}
-
-// ============================================================================
-// Logger Context Helpers
-// ============================================================================
-
-func withLogger(ctx context.Context, logger *slog.Logger) context.Context {
-	return context.WithValue(ctx, ctxKeyLogger, logger)
-}
-
-func GetLogger(ctx context.Context) *slog.Logger {
-	if logger, ok := ctx.Value(ctxKeyLogger).(*slog.Logger); ok {
-		return logger
-	}
-	return slog.Default()
 }

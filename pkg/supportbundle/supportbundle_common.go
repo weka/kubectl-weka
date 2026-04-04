@@ -1,13 +1,13 @@
 package supportbundle
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
+	"github.com/weka/kubectl-weka/pkg/logging"
+	"github.com/weka/kubectl-weka/pkg/targzutils"
 	"github.com/weka/kubectl-weka/pkg/types"
-	"io"
+	"github.com/weka/kubectl-weka/pkg/utils"
 	corev1 "k8s.io/api/core/v1"
 	"log/slog"
 	"os"
@@ -22,140 +22,9 @@ var (
 	supportBundleOutput           string
 	supportBundleNodeSel          string // For k8s mode
 	supportBundleIncludeSensitive bool   // Include sensitive data (secrets, configs, etc.)
-	supportBundleDebug            bool   // Enable debug output
+	flagDebugLevel                bool   // Enable debug output
 
-	// Global logger for the current bundle collection
-	bundleLogger *slog.Logger
 )
-
-// newMultiSinkLogger creates a logger that outputs to both console (stderr) and a file
-// The console handler logs at the configured level (info or debug based on supportBundleDebug)
-// The file handler always logs at debug level to capture all information
-// Format: [HH:MM:SS] LEVEL message
-func newMultiSinkLogger(logFilePath string) (*slog.Logger, *os.File, error) {
-	logFile, err := os.Create(logFilePath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create log file: %w", err)
-	}
-
-	// Determine console log level based on debug flag
-	consoleLevel := slog.LevelInfo
-	if supportBundleDebug {
-		consoleLevel = slog.LevelDebug
-	}
-
-	// Create handlers with custom formatter
-	consoleHandler := &simpleHandler{
-		writer: os.Stderr,
-		level:  consoleLevel,
-	}
-
-	fileHandler := &simpleHandler{
-		writer: logFile,
-		level:  slog.LevelDebug, // Always capture debug in file
-	}
-
-	// Create a multi-handler by wrapping both handlers
-	multiHandler := &multiHandler{
-		console: consoleHandler,
-		file:    fileHandler,
-	}
-
-	return slog.New(multiHandler), logFile, nil
-}
-
-type simpleHandler struct {
-	writer io.Writer
-	level  slog.Level
-}
-
-func (sh *simpleHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= sh.level
-}
-
-func (sh *simpleHandler) Handle(ctx context.Context, r slog.Record) error {
-	if !sh.Enabled(ctx, r.Level) {
-		return nil
-	}
-
-	// ANSI color codes
-	reset, dim := "\033[0m", "\033[90m"
-	red, yellow, blue := "\033[31m", "\033[33m", "\033[36m"
-
-	var levelColor, levelStr string
-	switch r.Level {
-	case slog.LevelDebug:
-		levelColor, levelStr = dim, "DEBUG"
-	case slog.LevelInfo:
-		levelColor, levelStr = blue, "INFO"
-	case slog.LevelWarn:
-		levelColor, levelStr = yellow, "WARN"
-	case slog.LevelError:
-		levelColor, levelStr = red, "ERROR"
-	default:
-		levelColor, levelStr = reset, r.Level.String()
-	}
-
-	timestamp := r.Time.Format("15:04:05")
-	line := fmt.Sprintf("%s[%s]%s %s%s%s %s", dim, timestamp, reset, levelColor, levelStr, reset, r.Message)
-
-	if r.NumAttrs() > 0 {
-		r.Attrs(func(a slog.Attr) bool {
-			line += fmt.Sprintf(" %s=%v", a.Key, a.Value)
-			return true
-		})
-	}
-
-	line += "\n"
-	_, err := io.WriteString(sh.writer, line)
-	return err
-}
-
-func (sh *simpleHandler) WithAttrs(_ []slog.Attr) slog.Handler {
-	return sh
-}
-
-func (sh *simpleHandler) WithGroup(_ string) slog.Handler {
-	return sh
-}
-
-// multiHandler implements slog.Handler to write to multiple sinks
-type multiHandler struct {
-	console slog.Handler
-	file    slog.Handler
-}
-
-func (mh *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return mh.console.Enabled(ctx, level) || mh.file.Enabled(ctx, level)
-}
-
-func (mh *multiHandler) Handle(ctx context.Context, r slog.Record) error {
-	if mh.console.Enabled(ctx, r.Level) {
-		if err := mh.console.Handle(ctx, r); err != nil {
-			return err
-		}
-	}
-	if mh.file.Enabled(ctx, r.Level) {
-		if err := mh.file.Handle(ctx, r); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (mh *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &multiHandler{
-		console: mh.console.WithAttrs(attrs),
-		file:    mh.file.WithAttrs(attrs),
-	}
-}
-
-func (mh *multiHandler) WithGroup(name string) slog.Handler {
-	return &multiHandler{
-		console: mh.console.WithGroup(name),
-		file:    mh.file.WithGroup(name),
-	}
-}
 
 // collectorsByMode returns the list of collectors for a given mode
 func collectorsByMode(mode types.CollectionMode, resourceName string) []Collector {
@@ -238,6 +107,9 @@ func RunSupportBundleByMode(clients *kubernetes.K8sClients, mode types.Collectio
 		namespace = ""
 		allNamespaces = false
 	}
+	if flagDebugLevel {
+		logging.ConsoleLogLevel = slog.LevelDebug
+	}
 
 	collectors := collectorsByMode(mode, resourceName)
 	return runSupportBundleCommand(
@@ -274,140 +146,37 @@ func printSensitiveDataWarning() {
 	fmt.Println()
 }
 
-// createTempDir creates a temporary directory with the given prefix
-func createTempDir(prefix string) (string, error) {
-	tempDir, err := os.MkdirTemp("", prefix)
-	if err != nil {
-		return "", fmt.Errorf("failed to create temporary directory: %w", err)
-	}
-	if supportBundleDebug {
-		bundleLogger.Debug("Created temporary directory", "path", tempDir)
-	}
-	return tempDir, nil
-}
-
-// cleanupTempDir removes a temporary directory and all its contents
-func cleanupTempDir(dir string) {
-	_ = os.RemoveAll(dir)
-}
-
-// createTarGz creates a tar.gz archive from a source directory
-func createTarGz(sourceDir, targetPath string) error {
-	if supportBundleDebug {
-		bundleLogger.Debug("Creating archive", "path", targetPath)
-	}
-
-	// Create output file
-	outFile, err := os.Create(targetPath)
-	if err != nil {
-		return fmt.Errorf("failed to create archive file: %w", err)
-	}
-	defer outFile.Close()
-
-	// Create gzip writer
-	gzWriter := gzip.NewWriter(outFile)
-	defer gzWriter.Close()
-
-	// Create tar writer
-	tarWriter := tar.NewWriter(gzWriter)
-	defer tarWriter.Close()
-
-	// Walk through source directory
-	fileCount := 0
-	err = filepath.Walk(sourceDir, func(filePath string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Get relative path
-		relPath, err := filepath.Rel(sourceDir, filePath)
-		if err != nil {
-			return err
-		}
-
-		// Skip root directory
-		if relPath == "." {
-			return nil
-		}
-
-		// Create tar header
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		header.Name = relPath
-
-		// Write header
-		if err := tarWriter.WriteHeader(header); err != nil {
-			return err
-		}
-
-		// Write file content if it's a regular file
-		if info.Mode().IsRegular() {
-			file, err := os.Open(filePath)
-			if err != nil {
-				return err
-			}
-			defer file.Close()
-
-			if _, err := io.Copy(tarWriter, file); err != nil {
-				return err
-			}
-			fileCount++
-		}
-
-		return nil
-	})
-
-	if err == nil && supportBundleDebug {
-		fmt.Printf("✓ Archived %d file(s)\n", fileCount)
-	}
-
-	return err
-}
-
 // runSupportBundleCommand is a common function to run collectors and create archive
 func runSupportBundleCommand(ctx context.Context, clients *kubernetes.K8sClients, caseID, output, namespace string, allNamespaces bool, collectors []Collector) error {
 
 	// Generate bundle name first
 	bundleName := generateBundleName(caseID)
 
-	// Create a temporary parent directory first just for the log file
-	parentTempDir, err := os.MkdirTemp("", "weka-bundle-")
+	// Create a temporary parent directory first just for the log file, use wrapped MkdirTemp that will remove all
+	parentTempDir, err := utils.MkdirTemp("", "weka-bundle-")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary directory: %w", err)
 	}
-	defer cleanupTempDir(parentTempDir)
 
 	// Create logger in parent temp dir so it can capture all output
 	logFilePath := filepath.Join(parentTempDir, "collection.log")
-	logger, logFile, logErr := newMultiSinkLogger(logFilePath)
-	if logErr != nil {
-		logger = slog.Default()
-		logger.Warn("Failed to create log file", "error", logErr)
-	}
-	bundleLogger = logger
-	defer func() {
-		if logFile != nil {
-			_ = logFile.Close()
-		}
-	}()
+
+	logger := logging.GetLogger(ctx, logFilePath)
+	defer logger.Close()
+
+	ctx = logging.WithLogger(ctx, logger)
 
 	logger.Info("Support Bundle Collection Started")
 	logger.Info("Bundle Name", "name", bundleName)
 	if caseID != "" {
 		logger.Info("Case ID", "id", caseID)
 	}
-	if supportBundleDebug {
-		logger.Debug("Debug mode enabled")
-	}
 
 	// Now create the main bundle temp directory with logger active
-	tempDir, err := createTempDir(bundleName)
+	tempDir, err := utils.MkdirTemp(bundleName, "")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary directory: %w", err)
 	}
-	defer cleanupTempDir(tempDir)
 
 	// Copy collection.log to the main bundle directory
 	collectionLogSrc := logFilePath
@@ -429,7 +198,6 @@ func runSupportBundleCommand(ctx context.Context, clients *kubernetes.K8sClients
 	ctx = withNamespace(ctx, namespace)
 	ctx = withAllNamespaces(ctx, allNamespaces)
 	ctx = withCollectSensitiveData(ctx, supportBundleIncludeSensitive)
-	ctx = withLogger(ctx, bundleLogger)
 
 	// Run all collectors
 	totalSuccess := 0
@@ -461,9 +229,8 @@ func runSupportBundleCommand(ctx context.Context, clients *kubernetes.K8sClients
 
 	// Copy collection.log to bundle directory before archiving
 	logger.Info("Creating archive...")
-	if logFile != nil {
-		logFile.Close() // Close first so file is flushed
-	}
+	// Prior to adding the log to the bundle, flush any buffers
+	logger.Sync()
 
 	// Copy the log file to the bundle directory
 	logContent, err := os.ReadFile(collectionLogSrc)
@@ -473,7 +240,9 @@ func runSupportBundleCommand(ctx context.Context, clients *kubernetes.K8sClients
 
 	// Create archive
 	archivePath := filepath.Join(output, bundleName+".tar.gz")
-	if err := createTarGz(tempDir, archivePath); err != nil {
+
+	// TODO: add progressbar
+	if err := targzutils.PackDirectory(ctx, tempDir, archivePath); err != nil {
 		return fmt.Errorf("failed to create archive: %w", err)
 	}
 
@@ -499,7 +268,7 @@ func CollectPodLogsParallel(ctx context.Context, clients *kubernetes.K8sClients,
 		return []string{}, []string{}
 	}
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	bundlePath := getBundlePath(ctx)
 
 	// First, get all nodes using cached controller-runtime client and build a map of ready nodes
@@ -571,7 +340,7 @@ func CollectPodLogsParallel(ctx context.Context, clients *kubernetes.K8sClients,
 			semaphore <- struct{}{}        // acquire
 			defer func() { <-semaphore }() // release
 
-			result := collectSinglePodLogs(ctx, clients, namespace, pod, logsDir, bundlePath, logger)
+			result := collectSinglePodLogs(ctx, clients, namespace, pod, logsDir, bundlePath)
 			resultsChan <- result
 		}(podName)
 	}
@@ -601,7 +370,8 @@ func CollectPodLogsParallel(ctx context.Context, clients *kubernetes.K8sClients,
 }
 
 // collectSinglePodLog collects logs from a single pod and returns results
-func collectSinglePodLogs(ctx context.Context, clients *kubernetes.K8sClients, namespace, podName, logsDir string, bundlePath string, logger *slog.Logger) PodLogCollectionResult {
+func collectSinglePodLogs(ctx context.Context, clients *kubernetes.K8sClients, namespace, podName, logsDir string, bundlePath string) PodLogCollectionResult {
+	logger := logging.GetLogger(ctx)
 	result := PodLogCollectionResult{
 		PodName:  podName,
 		LogFiles: []string{},
@@ -669,7 +439,7 @@ func CollectPodDescriptionsParallel(ctx context.Context, clients *kubernetes.K8s
 		return []string{}, []string{}
 	}
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	bundlePath := getBundlePath(ctx)
 
 	// Limit concurrency
@@ -689,7 +459,7 @@ func CollectPodDescriptionsParallel(ctx context.Context, clients *kubernetes.K8s
 			semaphore <- struct{}{}        // acquire
 			defer func() { <-semaphore }() // release
 
-			result := collectSinglePodDescription(ctx, clients, namespace, pod, descDir, bundlePath, logger)
+			result := collectSinglePodDescription(ctx, clients, namespace, pod, descDir, bundlePath)
 			resultsChan <- result
 		}(podName)
 	}
@@ -721,7 +491,8 @@ func CollectPodDescriptionsParallel(ctx context.Context, clients *kubernetes.K8s
 }
 
 // collectSinglePodDescription collects description from a single pod and returns result
-func collectSinglePodDescription(ctx context.Context, clients *kubernetes.K8sClients, namespace, podName, descDir string, bundlePath string, logger *slog.Logger) PodDescriptionCollectionResult {
+func collectSinglePodDescription(ctx context.Context, clients *kubernetes.K8sClients, namespace, podName, descDir string, bundlePath string) PodDescriptionCollectionResult {
+	logger := logging.GetLogger(ctx)
 	result := PodDescriptionCollectionResult{
 		PodName: podName,
 	}

@@ -68,4 +68,5 @@ func init() {
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(planCmd)
 	rootCmd.AddCommand(supportBundleCmd)
+	rootCmd.AddCommand(airgappedCmd)
 }

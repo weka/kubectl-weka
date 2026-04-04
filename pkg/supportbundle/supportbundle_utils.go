@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
+	yamlv3 "gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"os"
 	"path/filepath"
-	"sigs.k8s.io/yaml"
 	"strings"
 	"time"
 )
@@ -131,7 +131,7 @@ func collectPodDescription(ctx context.Context, clients *kubernetes.K8sClients, 
 	}
 
 	// Convert to YAML for a readable format
-	yamlData, err := yaml.Marshal(pod)
+	yamlData, err := yamlv3.Marshal(pod)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal pod to YAML: %w", err)
 	}
@@ -144,7 +144,7 @@ func collectPodDescription(ctx context.Context, clients *kubernetes.K8sClients, 
 
 // collectObjectAsYAMLWithSensitiveData collects any Kubernetes object and optionally redacts sensitive data
 func collectObjectAsYAMLWithSensitiveData(obj runtime.Object, includeSensitive bool) (string, error) {
-	yamlData, err := yaml.Marshal(obj)
+	yamlData, err := yamlv3.Marshal(obj)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal object to YAML: %w", err)
 	}

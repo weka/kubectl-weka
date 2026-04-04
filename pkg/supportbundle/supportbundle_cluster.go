@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/getters"
+	"github.com/weka/kubectl-weka/pkg/logging"
 	"github.com/weka/kubectl-weka/pkg/printer"
 	"path/filepath"
 
@@ -24,7 +25,7 @@ func (c *ClusterResourcesCollector) Name() string {
 }
 
 func (c *ClusterResourcesCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	if c.ClusterName != "" {
 		logger.Info("Searching for cluster", "name", c.ClusterName)
@@ -35,7 +36,7 @@ func (c *ClusterResourcesCollector) Start(ctx context.Context) {
 }
 
 func (c *ClusterResourcesCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	switch result.Status {
 	case StatusSuccess:
 		logger.Info("Collector finished", "name", c.Name(), "status", "success", "files", len(result.FilesCreated))
@@ -50,8 +51,7 @@ func (c *ClusterResourcesCollector) Collect(ctx context.Context) CollectorResult
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
-	logger.Debug("=== ClusterResourcesCollector Debug Mode", "enabled", supportBundleDebug)
+	logger := logging.GetLogger(ctx)
 
 	// List WekaCluster resources
 	var clusters wekaapi.WekaClusterList
@@ -151,7 +151,7 @@ func (c *ClusterResourcesCollector) collectClusterContainers(ctx context.Context
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	clients := getClients(ctx)
 	bundlePath := getBundlePath(ctx)
 	collectSensitive := getCollectSensitiveData(ctx)
@@ -222,7 +222,7 @@ func (c *ClusterResourcesCollector) collectClusterContainers(ctx context.Context
 
 // collectClusterInstances collects cluster instances information for a specific cluster
 func (c *ClusterResourcesCollector) collectClusterInstances(ctx context.Context, cluster *wekaapi.WekaCluster) (string, string) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	bundlePath := getBundlePath(ctx)
 	clients := getClients(ctx)
 

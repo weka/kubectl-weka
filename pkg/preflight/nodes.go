@@ -273,10 +273,10 @@ func GeneratePreflightNodesOutput(
 	output.Printf("  Unique Kernels:      %d\n", len(kernels))
 
 	if len(oses) > 1 {
-		output.Printf("Warning: Multiple OSes detected: %s\n", strings.Join(utils.MapKeysToList(oses), ", "))
+		output.Printf("Warning: Multiple OSes detected: %s\n", strings.Join(utils.KeysOfSorted(oses), ", "))
 	}
 	if len(kernels) > 1 {
-		output.Printf("Warning: Multiple kernels detected: %s\n", strings.Join(utils.MapKeysToList(kernels), ", "))
+		output.Printf("Warning: Multiple kernels detected: %s\n", strings.Join(utils.KeysOfSorted(kernels), ", "))
 	}
 
 	// Print centralized warnings summary

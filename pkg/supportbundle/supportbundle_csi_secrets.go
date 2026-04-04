@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
+	"github.com/weka/kubectl-weka/pkg/logging"
 	types2 "github.com/weka/kubectl-weka/pkg/types"
 	"os"
 	"path/filepath"
@@ -22,7 +23,7 @@ func (c *CSISecretsCollector) Name() string {
 }
 
 func (c *CSISecretsCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	includeSensitive := getCollectSensitiveData(ctx)
 	if includeSensitive {
@@ -33,7 +34,7 @@ func (c *CSISecretsCollector) Start(ctx context.Context) {
 }
 
 func (c *CSISecretsCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	switch result.Status {
 	case StatusSuccess:
 		logger.Info("Collector finished", "name", c.Name(), "status", "success", "files_created", len(result.FilesCreated))
@@ -45,7 +46,7 @@ func (c *CSISecretsCollector) Finish(ctx context.Context, result CollectorResult
 }
 
 func (c *CSISecretsCollector) Collect(ctx context.Context) CollectorResult {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	bundlePath := getBundlePath(ctx)
 	var filesCreated []string
 	var warnings []string
@@ -184,7 +185,7 @@ type secretResult struct {
 }
 
 func (c *CSISecretsCollector) collectSecret(ctx context.Context, baseDir, driverName, storageClassName string, secretRef types2.SecretReference) secretResult {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	clients := getClients(ctx)
 	result := secretResult{}
 

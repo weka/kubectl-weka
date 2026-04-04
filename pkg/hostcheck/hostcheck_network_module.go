@@ -338,7 +338,7 @@ func FormatNetworkInterfacesTable(data *NetworkInterfacesModuleData, visibleColu
 		{Name: "Device Model", VisibleInWide: false},
 		{Name: "Type", VisibleInWide: false},
 		{Name: "IP Address/CIDR", VisibleInWide: false},
-		{Name: "Speed", VisibleInWide: false, FormatFuncs: printer.TableFormatFunctions{utils.FormatMbpsToHuman}},
+		{Name: "Speed", VisibleInWide: false, FormatFuncs: printer.TableFormatFunctions{utils.HumanMbps}},
 		{Name: "Rate", VisibleInWide: false},
 		{Name: "MTU", VisibleInWide: false},
 		{Name: "Supported", VisibleInWide: false},

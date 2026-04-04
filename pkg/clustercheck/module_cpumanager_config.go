@@ -234,10 +234,10 @@ func checkCPUManagerPolicyStatic(ctx context.Context, clientset *kubernetes2.Cli
 		parts = append(parts, fmt.Sprintf("%d nodes ok", passCount))
 	}
 	if len(notStatic) > 0 {
-		parts = append(parts, fmt.Sprintf("%d nodes not static: %s", len(notStatic), utils.JoinAndTruncate(notStatic, 3)))
+		parts = append(parts, fmt.Sprintf("%d nodes not static: %s", len(notStatic), utils.JoinWithTruncation(notStatic, 3)))
 	}
 	if len(unknown) > 0 {
-		parts = append(parts, fmt.Sprintf("%d nodes unknown: %s", len(unknown), utils.JoinAndTruncate(unknown, 3)))
+		parts = append(parts, fmt.Sprintf("%d nodes unknown: %s", len(unknown), utils.JoinWithTruncation(unknown, 3)))
 	}
 	if len(skipped) > 0 {
 		parts = append(parts, fmt.Sprintf("%d nodes skipped (NotReady)", len(skipped)))

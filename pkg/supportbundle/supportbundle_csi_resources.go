@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
+	"github.com/weka/kubectl-weka/pkg/logging"
+	yamlv3 "gopkg.in/yaml.v3"
 	"path/filepath"
 
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
 )
 
 // StorageClassCollector collects StorageClasses with weka.io CSI driver
@@ -20,7 +21,7 @@ func (c *StorageClassCollector) Name() string {
 }
 
 func (c *StorageClassCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	logger.Info("Will collect", "items", "StorageClasses with weka.io CSI driver")
 }
@@ -29,7 +30,7 @@ func (c *StorageClassCollector) Collect(ctx context.Context) CollectorResult {
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	clients := getClients(ctx)
 	bundlePath := getBundlePath(ctx)
 
@@ -64,7 +65,7 @@ func (c *StorageClassCollector) Collect(ctx context.Context) CollectorResult {
 
 	// Collect each StorageClass
 	for _, sc := range wekaStorageClasses {
-		yamlData, err := yaml.Marshal(&sc)
+		yamlData, err := yamlv3.Marshal(&sc)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("failed to marshal StorageClass %s: %v", sc.Name, err))
 			logger.Debug("⚠️  Failed to marshal StorageClass", "name", sc.Name, "error", err)
@@ -99,7 +100,7 @@ func (c *StorageClassCollector) Collect(ctx context.Context) CollectorResult {
 }
 
 func (c *StorageClassCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 
 	switch result.Status {
 	case StatusSuccess:
@@ -125,7 +126,7 @@ func (c *PersistentVolumeClaimCollector) Name() string {
 }
 
 func (c *PersistentVolumeClaimCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	logger.Info("Will collect", "items", "PersistentVolumeClaims with weka.io CSI driver")
 }
@@ -134,7 +135,7 @@ func (c *PersistentVolumeClaimCollector) Collect(ctx context.Context) CollectorR
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	clients := getClients(ctx)
 	bundlePath := getBundlePath(ctx)
 
@@ -194,7 +195,7 @@ func (c *PersistentVolumeClaimCollector) Collect(ctx context.Context) CollectorR
 
 	// Collect each PVC
 	for _, pvc := range wekaPVCs {
-		yamlData, err := yaml.Marshal(&pvc)
+		yamlData, err := yamlv3.Marshal(&pvc)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("failed to marshal PVC %s/%s: %v", pvc.Namespace, pvc.Name, err))
 			logger.Debug("⚠️  Failed to marshal PVC", "namespace", pvc.Namespace, "name", pvc.Name, "error", err)
@@ -229,7 +230,7 @@ func (c *PersistentVolumeClaimCollector) Collect(ctx context.Context) CollectorR
 }
 
 func (c *PersistentVolumeClaimCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 
 	switch result.Status {
 	case StatusSuccess:
@@ -255,7 +256,7 @@ func (c *PersistentVolumeCollector) Name() string {
 }
 
 func (c *PersistentVolumeCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	logger.Info("Will collect", "items", "PersistentVolumes with weka.io CSI driver")
 }
@@ -264,7 +265,7 @@ func (c *PersistentVolumeCollector) Collect(ctx context.Context) CollectorResult
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	clients := getClients(ctx)
 	bundlePath := getBundlePath(ctx)
 
@@ -299,7 +300,7 @@ func (c *PersistentVolumeCollector) Collect(ctx context.Context) CollectorResult
 
 	// Collect each PV
 	for _, pv := range wekaPVs {
-		yamlData, err := yaml.Marshal(&pv)
+		yamlData, err := yamlv3.Marshal(&pv)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("failed to marshal PV %s: %v", pv.Name, err))
 			logger.Debug("⚠️  Failed to marshal PV", "name", pv.Name, "error", err)
@@ -334,7 +335,7 @@ func (c *PersistentVolumeCollector) Collect(ctx context.Context) CollectorResult
 }
 
 func (c *PersistentVolumeCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 
 	switch result.Status {
 	case StatusSuccess:
@@ -360,7 +361,7 @@ func (c *CSIDriverCollector) Name() string {
 }
 
 func (c *CSIDriverCollector) Start(ctx context.Context) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	logger.Info("Running collector", "name", c.Name())
 	logger.Info("Will collect", "items", "CSIDriver resources with weka.io in the name")
 }
@@ -369,7 +370,7 @@ func (c *CSIDriverCollector) Collect(ctx context.Context) CollectorResult {
 	var filesCreated []string
 	var warnings []string
 
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 	clients := getClients(ctx)
 	bundlePath := getBundlePath(ctx)
 
@@ -404,7 +405,7 @@ func (c *CSIDriverCollector) Collect(ctx context.Context) CollectorResult {
 
 	// Collect each CSIDriver
 	for _, driver := range wekaDrivers {
-		yamlData, err := yaml.Marshal(&driver)
+		yamlData, err := yamlv3.Marshal(&driver)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("failed to marshal CSIDriver %s: %v", driver.Name, err))
 			logger.Debug("⚠️  Failed to marshal CSIDriver", "name", driver.Name, "error", err)
@@ -439,7 +440,7 @@ func (c *CSIDriverCollector) Collect(ctx context.Context) CollectorResult {
 }
 
 func (c *CSIDriverCollector) Finish(ctx context.Context, result CollectorResult) {
-	logger := GetLogger(ctx)
+	logger := logging.GetLogger(ctx)
 
 	switch result.Status {
 	case StatusSuccess:
