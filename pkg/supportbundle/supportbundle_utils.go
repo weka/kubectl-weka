@@ -3,15 +3,16 @@ package supportbundle
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	yamlv3 "gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
 )
 
 // ============================================================================

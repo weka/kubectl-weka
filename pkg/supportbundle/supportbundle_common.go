@@ -3,17 +3,18 @@ package supportbundle
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
+
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/logging"
 	"github.com/weka/kubectl-weka/pkg/targzutils"
 	"github.com/weka/kubectl-weka/pkg/types"
 	"github.com/weka/kubectl-weka/pkg/utils"
 	corev1 "k8s.io/api/core/v1"
-	"log/slog"
-	"os"
-	"path/filepath"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sync"
 )
 
 // Global shared variables for support bundle commands
@@ -101,12 +102,18 @@ func RunSupportBundleByMode(clients *kubernetes.K8sClients, mode types.Collectio
 	}
 
 	// For certain modes, override namespace settings
-
 	if mode == types.CollectionModeK8s {
 		// K8s mode doesn't use namespace filtering
 		namespace = ""
 		allNamespaces = false
 	}
+
+	// For "all" mode, unless a specific namespace is requested, collect from all namespaces
+	// This ensures comprehensive collection of all clusters, clients, etc. across the cluster
+	if mode == types.CollectionModeAll {
+		allNamespaces = true
+	}
+
 	if flagDebugLevel {
 		logging.ConsoleLogLevel = slog.LevelDebug
 	}
