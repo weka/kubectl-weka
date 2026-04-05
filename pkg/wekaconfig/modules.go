@@ -3,11 +3,12 @@ package wekaconfig
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/wekaversion"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
 )
 
 // ImageValidationModule validates image configuration
@@ -962,14 +963,16 @@ func (m *NodeSelectorConflictModule) Validate(ctx context.Context, _ *kubernetes
 		driveSelector = *roleSelectors.Drive
 	}
 
-	// NFS and S3 conflict is CRITICAL
-	if selectorsEqual(nfsSelector, s3Selector) {
-		status = "error"
-		issue = "NFS and S3 roles have the same nodeSelector. This is not allowed as clients and protocol services cannot be on the same node"
-		return map[string]interface{}{
-			"Status": status,
-			"Issue":  issue,
-		}, nil
+	// NFS and S3 conflict is CRITICAL - but only if both are deployed
+	if cluster.Spec.Dynamic.NfsContainers > 0 && cluster.Spec.Dynamic.S3Containers > 0 {
+		if selectorsEqual(nfsSelector, s3Selector) {
+			status = "error"
+			issue = "NFS and S3 roles have the same nodeSelector. This is not allowed as clients and protocol services cannot be on the same node"
+			return map[string]interface{}{
+				"Status": status,
+				"Issue":  issue,
+			}, nil
+		}
 	}
 
 	// Check for other role conflicts (warning level)
@@ -1226,9 +1229,24 @@ func (m *ActualNodeConflictModule) Validate(ctx context.Context, clients *kubern
 	}
 
 	// Check all combinations that should NOT overlap
-	clientNFSOverlap, clientNFSNodes := checkOverlap(clientNodes, nfsNodes)
-	clientS3Overlap, clientS3Nodes := checkOverlap(clientNodes, s3Nodes)
-	nfsS3Overlap, nfsS3Nodes := checkOverlap(nfsNodes, s3Nodes)
+	// Skip checks for container types with 0 instances
+	clientNFSOverlap := false
+	clientNFSNodes := []string{}
+	if cluster.Spec.Dynamic.NfsContainers > 0 {
+		clientNFSOverlap, clientNFSNodes = checkOverlap(clientNodes, nfsNodes)
+	}
+
+	clientS3Overlap := false
+	clientS3Nodes := []string{}
+	if cluster.Spec.Dynamic.S3Containers > 0 {
+		clientS3Overlap, clientS3Nodes = checkOverlap(clientNodes, s3Nodes)
+	}
+
+	nfsS3Overlap := false
+	nfsS3Nodes := []string{}
+	if cluster.Spec.Dynamic.NfsContainers > 0 && cluster.Spec.Dynamic.S3Containers > 0 {
+		nfsS3Overlap, nfsS3Nodes = checkOverlap(nfsNodes, s3Nodes)
+	}
 
 	if clientNFSOverlap && clientS3Overlap {
 		status = "error"
