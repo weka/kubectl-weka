@@ -4,11 +4,12 @@ import (
 	"archive/tar"
 	"context"
 	"fmt"
-	"github.com/weka/kubectl-weka/pkg/logging"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/weka/kubectl-weka/pkg/logging"
 )
 
 // PackDirectory creates a tar.gz archive from a source directory
@@ -20,6 +21,16 @@ func PackDirectory(ctx context.Context, sourceDir, targetPath string) error {
 	return err
 }
 
+// PackDirectoryWithProgress creates a tar.gz archive with progress callback
+// progressFn is called with (filesAdded, bytesAdded) after each file chunk
+func PackDirectoryWithProgress(ctx context.Context, sourceDir, targetPath string, progressFn func(filesAdded int, bytesAdded int64)) error {
+	logger := logging.GetLogger(ctx)
+	logger.Debug("Creating archive with progress", "path", targetPath)
+
+	err := PackWithProgressBar(sourceDir, targetPath, progressFn)
+	return err
+}
+
 // PackWithProgressBar creates a tar.gz archive from a directory with optional progress callback
 // progressFn is called after each file chunk is added (useful for large archives)
 // Set progressFn to nil to skip progress reporting
@@ -28,7 +39,9 @@ func PackWithProgressBar(srcDir, outFile string, progressFn func(filesAdded int,
 	if err != nil {
 		return fmt.Errorf("create tar.gz file %q: %w", outFile, err)
 	}
-	defer tw.Close()
+	defer func() {
+		_ = tw.Close()
+	}()
 
 	var filesAdded int
 	var bytesAdded int64
@@ -109,3 +122,28 @@ func PackWithProgressBar(srcDir, outFile string, progressFn func(filesAdded int,
 		return nil
 	})
 }
+
+// CalculateDirectorySize recursively calculates the total size of all files in a directory
+// Returns (fileCount, totalBytes)
+func CalculateDirectorySize(rootDir string) (int, int64, error) {
+	var fileCount int
+	var totalBytes int64
+
+	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories and non-regular files
+		if info.IsDir() || !info.Mode().IsRegular() {
+			return nil
+		}
+
+		fileCount++
+		totalBytes += info.Size()
+		return nil
+	})
+
+	return fileCount, totalBytes, err
+}
+

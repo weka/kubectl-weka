@@ -10,6 +10,7 @@ import (
 
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/logging"
+	"github.com/weka/kubectl-weka/pkg/progress"
 	"github.com/weka/kubectl-weka/pkg/targzutils"
 	"github.com/weka/kubectl-weka/pkg/types"
 	"github.com/weka/kubectl-weka/pkg/utils"
@@ -246,15 +247,29 @@ func runSupportBundleCommand(ctx context.Context, clients *kubernetes.K8sClients
 		_ = os.WriteFile(collectionLogDst, logContent, 0644)
 	}
 
-	// Create archive
+	// Create archive with progress reporting
 	archivePath := filepath.Join(output, bundleName+".tar.gz")
 
-	// TODO: add progressbar
-	if err := targzutils.PackDirectory(ctx, tempDir, archivePath); err != nil {
-		return fmt.Errorf("failed to create archive: %w", err)
+	// Calculate directory size for progress reporting
+	fileCount, totalBytes, err := targzutils.CalculateDirectorySize(tempDir)
+	if err != nil {
+		logger.Warn("Failed to calculate directory size, archiving without progress", "error", err)
+		// Fall back to archiving without progress
+		if err := targzutils.PackDirectory(ctx, tempDir, archivePath); err != nil {
+			return fmt.Errorf("failed to create archive: %w", err)
+		}
+	} else {
+		// Archive with progress reporting
+		progressFn := func(filesProcessed int, bytesProcessed int64) {
+			progress.RenderProgress(bytesProcessed, totalBytes, "Archive", "")
+		}
+
+		if err := targzutils.PackDirectoryWithProgress(ctx, tempDir, archivePath, progressFn); err != nil {
+			return fmt.Errorf("failed to create archive: %w", err)
+		}
 	}
 
-	successMsg := fmt.Sprintf("Support bundle created: %s", archivePath)
+	successMsg := fmt.Sprintf("Support bundle created: %s (%d files)", archivePath, fileCount)
 	logger.Info(successMsg)
 	return nil
 }
