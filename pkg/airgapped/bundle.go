@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/weka/kubectl-weka/pkg/docker"
 	"github.com/weka/kubectl-weka/pkg/helm"
@@ -13,9 +17,6 @@ import (
 	"github.com/weka/kubectl-weka/pkg/targzutils"
 	"github.com/weka/kubectl-weka/pkg/utils"
 	"helm.sh/helm/v3/pkg/chart"
-	"os"
-	"path/filepath"
-	"time"
 )
 
 type Bundle struct {
@@ -547,20 +548,24 @@ func (b *Bundle) Create(ctx context.Context, bundleFile string) error {
 		return fmt.Errorf("bundle file name must be specified")
 	}
 
-	if b.bundleFilename == bundleFile {
-		return nil // TODO: fix this, probably should report error
+	// Check if writer is already open - cannot change filename once writer is open
+	if b.isOpen() {
+		return fmt.Errorf("cannot change bundle filename after writer is opened")
 	}
-	if b.bundleFilename == "" {
-		b.bundleFilename = bundleFile
-	}
+
 	logger := logging.GetLogger(ctx)
+
+	// Allow setting filename even if previously set (unless writer is open)
+	// This enables resetting the bundle for reuse
+	if b.bundleFilename != bundleFile {
+		logger.Debug("Setting bundle filename", "old", b.bundleFilename, "new", bundleFile)
+	}
+	b.bundleFilename = bundleFile
 
 	// reset bundle size TODO: implement Reset()
 	b.size = 0
 	b.processedSize = 0
 	b.bundleSize = 0
-
-	b.bundleFilename = bundleFile
 
 	b.Account()
 	// Add estimate for manifest.json
