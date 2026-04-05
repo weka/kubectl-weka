@@ -2,13 +2,15 @@ package kubernetes
 
 import (
 	"fmt"
+	"os"
+	"strings"
+
 	"github.com/weka/kubectl-weka/pkg/utils"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
 )
 
 // QuantityOrZero returns the quantity value or zero if not found
@@ -242,4 +244,21 @@ func SplitNameToParts(name string) []string {
 	}
 
 	return parts
+}
+
+// GetOperatorNamespace returns the namespace where the Weka Operator is running, defaulting to "weka-operator-system" if not set via environment variable
+// returns namespace name, allNamespaces, error
+func GetOperatorNamespace(allNamespaces bool, namespace string) string {
+	flagNs, _, err := GetNamespaceFromFlags(allNamespaces, namespace)
+	if err == nil {
+		defaultNs, _ := GetKubeNamespace()
+		if flagNs == "" || flagNs == "default" || flagNs == defaultNs {
+			operatorNS := "weka-operator-system"
+			if os.Getenv("WEKA_OPERATOR_NAMESPACE") != "" {
+				operatorNS = os.Getenv("WEKA_OPERATOR_NAMESPACE")
+			}
+			return operatorNS
+		}
+	}
+	return flagNs
 }

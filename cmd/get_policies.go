@@ -3,10 +3,11 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/weka/kubectl-weka/pkg/printer"

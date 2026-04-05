@@ -3,8 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"strings"
+
+	"github.com/weka/kubectl-weka/pkg/kubernetes"
 
 	"github.com/spf13/cobra"
 	"github.com/weka/kubectl-weka/pkg/logs"

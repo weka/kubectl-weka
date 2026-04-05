@@ -3,9 +3,11 @@ package supportbundle
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+
+	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/logging"
 	corev1 "k8s.io/api/core/v1"
-	"path/filepath"
 
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,12 +45,11 @@ func (c *OperatorLogsCollector) Collect(ctx context.Context) CollectorResult {
 
 	logger := logging.GetLogger(ctx)
 
-	// Collect operator controller manager logs
-	operatorNS := "weka-operator-system"
+	// Operator logs are by default in the weka-operator-system namespace
+	// Unless context defaults from get default namespace and sets a particular namespace - use it
 	ns := getNamespace(ctx)
-	if ns != "" {
-		operatorNS = ns
-	}
+	nsAll := getAllNamespaces(ctx)
+	operatorNS := kubernetes.GetOperatorNamespace(nsAll, ns)
 
 	clients := getClients(ctx)
 
@@ -172,11 +173,11 @@ func (c *OperatorNodeAgentLogsCollector) Collect(ctx context.Context) CollectorR
 
 	logger := logging.GetLogger(ctx)
 
-	operatorNS := "weka-operator-system"
+	// Operator logs are by default in the weka-operator-system namespace
+	// Unless context defaults from get default namespace and sets a particular namespace - use it
 	ns := getNamespace(ctx)
-	if ns != "" {
-		operatorNS = ns
-	}
+	nsAll := getAllNamespaces(ctx)
+	operatorNS := kubernetes.GetOperatorNamespace(nsAll, ns)
 
 	clients := getClients(ctx)
 

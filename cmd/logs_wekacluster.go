@@ -3,9 +3,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/spf13/cobra"
 	"github.com/weka/kubectl-weka/pkg/logs"
-	"strings"
 )
 
 var logsWekaClusterCmd = &cobra.Command{
