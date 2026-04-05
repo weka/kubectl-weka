@@ -2,9 +2,10 @@ package printer
 
 import (
 	"fmt"
-	"github.com/weka/kubectl-weka/pkg/utils"
 	"io"
 	"strings"
+
+	"github.com/weka/kubectl-weka/pkg/utils"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 )
@@ -61,6 +62,10 @@ func (tp *TablePrinter) Print(columns []TableColumn, rows []TableRow, w io.Write
 		tw.Style().Box.PaddingRight = "  "
 	case TableStyleRoundedBox:
 		tw.SetStyle(table.StyleRounded)
+	}
+
+	if opts.PrintRowSeparator {
+		tw.Style().Options.SeparateRows = true
 	}
 
 	if opts.HideEmptyColumns && len(rows) > 0 {

@@ -2,16 +2,18 @@ package plan
 
 import (
 	"fmt"
-	"github.com/weka/kubectl-weka/pkg/types"
-	"github.com/weka/kubectl-weka/pkg/utils"
 	"os"
 	"sort"
+
+	"github.com/weka/kubectl-weka/pkg/types"
+	"github.com/weka/kubectl-weka/pkg/utils"
+
+	"strings"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"strings"
 )
 
 // GetFileContents reads file contents
@@ -117,7 +119,7 @@ func createResourceBar(usedPercent, wekaPercent float64, containerTypes []string
 		used = types.ColorUsed + strings.Repeat("█", usedWidth) + types.ColorReset
 	}
 
-	// For Weka portion, use different colors for different container types
+	// For Weka portion, use different colors AND patterns for different container types
 	weka := ""
 	if len(containerTypes) > 0 {
 		// Calculate width per container type
@@ -149,7 +151,8 @@ func createResourceBar(usedPercent, wekaPercent float64, containerTypes []string
 					color = types.ColorDefault
 				}
 
-				weka += color + strings.Repeat("█", width) + types.ColorReset
+				pattern := getContainerPattern(cType)
+				weka += color + strings.Repeat(pattern, width) + types.ColorReset
 			}
 		}
 	} else {
@@ -410,7 +413,8 @@ func CalculateAllocatedDrives(containers []wekaapi.WekaContainer, nodeName strin
 
 	for _, container := range containers {
 		// Check if this container is running on the target node
-		if container.Spec.NodeAffinity != "" && string(container.Spec.NodeAffinity) == nodeName {
+		// Status.NodeAffinity contains the actual node where the container is running
+		if container.Status.NodeAffinity != "" && string(container.Status.NodeAffinity) == nodeName {
 			// Count the allocated drives from the container allocations
 			if container.Status.Allocations != nil {
 				totalDrives += len(container.Status.Allocations.Drives)
