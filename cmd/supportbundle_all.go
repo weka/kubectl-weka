@@ -14,7 +14,9 @@ var supportBundleAllCmd = &cobra.Command{
   - All WekaCluster resources and their logs
   - All WekaClient resources and their logs
   - CSI components
-  - Kubernetes preflight checks`,
+  - Kubernetes preflight checks
+  NOTE: this collection automatically is performed in ALL namespaces
+`,
 	RunE: runSupportBundleAll,
 }
 
