@@ -3,10 +3,11 @@ package docker
 import (
 	"errors"
 	"fmt"
+	"strings"
+
 	"github.com/google/go-containerregistry/pkg/name"
 	types2 "github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/weka/kubectl-weka/pkg/utils"
-	"strings"
 )
 
 // UpdateTagForNewRegistry rewrites an image reference to use a new registry
@@ -160,12 +161,109 @@ func NormalizeImageUrlAndTag(imageURL, tag string) (string, string, error) {
 			// this is a normal case, no duplicate tag
 		}
 	}
-	// TODO: find a good way to resolve unqualified URLs (e.g. nginx, library/nginx) to docker hub
-	// and now check if the imageURL has / in it, if now, we probably need to change it to docker hub
-	//slash := strings.LastIndex(imageURL, "/")
-	//if slash == -1 {
-	//	imageURL = "index.docker.io/" + imageURL
-	//}
+	// NOTE: We do NOT normalize unqualified Docker Hub references here.
+	// The normalization is available via NormalizeDockerReference() when explicitly needed
+	// (e.g., during download/upload operations), but the general purpose NormalizeImageUrlAndTag
+	// should preserve the original format for compatibility with existing code.
 
 	return tag, imageURL, nil
+}
+
+// normalizeDockerReferenceInternal converts unqualified Docker Hub references to fully qualified form
+// Examples:
+// "nginx" → "docker.io/library/nginx"
+// "library/nginx" → "docker.io/library/nginx"
+// "myuser/myimage" → "docker.io/myuser/myimage"
+// "quay.io/weka/image" → "quay.io/weka/image" (unchanged)
+// "localhost:5000/image" → "localhost:5000/image" (unchanged)
+func normalizeDockerReferenceInternal(imageRef string) string {
+	// First, strip any digest (sha256:...) or tag from the reference
+	imageRef = stripDigestAndTag(imageRef)
+
+	// If already has a registry (contains . or :), return as-is
+	if HasRegistry(imageRef) {
+		return imageRef
+	}
+
+	// Otherwise it's a Docker Hub reference that needs to be fully qualified
+	slashCount := strings.Count(imageRef, "/")
+
+	if slashCount == 0 {
+		// Simple image name (e.g., "nginx") → docker.io/library/nginx
+		return "docker.io/library/" + imageRef
+	} else if slashCount == 1 {
+		// Namespaced image (e.g., "myuser/myimage" or "library/nginx") → docker.io/myuser/myimage
+		return "docker.io/" + imageRef
+	}
+
+	// Should not reach here with valid Docker references, but return as-is if it does
+	return imageRef
+}
+
+// IsDockerHubReference returns true if the image reference points to Docker Hub
+// (i.e., it's an unqualified or library-prefixed Docker Hub image)
+func IsDockerHubReference(imageRef string) bool {
+	// Strip digest and tag first
+	imageRef = stripDigestAndTag(imageRef)
+
+	// If it has a registry indicator (. or :), it's not Docker Hub
+	return !HasRegistry(imageRef)
+}
+
+// HasRegistry returns true if the image reference specifies a registry
+// A registry is indicated by:
+// - A dot (.) in the first component (e.g., "quay.io", "registry.example.com")
+// - A colon in the first component (for port numbers, e.g., "localhost:5000")
+func HasRegistry(imageRef string) bool {
+	// Strip digest and tag to avoid false positives
+	imageRef = stripDigestAndTag(imageRef)
+
+	// Extract the first component (before the first /)
+	slashIndex := strings.Index(imageRef, "/")
+	if slashIndex == -1 {
+		// No slash means it's just an image name like "nginx" or digest like "sha256:abc"
+		// These don't have a registry
+		return false
+	}
+
+	firstComponent := imageRef[:slashIndex]
+
+	// Check if first component has registry indicators
+	// . indicates a domain (quay.io, registry.example.com)
+	// : indicates a port (localhost:5000, registry:5000)
+	return strings.Contains(firstComponent, ".") || strings.Contains(firstComponent, ":")
+}
+
+// stripDigestAndTag removes @sha256:... or :tag from the end of an image reference
+func stripDigestAndTag(imageRef string) string {
+	// Remove digest (@sha256:...)
+	if idx := strings.Index(imageRef, "@"); idx != -1 {
+		imageRef = imageRef[:idx]
+	}
+
+	// Remove tag (:tag) but be careful with registry ports (host:5000/image)
+	if idx := strings.LastIndex(imageRef, ":"); idx != -1 {
+		// Check if this colon is part of a registry port or a tag
+		// If there's a / after the colon, it's a port (host:5000/image)
+		// If there's no / after, it's a tag (image:v1)
+		if strings.Contains(imageRef[idx:], "/") {
+			// This is a port number, don't strip
+			return imageRef
+		}
+		// This is a tag, strip it
+		imageRef = imageRef[:idx]
+	}
+
+	return imageRef
+}
+
+// NormalizeDockerReference converts unqualified Docker Hub references to fully qualified form
+// This is a public wrapper around normalizeDockerReferenceInternal
+// Examples:
+// "nginx" → "docker.io/library/nginx"
+// "library/nginx" → "docker.io/library/nginx"
+// "myuser/myimage" → "docker.io/myuser/myimage"
+// "quay.io/weka/image" → "quay.io/weka/image" (unchanged)
+func NormalizeDockerReference(imageRef string) string {
+	return normalizeDockerReferenceInternal(imageRef)
 }
