@@ -3,6 +3,9 @@ package plan
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/weka/kubectl-weka/pkg/hostcheck"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
@@ -10,8 +13,6 @@ import (
 	"github.com/weka/kubectl-weka/pkg/wekaconfig"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
 	"k8s.io/api/core/v1"
-	"os"
-	"strings"
 )
 
 func ValidateAndPlanClient(ctx context.Context, clients *kubernetes.K8sClients, client *v1alpha1.WekaClient) error {
@@ -137,7 +138,7 @@ func ValidateAndPlanClient(ctx context.Context, clients *kubernetes.K8sClients, 
 	// Print placement details with resource allocation (reuses cluster function)
 	fmt.Println("\n=== Placement Details & Resource Allocation ===")
 	// Note: Clients don't allocate drives, so pass nil for hostChecksMap
-	printPlacementDetailsWithResourceAllocation(placements, matchingNodes, podsByNode, nil)
+	printPlacementDetailsWithResourceAllocation(placements, matchingNodes, podsByNode, nil, nil)
 
 	// Check if allocation is feasible
 	fmt.Println("\n=== Allocation Summary ===")

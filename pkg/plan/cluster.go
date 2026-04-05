@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"sort"
+	"strings"
+
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/weka/kubectl-weka/pkg/hostcheck"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
@@ -14,9 +18,6 @@ import (
 	"github.com/weka/kubectl-weka/pkg/wekaconfig"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
 	"k8s.io/api/core/v1"
-	"os"
-	"sort"
-	"strings"
 )
 
 func ValidateAndPlanCluster(ctx context.Context, clients *kubernetes.K8sClients, cluster *v1alpha1.WekaCluster) error {
@@ -244,6 +245,17 @@ func ValidateAndPlanCluster(ctx context.Context, clients *kubernetes.K8sClients,
 
 	fmt.Printf("✅ Collected pod data from cluster\n")
 
+	// Collect existing WekaContainer data for drive allocation tracking
+	var existingContainers []v1alpha1.WekaContainer
+	var containerList v1alpha1.WekaContainerList
+	if err := clients.CRClient.List(ctx, &containerList); err == nil {
+		existingContainers = containerList.Items
+		fmt.Printf("✅ Collected existing WekaContainer data (%d containers)\n", len(existingContainers))
+	} else {
+		fmt.Printf("⚠️ Could not retrieve existing WekaContainers: %v\n", err)
+		existingContainers = []v1alpha1.WekaContainer{}
+	}
+
 	fmt.Println("\n=== Nodes Matching Selection Criteria ===")
 	printNodesPerSelector(roleGrouping, cluster.Spec.NodeSelector, podsByNode)
 
@@ -284,7 +296,7 @@ func ValidateAndPlanCluster(ctx context.Context, clients *kubernetes.K8sClients,
 	}
 
 	fmt.Println("\n=== Placement Details & Resource Allocation ===")
-	printPlacementDetailsWithResourceAllocation(placement, allEligibleNodes, podsByNode, hostChecksMap)
+	printPlacementDetailsWithResourceAllocation(placement, allEligibleNodes, podsByNode, hostChecksMap, existingContainers)
 
 	// Final summary
 	if hasNotReadyNodes {
@@ -597,20 +609,34 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 
 			if !placed {
 				// Provide detailed error message about what's missing
-				errorMsg := fmt.Sprintf("could not place %s container %d - ", strings.ToLower(cType), i)
+				errorMsg := fmt.Sprintf("could not place %s container %d", strings.ToLower(cType), i)
 
 				if requiredDrives > 0 {
-					// Check how many nodes have enough drives
-					nodesWithEnoughDrives := 0
+					// Check which nodes have drives and why they couldn't accommodate this container
+					var nodeDetails []string
 					for _, node := range nodesForRole {
-						if getFreeDrivesCount(&node) >= requiredDrives {
-							nodesWithEnoughDrives++
+						freeDrives := getFreeDrivesCount(&node)
+
+						// Check why this node was rejected
+						if typeOnNode[cType][node.Name] {
+							nodeDetails = append(nodeDetails, fmt.Sprintf("%s (already has %s container)", node.Name, cType))
+						} else if existingRole, exists := nodeToRoleMap[node.Name]; exists && existingRole != cType {
+							nodeDetails = append(nodeDetails, fmt.Sprintf("%s (reserved for %s role)", node.Name, existingRole))
+						} else if freeDrives < requiredDrives {
+							nodeDetails = append(nodeDetails, fmt.Sprintf("%s (only %d of %d drives available)", node.Name, freeDrives, requiredDrives))
+						} else {
+							// Node has drives but failed for other resource reasons
+							nodeDetails = append(nodeDetails, fmt.Sprintf("%s (insufficient CPU/Memory/HP)", node.Name))
 						}
 					}
-					errorMsg += fmt.Sprintf("insufficient nodes with %d+ free drives (found %d nodes with enough drives, need %d total)",
-						requiredDrives, nodesWithEnoughDrives, len(containerList))
+
+					if len(nodeDetails) > 0 {
+						errorMsg += fmt.Sprintf(" - all nodes rejected:\n    %s", strings.Join(nodeDetails, "\n    "))
+					} else {
+						errorMsg += " - no nodes available for role"
+					}
 				} else {
-					errorMsg += "insufficient nodes or resources"
+					errorMsg += " - insufficient nodes or resources"
 				}
 
 				return nil, errors.New(errorMsg)
@@ -683,7 +709,7 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 }
 
 // printPlacementDetailsWithResourceAllocation shows containers placed on each node with resource allocation bars
-func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nodes []v1.Node, podsByNode map[string][]v1.Pod, hostChecksMap hostcheck.HostChecksMap) {
+func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nodes []v1.Node, podsByNode map[string][]v1.Pod, hostChecksMap hostcheck.HostChecksMap, existingContainers []v1alpha1.WekaContainer) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	t.AppendHeader(table.Row{
@@ -777,12 +803,12 @@ func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nod
 		// Drives bar (only show if node has drives)
 		if np.UsedDrives > 0 || hasNodeDrives(node, hostChecksMap) {
 			totalDrives := getNodeTotalDrives(node, hostChecksMap)
-			currentDrivesUsed := 0 // Drives used by existing pods (TODO: could track this if needed)
+			currentDrivesUsed := CalculateAllocatedDrives(existingContainers, nodeName)
 			wekaDrivesPercent := 0.0
 			if totalDrives > 0 {
 				wekaDrivesPercent = float64(np.UsedDrives) * 100.0 / float64(totalDrives)
 			}
-			// Create bar showing drive allocation (no "currently used" for drives)
+			// Create bar showing drive allocation (with currently allocated drives from existing containers)
 			drivesBar := createResourceBar(float64(currentDrivesUsed), wekaDrivesPercent, containerTypes)
 			resourceBarsStr += fmt.Sprintf("Drives: %s", drivesBar)
 		}

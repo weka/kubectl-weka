@@ -3,6 +3,8 @@ package plan
 import (
 	"context"
 	"fmt"
+	"os"
+
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/weka/kubectl-weka/pkg/hostcheck"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
@@ -11,7 +13,6 @@ import (
 	"github.com/weka/kubectl-weka/pkg/wekaconfig"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
 	"k8s.io/api/core/v1"
-	"os"
 )
 
 func ValidateAndPlanConverged(ctx context.Context, clients *kubernetes.K8sClients, cluster *v1alpha1.WekaCluster, client *v1alpha1.WekaClient) error {
@@ -28,6 +29,17 @@ func ValidateAndPlanConverged(ctx context.Context, clients *kubernetes.K8sClient
 	podsByNode := preflight.GetPodsMapByNode(ctx, clients.CRClient, nil)
 
 	fmt.Printf("✅ Collected pod data from cluster\n")
+
+	// Collect existing WekaContainer data for drive allocation tracking
+	var existingContainers []v1alpha1.WekaContainer
+	var containerList v1alpha1.WekaContainerList
+	if err := clients.CRClient.List(ctx, &containerList); err == nil {
+		existingContainers = containerList.Items
+		fmt.Printf("✅ Collected existing WekaContainer data (%d containers)\n", len(existingContainers))
+	} else {
+		fmt.Printf("⚠️ Could not retrieve existing WekaContainers: %v\n", err)
+		existingContainers = []v1alpha1.WekaContainer{}
+	}
 
 	// Calculate cluster container requirements
 	fmt.Println("\n=== Cluster Container Requirements ===")
@@ -143,7 +155,7 @@ func ValidateAndPlanConverged(ctx context.Context, clients *kubernetes.K8sClient
 
 	// Print converged placement details with drive information
 	fmt.Println("\n=== Converged Deployment Plan ===")
-	printConvergedPlacementDetails(convergedStates, hostChecksMap)
+	printConvergedPlacementDetails(convergedStates, hostChecksMap, existingContainers)
 
 	// Print summary
 	fmt.Println("\n=== Deployment Summary ===")
@@ -312,7 +324,7 @@ func simulateClientOnConverged(states map[string]*ConvergedNodeState, clientNode
 	return nil
 }
 
-func printConvergedPlacementDetails(states map[string]*ConvergedNodeState, hostChecksMap hostcheck.HostChecksMap) {
+func printConvergedPlacementDetails(states map[string]*ConvergedNodeState, hostChecksMap hostcheck.HostChecksMap, existingContainers []v1alpha1.WekaContainer) {
 	// Get sorted list of nodes that have any containers
 	var activeNodes []string
 	for nodeName, state := range states {
@@ -441,12 +453,12 @@ func printConvergedPlacementDetails(states map[string]*ConvergedNodeState, hostC
 		// Drives bar (only show if node has drives)
 		if state.ClusterUsedDrives > 0 || hasNodeDrives(state.Node, hostChecksMap) {
 			totalDrives := getNodeTotalDrives(state.Node, hostChecksMap)
-			currentDrivesUsed := 0 // Drives used by existing pods (TODO: could track this if needed)
+			currentDrivesUsed := CalculateAllocatedDrives(existingContainers, nodeName)
 			wekaDrivesPercent := 0.0
 			if totalDrives > 0 {
 				wekaDrivesPercent = float64(state.ClusterUsedDrives) * 100.0 / float64(totalDrives)
 			}
-			// Create bar showing drive allocation (no "currently used" for drives)
+			// Create bar showing drive allocation (with currently allocated drives from existing containers)
 			drivesBar := createResourceBar(float64(currentDrivesUsed), wekaDrivesPercent, containerTypes)
 			resourceBarsStr += fmt.Sprintf("Drives: %s", drivesBar)
 		}

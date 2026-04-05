@@ -402,3 +402,21 @@ func PrintNodeRequirements(nodeReqs []NodeRequirements) {
 		fmt.Printf("\n💡 Recommendation: At least 1 more node of the required capacity is recommended to provide fault tolerance.\n")
 	}
 }
+
+// CalculateAllocatedDrives counts the number of drives allocated to WEKA containers on the given node
+// It looks at all WekaContainers that are running on the node and sums up their allocated drives
+func CalculateAllocatedDrives(containers []wekaapi.WekaContainer, nodeName string) int {
+	totalDrives := 0
+
+	for _, container := range containers {
+		// Check if this container is running on the target node
+		if container.Spec.NodeAffinity != "" && string(container.Spec.NodeAffinity) == nodeName {
+			// Count the allocated drives from the container allocations
+			if container.Status.Allocations != nil {
+				totalDrives += len(container.Status.Allocations.Drives)
+			}
+		}
+	}
+
+	return totalDrives
+}
