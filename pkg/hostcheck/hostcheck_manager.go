@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/types"
 	"github.com/weka/kubectl-weka/pkg/utils"
-	"strings"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -389,9 +390,10 @@ func (hcm HostChecksMap) FormatSummary() string {
 // ============================================================================
 
 // GetHostChecksForNodes executes hostchecks on the specified nodes (or returns cached results)
-// This method is smart about caching:
-// - If nodes are already checked, returns cached results immediately
-// - If new nodes are requested, runs hostchecks only on new nodes
+// This method is smart about caching with boot ID validation:
+// - If nodes are cached and boot ID matches, returns cached results immediately
+// - If boot ID changed (node rebooted), invalidates cache and runs fresh hostchecks
+// - If new nodes are requested, runs hostchecks only on new/uncached nodes
 // - Filters out NotReady nodes (they can't run pods)
 // - Thread-safe for concurrent access
 func (r *HostCheckModuleRegistry) GetHostChecksForNodes(
@@ -415,9 +417,14 @@ func (r *HostCheckModuleRegistry) GetHostChecksForNodes(
 		return make(HostChecksMap), nil
 	}
 
-	// Check cache first (read lock)
-	r.cache.mu.RLock()
-	cacheHit := true
+	// Build node map for boot ID validation
+	nodeMap := make(map[string]*corev1.Node)
+	for i := range readyNodes {
+		nodeMap[readyNodes[i].Name] = &readyNodes[i]
+	}
+
+	// Check cache first with boot ID validation
+	validCached := r.resultCache.GetValidCacheEntries(nodeMap)
 	var uncachedNodes []corev1.Node
 
 	// Build set of requested node names (only ready nodes)
@@ -425,33 +432,22 @@ func (r *HostCheckModuleRegistry) GetHostChecksForNodes(
 	for _, node := range readyNodes {
 		requestedNodeNames[node.Name] = true
 
-		// Check if this node is in cache
-		if _, exists := r.cache.results[node.Name]; !exists {
-			cacheHit = false
+		// Check if this node has valid cached result (boot ID must match)
+		if _, exists := validCached[node.Name]; !exists {
 			uncachedNodes = append(uncachedNodes, node)
 		}
 	}
 
-	// If all nodes are cached, return immediately
-	if cacheHit {
-		// Build result map with only requested nodes
-		result := make(HostChecksMap)
-		for nodeName := range requestedNodeNames {
-			if cachedResult, exists := r.cache.results[nodeName]; exists {
-				result[nodeName] = cachedResult
-			}
-		}
-		r.cache.mu.RUnlock()
-
-		fmt.Printf("✅ Using cached hostcheck results for %d node(s)\n", len(result))
-		return result, nil
+	// If all nodes have valid cached results, return immediately
+	if len(uncachedNodes) == 0 {
+		fmt.Printf("✅ Using cached hostcheck results for %d node(s)\n", len(validCached))
+		return validCached, nil
 	}
-	r.cache.mu.RUnlock()
 
-	// Cache miss - need to run hostchecks on uncached nodes
-	if len(uncachedNodes) < len(nodes) {
-		fmt.Printf("⚙️  Using cached results for %d node(s), running hostchecks on %d new node(s)\n",
-			len(nodes)-len(uncachedNodes), len(uncachedNodes))
+	// Cache miss - need to run hostchecks on uncached/stale nodes
+	if len(validCached) > 0 {
+		fmt.Printf("⚙️  Using cached results for %d node(s), running hostchecks on %d new/updated node(s)\n",
+			len(validCached), len(uncachedNodes))
 	}
 
 	// Run hostchecks on uncached nodes with default options
@@ -466,33 +462,31 @@ func (r *HostCheckModuleRegistry) GetHostChecksForNodes(
 		return nil, fmt.Errorf("failed to run hostchecks: %w", err)
 	}
 
-	// Update cache (write lock)
-	r.cache.mu.Lock()
-	for nodeName, result := range newResults {
-		r.cache.results[nodeName] = result
-
-		// Add to tracked nodes if not already there
-		found := false
-		for _, n := range r.cache.nodes {
-			if n == nodeName {
-				found = true
-				break
-			}
-		}
-		if !found {
-			r.cache.nodes = append(r.cache.nodes, nodeName)
+	// Update cache with boot ID validation
+	for _, uncachedNode := range uncachedNodes {
+		if result, exists := newResults[uncachedNode.Name]; exists {
+			r.resultCache.Set(uncachedNode.Name, &uncachedNode, result)
 		}
 	}
-	r.cache.lastUpdated = time.Now()
 
 	// Build complete result map with both cached and new results
 	result := make(HostChecksMap)
-	for nodeName := range requestedNodeNames {
-		if cachedResult, exists := r.cache.results[nodeName]; exists {
-			result[nodeName] = cachedResult
-		}
+
+	// Add valid cached results
+	for nodeName, cachedResult := range validCached {
+		result[nodeName] = cachedResult
 	}
-	r.cache.mu.Unlock()
+
+	// Add newly collected results
+	for nodeName, newResult := range newResults {
+		result[nodeName] = newResult
+	}
+
+	// Save updated cache to disk for persistence
+	if err := r.SaveCacheToDisk(); err != nil {
+		// Log warning but don't fail - cache persistence is optional
+		fmt.Printf("⚠️  Warning: could not save cache to disk: %v\n", err)
+	}
 
 	return result, nil
 }

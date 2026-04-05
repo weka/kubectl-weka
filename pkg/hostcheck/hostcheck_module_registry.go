@@ -2,7 +2,8 @@ package hostcheck
 
 import (
 	"fmt"
-	"sync"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -30,23 +31,25 @@ type HostCheckModuleRegistry struct {
 	// Command configs: which modules each command validates against
 	commands map[string]*CommandHostCheckConfig
 
-	// Cache: cached hostcheck results to avoid re-running
-	cache struct {
-		mu          sync.RWMutex
-		results     HostChecksMap
-		nodes       []string // Node names that were checked
-		lastUpdated time.Time
-	}
+	// resultCache: cached hostcheck results with boot ID validation and disk persistence
+	resultCache *HostCheckResultCache
 }
 
 // NewHostCheckModuleRegistry creates a new registry
 func NewHostCheckModuleRegistry() *HostCheckModuleRegistry {
 	registry := &HostCheckModuleRegistry{
-		modules:  make(map[ModuleName]HostCheckModule),
-		order:    []ModuleName{},
-		commands: make(map[string]*CommandHostCheckConfig),
+		modules:     make(map[ModuleName]HostCheckModule),
+		order:       []ModuleName{},
+		commands:    make(map[string]*CommandHostCheckConfig),
+		resultCache: NewHostCheckResultCache(),
 	}
-	registry.cache.results = make(HostChecksMap)
+
+	// Load persisted cache from disk
+	if err := registry.LoadCacheFromDisk(); err != nil {
+		// Silently ignore load errors - cache will be rebuilt on next run
+		fmt.Printf("ℹ️  Starting with fresh hostcheck cache (could not load previous: %v)\n", err)
+	}
+
 	return registry
 }
 
@@ -150,20 +153,55 @@ func (r *HostCheckModuleRegistry) GetRequiredModules(commandName string) []Modul
 
 // ClearCache clears the hostcheck results cache
 func (r *HostCheckModuleRegistry) ClearCache() {
-	r.cache.mu.Lock()
-	defer r.cache.mu.Unlock()
-
-	r.cache.results = make(HostChecksMap)
-	r.cache.nodes = nil
-	r.cache.lastUpdated = time.Time{}
+	r.resultCache.InvalidateAll()
 }
 
 // GetCacheInfo returns information about the cache state
 func (r *HostCheckModuleRegistry) GetCacheInfo() (nodeCount int, lastUpdated time.Time) {
-	r.cache.mu.RLock()
-	defer r.cache.mu.RUnlock()
+	return r.resultCache.GetCacheSize(), time.Now()
+}
 
-	return len(r.cache.results), r.cache.lastUpdated
+// InvalidateCacheNode invalidates cache for a specific node (e.g., after a reboot)
+func (r *HostCheckModuleRegistry) InvalidateCacheNode(nodeName string) {
+	r.resultCache.InvalidateNode(nodeName)
+}
+
+// GetCacheStats returns detailed statistics about the cache
+func (r *HostCheckModuleRegistry) GetCacheStats() map[string]interface{} {
+	return r.resultCache.GetCacheStats()
+}
+
+// SaveCacheToDisk persists the current cache to disk
+// Cache is saved to ~/.keka/hostcheck_cache.json
+func (r *HostCheckModuleRegistry) SaveCacheToDisk() error {
+	cacheFile := GetCacheFilePath()
+	return r.resultCache.SaveToFile(cacheFile)
+}
+
+// LoadCacheFromDisk loads previously persisted cache from disk
+// Silently returns nil if cache file doesn't exist
+func (r *HostCheckModuleRegistry) LoadCacheFromDisk() error {
+	cacheFile := GetCacheFilePath()
+	return r.resultCache.LoadFromFile(cacheFile)
+}
+
+// GetCacheFilePath returns the standard cache file path (~/.weka/kubectl-weka/cache)
+func GetCacheFilePath() string {
+	homeDir, err := getHomeDir()
+	if err != nil {
+		// Fallback to /tmp if home directory not available
+		return "/tmp/.weka_kubectl_hostcheck_cache"
+	}
+	return filepath.Join(homeDir, ".weka", "kubectl-weka", "cache")
+}
+
+// getHomeDir returns the user's home directory
+func getHomeDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("could not determine home directory: %w", err)
+	}
+	return home, nil
 }
 
 // ============================================================================
