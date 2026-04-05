@@ -100,20 +100,43 @@ func ValidateAndPlanConverged(ctx context.Context, clients *kubernetes.K8sClient
 
 	// Get hostchecks for all eligible nodes (cached execution)
 	// This runs hostchecks on-demand and caches results for subsequent use
+	// IMPORTANT: Collect hostchecks for BOTH cluster and client nodes
+	// so that network validation works for both node sets
 	var hostChecksMap hostcheck.HostChecksMap
-	if cluster.Spec.Dynamic != nil && cluster.Spec.Dynamic.DriveContainers != nil &&
-		*cluster.Spec.Dynamic.DriveContainers > 0 && cluster.Spec.Dynamic.NumDrives > 0 {
-		fmt.Println("\n=== Detailed Drive Validation ===")
-		fmt.Println("Scanning nodes for NVMe drives...")
 
+	// Collect nodes that need hostcheck data: cluster nodes + client nodes
+	nodesNeedingHostChecks := make(map[string]bool)
+	for _, node := range allEligibleNodes {
+		nodesNeedingHostChecks[node.Name] = true
+	}
+	for _, node := range clientNodes {
+		nodesNeedingHostChecks[node.Name] = true
+	}
+
+	// Convert to list for hostcheck gathering
+	var nodesToCheck []v1.Node
+	for _, node := range nodes {
+		if nodesNeedingHostChecks[node.Name] {
+			nodesToCheck = append(nodesToCheck, node)
+		}
+	}
+
+	if len(nodesToCheck) > 0 {
 		var err error
-		hostChecksMap, err = hostcheck.GlobalHostCheckRegistry.GetHostChecksForNodes(ctx, clients, allEligibleNodes)
-		if err != nil {
+		hostChecksMap, err = hostcheck.GlobalHostCheckRegistry.GetHostChecksForNodes(ctx, clients, nodesToCheck)
+		if err != nil && cluster.Spec.Dynamic != nil && cluster.Spec.Dynamic.DriveContainers != nil &&
+			*cluster.Spec.Dynamic.DriveContainers > 0 && cluster.Spec.Dynamic.NumDrives > 0 {
 			fmt.Printf("⚠️ WARNING: Could not scan drives on all nodes: %v\n", err)
 			fmt.Println("   Falling back to basic drive validation...")
 			hostChecksMap = nil
-		} else if hostChecksMap != nil {
+		}
+
+		if hostChecksMap != nil && cluster.Spec.Dynamic != nil && cluster.Spec.Dynamic.DriveContainers != nil &&
+			*cluster.Spec.Dynamic.DriveContainers > 0 && cluster.Spec.Dynamic.NumDrives > 0 {
 			// Use detailed validation with hostcheck data
+			fmt.Println("\n=== Detailed Drive Validation ===")
+			fmt.Println("Scanning nodes for NVMe drives...")
+
 			// Get nodes that match the drive role selector for accurate validation
 			// This ensures validation counts only drives on nodes that will be used for placement
 			var driveRoleNodes []v1.Node
