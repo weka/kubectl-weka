@@ -21,6 +21,7 @@ type ProgressReader struct {
 	totalSize  int64
 	bytesRead  int64
 	category   string
+	operation  string
 	lastUpdate time.Time
 	updateFreq time.Duration
 	mu         sync.Mutex
@@ -32,6 +33,7 @@ func NewProgressReader(r io.Reader, totalSize int64, category string) *ProgressR
 		reader:     r,
 		totalSize:  totalSize,
 		category:   category,
+		operation:  "Extracting...",
 		updateFreq: 100 * time.Millisecond, // Update every 100ms
 		lastUpdate: time.Now(),
 	}
@@ -45,7 +47,7 @@ func (pr *ProgressReader) Read(p []byte) (n int, err error) {
 		pr.bytesRead += int64(n)
 		// Update progress periodically
 		if time.Since(pr.lastUpdate) >= pr.updateFreq {
-			progress.RenderProgress(pr.bytesRead, pr.totalSize, pr.category, "Extracting...")
+			progress.RenderProgress(pr.bytesRead, pr.totalSize, pr.category, pr.operation)
 			pr.lastUpdate = time.Now()
 		}
 		pr.mu.Unlock()
@@ -53,46 +55,18 @@ func (pr *ProgressReader) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
+// SetOperation updates the current operation description
+func (pr *ProgressReader) SetOperation(op string) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	pr.operation = op
+}
+
 // BytesRead returns the total bytes read so far
 func (pr *ProgressReader) BytesRead() int64 {
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
 	return pr.bytesRead
-}
-
-// TrackingReader wraps a reader and calls a callback periodically
-type TrackingReader struct {
-	reader    io.Reader
-	callback  func()
-	bytesRead int64
-	lastCall  time.Time
-	freq      time.Duration
-}
-
-// NewTrackingReader creates a new tracking reader with callback
-func NewTrackingReader(r io.Reader, callback func()) *TrackingReader {
-	return &TrackingReader{
-		reader:   r,
-		callback: callback,
-		lastCall: time.Now(),
-		freq:     100 * time.Millisecond, // Call every 100ms
-	}
-}
-
-// Read implements io.Reader
-func (tr *TrackingReader) Read(p []byte) (n int, err error) {
-	n, err = tr.reader.Read(p)
-	if n > 0 {
-		tr.bytesRead += int64(n)
-		// Call callback periodically
-		if time.Since(tr.lastCall) >= tr.freq {
-			if tr.callback != nil {
-				tr.callback()
-			}
-			tr.lastCall = time.Now()
-		}
-	}
-	return n, err
 }
 
 // Extract extracts a tar.gz file to a destination directory with progress tracking
@@ -126,7 +100,6 @@ func Extract(ctx context.Context, tarGzPath string, destDir string) error {
 	}()
 
 	tr := tar.NewReader(gr)
-	lastFileName := ""
 
 	for {
 		header, err := tr.Next()
@@ -139,7 +112,7 @@ func Extract(ctx context.Context, tarGzPath string, destDir string) error {
 		}
 
 		targetPath := filepath.Join(destDir, header.Name)
-		lastFileName = filepath.Base(header.Name)
+		fileName := filepath.Base(header.Name)
 
 		// Prevent directory traversal attacks
 		if !strings.HasPrefix(filepath.Clean(targetPath), filepath.Clean(destDir)) {
@@ -153,6 +126,9 @@ func Extract(ctx context.Context, tarGzPath string, destDir string) error {
 			}
 
 		case tar.TypeReg:
+			// Update progress with current filename
+			progReader.SetOperation("Extracting " + fileName)
+
 			// Create parent directories if needed
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 				return fmt.Errorf("create parent directory for %q: %w", targetPath, err)
@@ -164,12 +140,9 @@ func Extract(ctx context.Context, tarGzPath string, destDir string) error {
 				return fmt.Errorf("create file %q: %w", targetPath, err)
 			}
 
-			// Use trackingReader to update progress during file write
-			trackReader := NewTrackingReader(tr, func() {
-				progress.RenderProgress(progReader.BytesRead(), totalSize, "extract", "Extracting "+lastFileName)
-			})
-
-			if _, err := io.Copy(outFile, trackReader); err != nil {
+			// Copy directly without extra progress tracking
+			// Progress is already tracked by ProgressReader during gzip decompression
+			if _, err := io.Copy(outFile, tr); err != nil {
 				_ = outFile.Close()
 				return fmt.Errorf("write file %q: %w", targetPath, err)
 			}
@@ -183,8 +156,6 @@ func Extract(ctx context.Context, tarGzPath string, destDir string) error {
 				logger.Warn("failed to set file permissions", "file", targetPath, "error", err)
 			}
 
-			// Flush progress immediately after extracting each file
-			progress.RenderProgress(progReader.BytesRead(), totalSize, "extract", "Extracting "+lastFileName)
 
 		default:
 			logger.Warn("skipping unsupported tar entry type", "type", header.Typeflag, "name", header.Name)
