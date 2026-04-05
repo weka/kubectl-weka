@@ -9,7 +9,6 @@ import (
 	"github.com/weka/kubectl-weka/pkg/hostcheck"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/preflight"
-	"github.com/weka/kubectl-weka/pkg/utils"
 	"github.com/weka/kubectl-weka/pkg/wekaconfig"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
 	"k8s.io/api/core/v1"
@@ -115,7 +114,24 @@ func ValidateAndPlanConverged(ctx context.Context, clients *kubernetes.K8sClient
 			hostChecksMap = nil
 		} else if hostChecksMap != nil {
 			// Use detailed validation with hostcheck data
-			if err := validateDrivesDetailed(hostChecksMap, allEligibleNodes,
+			// Get nodes that match the drive role selector for accurate validation
+			// This ensures validation counts only drives on nodes that will be used for placement
+			var driveRoleNodes []v1.Node
+			if roleGrouping.ByRole != nil {
+				if driveRole, ok := roleGrouping.ByRole["drive"]; ok {
+					driveRoleNodes = append(driveRoleNodes, driveRole.Nodes...)
+				}
+			}
+			// Add global nodes (they go to all roles)
+			for _, node := range roleGrouping.Global {
+				driveRoleNodes = append(driveRoleNodes, node)
+			}
+
+			// Validate with only nodes that will be used for drive placement
+			// This ensures validation matches what placement will actually try
+			// Pass allEligibleNodes as well to check if drives exist elsewhere
+
+			if err := validateDrivesDetailed(hostChecksMap, driveRoleNodes, allEligibleNodes,
 				*cluster.Spec.Dynamic.DriveContainers,
 				cluster.Spec.Dynamic.NumDrives); err != nil {
 				return err
@@ -363,7 +379,7 @@ func printConvergedPlacementDetails(states map[string]*ConvergedNodeState, hostC
 
 		// Show cluster containers
 		for _, pc := range state.ClusterContainers {
-			coloredType := utils.ColorizeContainerType(pc.Type)
+			coloredType := createContainerLegend(pc.Type)
 			if pc.Drives > 0 {
 				containersStr += fmt.Sprintf("%s [CORES: %d, RAM: %.1fGi, HP: %.1fGi, DRIVES: %d]\n",
 					coloredType, pc.Cores, float64(pc.Memory)/1024, float64(pc.Hugepages)/1024, pc.Drives)
@@ -375,7 +391,7 @@ func printConvergedPlacementDetails(states map[string]*ConvergedNodeState, hostC
 
 		// Show client containers
 		for _, pc := range state.ClientContainers {
-			coloredType := utils.ColorizeContainerType(pc.Type)
+			coloredType := createContainerLegend(pc.Type)
 			containersStr += fmt.Sprintf("%s [CORES: %d, RAM: %.1fGi, HP: %.1fGi]",
 				coloredType, pc.Cores, float64(pc.Memory)/1024, float64(pc.Hugepages)/1024)
 		}

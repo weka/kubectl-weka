@@ -2,14 +2,17 @@ package plan
 
 import (
 	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
+	"github.com/weka/kubectl-weka/pkg/types"
 	"github.com/weka/kubectl-weka/pkg/utils"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/kubernetes/scheme"
-	"sort"
 )
 
 func printNodeSelectorSummary(grouping RoleNodeGrouping, globalSelector map[string]string) {
@@ -76,4 +79,49 @@ func ParseWekaResourceFile[T runtime.Object](filePath string) (T, error) {
 	}
 
 	return result, nil
+}
+
+// createContainerLegend returns a colored version of the container type name
+func createContainerLegend(containerType string) string {
+	var color string
+	switch containerType {
+	case "compute":
+		color = types.ColorCompute
+	case "drive":
+		color = types.ColorDrive
+	case "s3":
+		color = types.ColorS3
+	case "nfs":
+		color = types.ColorNFS
+	case "envoy":
+		color = types.ColorEnvoy
+	case "client":
+		color = types.ColorClient
+	default:
+		color = types.ColorUsed
+	}
+	return color + strings.Repeat(getContainerPattern(containerType), 2) + " " + types.ColorReset + utils.CapitalizeFirst(containerType)
+}
+
+// createResourceBar creates a visual bar showing USED + WEKA + FREE with colors for each container type
+// getContainerPattern returns a unique pattern character for each container type
+// Uses only full block and shades for easy readability in B/W
+func getContainerPattern(cType string) string {
+	// ⣿ ░ ▒ ▓ █ █ █ █
+	switch cType {
+	case "compute":
+		return "█" // Full block
+	case "drive":
+		return "▒" // Dark shade
+	case "s3":
+		return "▓" // Medium shade
+	case "nfs":
+		return "█" // Light shade
+	case "envoy":
+		return "░" // Dark shade
+	case "client":
+		return "⣿" // Light shade
+	default:
+		return "█" // Full block as default
+	}
 }

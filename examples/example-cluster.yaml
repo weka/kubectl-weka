@@ -7,16 +7,16 @@ spec:
   cpuPolicy: auto
   driversDistService: https://10.240.200.5:14000
   dynamicTemplate:
-    computeContainers: 8
-    computeCores: 12
-    driveContainers: 8
-    driveCores: 4
+    computeContainers: 4
+    computeCores: 1
+    driveContainers: 4
+    driveCores: 1
     numDrives: 1
     nfsContainers: 2
-    nfsCores: 2
-    s3Cores: 4
-    s3Containers: 3
-    s3ExtraCores: 4
+    nfsCores: 1
+    s3Cores: 1
+    s3Containers: 1
+    s3ExtraCores: 1
 
   gracefulDestroyDuration: 3s
   hotSpare: 0
@@ -25,10 +25,10 @@ spec:
   network:
     ethDevice: enp99s0f0np0
   nodeSelector:
-    weka.io/dedicated: longevity
+    weka.io/dedicated: infra
   roleNodeSelector:
     s3:
-      weka.io/dedicated: infra
+      weka.io/dedicated: longevity
 
   template: dynamic
   rawTolerations:

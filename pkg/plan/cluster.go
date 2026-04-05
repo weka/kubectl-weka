@@ -13,11 +13,11 @@ import (
 	"github.com/weka/kubectl-weka/pkg/hostcheck"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/preflight"
-	"github.com/weka/kubectl-weka/pkg/types"
+	"github.com/weka/kubectl-weka/pkg/printer"
 	"github.com/weka/kubectl-weka/pkg/utils"
 	"github.com/weka/kubectl-weka/pkg/wekaconfig"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 )
 
 func ValidateAndPlanCluster(ctx context.Context, clients *kubernetes.K8sClients, cluster *v1alpha1.WekaCluster) error {
@@ -67,11 +67,8 @@ func ValidateAndPlanCluster(ctx context.Context, clients *kubernetes.K8sClients,
 	}
 
 	if config.DriveContainers != nil && *config.DriveContainers > 0 {
-		if nodes != nil {
-			if err := validateDrives(nodes, *config.DriveContainers, config.NumDrives); err != nil {
-				return err
-			}
-		}
+		// Drive validation is deferred to detailed validation phase (line 278)
+		// which has actual hostcheck data. Basic validation without hostcheck is unreliable.
 
 		req := calculateDriveRequirements(
 			config.DriveCores,
@@ -274,8 +271,23 @@ func ValidateAndPlanCluster(ctx context.Context, clients *kubernetes.K8sClients,
 			fmt.Println("   Falling back to basic drive validation...")
 			hostChecksMap = nil
 		} else if hostChecksMap != nil {
-			// Use detailed validation with hostcheck data
-			if err := validateDrivesDetailed(hostChecksMap, allEligibleNodes, *config.DriveContainers, config.NumDrives); err != nil {
+			// Get nodes that match the drive role selector for accurate validation
+			// This ensures validation counts only drives on nodes that will be used for placement
+			var driveRoleNodes []v1.Node
+			if roleGrouping.ByRole != nil {
+				if driveRole, ok := roleGrouping.ByRole["drive"]; ok {
+					driveRoleNodes = append(driveRoleNodes, driveRole.Nodes...)
+				}
+			}
+			// Add global nodes (they go to all roles)
+			for _, node := range roleGrouping.Global {
+				driveRoleNodes = append(driveRoleNodes, node)
+			}
+
+			// Validate with only nodes that will be used for drive placement
+			// This ensures validation matches what placement will actually try
+			// Pass allEligibleNodes as well to check if drives exist elsewhere
+			if err := validateDrivesDetailed(hostChecksMap, driveRoleNodes, allEligibleNodes, *config.DriveContainers, config.NumDrives); err != nil {
 				return err
 			}
 		}
@@ -329,6 +341,18 @@ func ValidateAndPlanCluster(ctx context.Context, clients *kubernetes.K8sClients,
 // simulatePlacement simulates allocation of containers to nodes with anti-affinity rules and drive constraints
 func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequirements, podsByNode map[string][]v1.Pod, hostChecksMap hostcheck.HostChecksMap) ([]NodePlacement, error) {
 	var placements []NodePlacement
+
+	// DEBUG: Show which nodes have hostcheck data
+	if len(containers) > 0 && containers[0].Drives > 0 {
+		fmt.Println("DEBUG: Hostcheck data available for nodes:")
+		if hostChecksMap == nil || len(hostChecksMap) == 0 {
+			fmt.Println("  (no hostcheck data available)")
+		} else {
+			for nodeName := range hostChecksMap {
+				fmt.Printf("  - %s\n", nodeName)
+			}
+		}
+	}
 
 	// Expand containers based on Count field to create individual container entries
 	var expandedContainers []ContainerRequirements
@@ -392,18 +416,12 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 	}
 	fmt.Println()
 
-	// Track which nodes belong to which role's nodeSelector to prevent cross-selector placement
-	nodeToRoleMap := make(map[string]string) // nodeName -> role that "owns" this node
-
 	// Helper function to get available free drives on a node
+	// Must match the validation logic: physical + annotated (signed) drives
 	getFreeDrivesCount := func(node *v1.Node) int {
-		// First try to get from hostcheck data (most accurate - physical + signed + unmounted)
 		if hostChecksMap != nil {
 			if hc, ok := hostChecksMap[node.Name]; ok {
-				// Count drives that are physical, signed, and not mounted
-				freeCount := 0
-
-				// Build annotation map
+				// Build annotated drives set (from node annotation) - these are "signed" drives
 				annotatedMap := make(map[string]bool)
 				if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
 					var drives []string
@@ -414,42 +432,45 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 					}
 				}
 
-				// Count drives that are physical + signed + not mounted
+				// Count free drives: physical + signed (don't check mounted status)
+				// This matches the validation logic which counts physical+annotated as free
+				freeCount := 0
 				for _, drive := range hc.NVMeDrives {
-					if drive.SerialNumber != "" && annotatedMap[drive.SerialNumber] && !drive.Mounted {
+					if drive.SerialNumber != "" && annotatedMap[drive.SerialNumber] {
 						freeCount++
 					}
 				}
 
-				// Subtract already allocated drives from simulation
+				// Subtract drives already allocated during this simulation
 				if alreadyUsed, ok := nodeDrivesUsed[node.Name]; ok {
 					freeCount -= alreadyUsed
 				}
 
 				return freeCount
+			} else {
+				// Node not in hostChecksMap - will use fallback
+				// This can happen if hostcheck failed for this node
 			}
 		}
 
-		// Fallback to allocatable resources
+		// Fallback 1: Use allocatable quantity
 		if drivesQuantity, ok := node.Status.Allocatable["weka.io/drives"]; ok {
-			freeDrives := int(drivesQuantity.Value())
-			// Subtract already allocated drives from simulation
+			freeCount := int(drivesQuantity.Value())
 			if alreadyUsed, ok := nodeDrivesUsed[node.Name]; ok {
-				freeDrives -= alreadyUsed
+				freeCount -= alreadyUsed
 			}
-			return freeDrives
+			return freeCount
 		}
 
-		// Last resort: annotation count
+		// Fallback 2: Count annotated drives
 		if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
 			var drives []string
 			if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
-				freeDrives := len(drives)
-				// Subtract already allocated drives from simulation
+				freeCount := len(drives)
 				if alreadyUsed, ok := nodeDrivesUsed[node.Name]; ok {
-					freeDrives -= alreadyUsed
+					freeCount -= alreadyUsed
 				}
-				return freeDrives
+				return freeCount
 			}
 		}
 
@@ -499,6 +520,30 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 		// Get nodes available for this role (respecting nodeSelector)
 		nodesForRole := roleNodeMap[cType]
 
+		// For drive containers, pre-filter nodes to only those with available drives
+		// This avoids wasting time checking hundreds of nodes without drives
+		if cType == "drive" {
+			// Check if this container type requires drives
+			var needsDrives int
+			if len(containerList) > 0 {
+				needsDrives = containerList[0].Drives
+			}
+
+			if needsDrives > 0 {
+				var nodesWithDrives []v1.Node
+				for _, node := range nodesForRole {
+					freeDrives := getFreeDrivesCount(&node)
+					if freeDrives > 0 {
+						nodesWithDrives = append(nodesWithDrives, node)
+					}
+				}
+				if len(nodesWithDrives) > 0 {
+					nodesForRole = nodesWithDrives
+				}
+				// If no nodes with drives, let placement error handling report it
+			}
+		}
+
 		fmt.Printf("Allocating %d %s container(s):\n", len(containerList), strings.ToLower(cType))
 
 		for i := 0; i < len(containerList); i++ {
@@ -517,35 +562,29 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 					continue
 				}
 
-				// Check if node is already "owned" by a different role's nodeSelector
-				// This prevents mixing containers from different nodeSelectors on same node
-				if existingRole, exists := nodeToRoleMap[node.Name]; exists && existingRole != cType {
-					continue
-				}
-
-				// For backend containers (Compute/Drive), they can share nodes with each other
-				// For frontend containers (S3/NFS), each type must be on separate nodes
+				// Protocol coexistence rules:
+				// - Storage (compute/drive): can coexist with anything
+				// - Access (s3/nfs) and client: cannot coexist with each other
 				canPlace := true
 				if nodeContainerTypes[node.Name] != nil {
 					// Check what's already on this node
-					hasCompute := nodeContainerTypes[node.Name]["compute"]
-					hasDrive := nodeContainerTypes[node.Name]["drive"]
 					hasS3 := nodeContainerTypes[node.Name]["s3"]
 					hasNFS := nodeContainerTypes[node.Name]["nfs"]
+					hasClient := nodeContainerTypes[node.Name]["client"]
 
 					switch cType {
-					case "compute":
-						// Compute can share with Drive only (both backend)
-						canPlace = !hasS3 && !hasNFS
-					case "drive":
-						// Drive can share with Compute only (both backend)
-						canPlace = !hasS3 && !hasNFS
+					case "compute", "drive":
+						// Storage protocols (compute/drive) can share with everything
+						canPlace = true
 					case "s3":
-						// S3 cannot share with any other protocol
-						canPlace = !hasCompute && !hasDrive && !hasNFS
+						// S3 cannot share with NFS or Client
+						canPlace = !hasNFS && !hasClient
 					case "nfs":
-						// NFS cannot share with any other protocol
-						canPlace = !hasCompute && !hasDrive && !hasS3
+						// NFS cannot share with S3 or Client
+						canPlace = !hasS3 && !hasClient
+					case "client":
+						// Client cannot share with S3 or NFS
+						canPlace = !hasS3 && !hasNFS
 					}
 				}
 
@@ -593,7 +632,6 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 
 				typeOnNode[cType][node.Name] = true
 				nodeContainerTypes[node.Name][cType] = true
-				nodeToRoleMap[node.Name] = cType
 				placed = true
 
 				// Print placement details with lowercase container type
@@ -620,13 +658,11 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 						// Check why this node was rejected
 						if typeOnNode[cType][node.Name] {
 							nodeDetails = append(nodeDetails, fmt.Sprintf("%s (already has %s container)", node.Name, cType))
-						} else if existingRole, exists := nodeToRoleMap[node.Name]; exists && existingRole != cType {
-							nodeDetails = append(nodeDetails, fmt.Sprintf("%s (reserved for %s role)", node.Name, existingRole))
 						} else if freeDrives < requiredDrives {
 							nodeDetails = append(nodeDetails, fmt.Sprintf("%s (only %d of %d drives available)", node.Name, freeDrives, requiredDrives))
 						} else {
-							// Node has drives but failed for other resource reasons
-							nodeDetails = append(nodeDetails, fmt.Sprintf("%s (insufficient CPU/Memory/HP)", node.Name))
+							// Node has drives but failed for protocol compatibility or resource reasons
+							nodeDetails = append(nodeDetails, fmt.Sprintf("%s (protocol conflict or insufficient CPU/Memory/HP)", node.Name))
 						}
 					}
 
@@ -710,13 +746,15 @@ func simulatePlacement(nodeGrouping RoleNodeGrouping, containers []ContainerRequ
 
 // printPlacementDetailsWithResourceAllocation shows containers placed on each node with resource allocation bars
 func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nodes []v1.Node, podsByNode map[string][]v1.Pod, hostChecksMap hostcheck.HostChecksMap, existingContainers []v1alpha1.WekaContainer) {
-	t := table.NewWriter()
-	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{
-		"NODE",
-		"CONTAINERS & RESOURCES",
-		"RESOURCE ALLOCATION",
-	})
+
+	// Build table rows for placement details
+	placementCols := []printer.TableColumn{
+		{Name: "NODE", VisibleInWide: false},
+		{Name: "CONTAINERS & RESOURCES", VisibleInWide: false},
+		{Name: "RESOURCE ALLOCATION", VisibleInWide: false},
+	}
+
+	placementRows := []printer.TableRow{}
 
 	// Create a map of placements for quick lookup
 	placementMap := make(map[string]*NodePlacement)
@@ -741,33 +779,73 @@ func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nod
 		}
 
 		// Format containers information with colors - list all container types for color
-		containersStr := ""
 		containerTypes := []string{}
 
-		// Add ALREADY_USED section showing current pod usage
+		// Add ALREADY_USED section showing current pod usage (always show)
 		currentUsedCPU := CalculatePodResourceUsage(podsByNode[nodeName], v1.ResourceCPU)
 		currentUsedMem := CalculatePodResourceUsage(podsByNode[nodeName], v1.ResourceMemory)
 		currentUsedHP := CalculatePodResourceUsage(podsByNode[nodeName], "hugepages-2Mi")
 
-		if currentUsedCPU.MilliValue() > 0 || currentUsedMem.Value() > 0 || currentUsedHP.Value() > 0 {
-			containersStr += fmt.Sprintf("%s<ALREADY_USED>%s [CORES: %.1f, RAM: %.1fGi, HP: %.1fGi]\n",
-				types.ColorUsed, types.ColorReset,
-				float64(currentUsedCPU.MilliValue())/1000,
-				float64(currentUsedMem.Value())/(1024*1024*1024),
-				float64(currentUsedHP.Value())/(1024*1024*1024))
+		// Build container subtable using printer.TablePrinter
+		containerCols := []printer.TableColumn{
+			{Name: "COMPONENT", VisibleInWide: false},
+			{Name: "CORES", VisibleInWide: false},
+			{Name: "RAM", VisibleInWide: false},
+			{Name: "HP", VisibleInWide: false},
+			{Name: "DRIVES", VisibleInWide: false},
 		}
 
-		for _, pc := range np.Containers {
-			coloredType := utils.ColorizeContainerType(pc.Type)
-			if pc.Drives > 0 {
-				containersStr += fmt.Sprintf("%s [CORES: %d, RAM: %.1fGi, HP: %.1fGi, DRIVES: %d]\n",
-					coloredType, pc.Cores, float64(pc.Memory)/1024, float64(pc.Hugepages)/1024, pc.Drives)
-			} else {
-				containersStr += fmt.Sprintf("%s [CORES: %d, RAM: %.1fGi, HP: %.1fGi]\n",
-					coloredType, pc.Cores, float64(pc.Memory)/1024, float64(pc.Hugepages)/1024)
-			}
-			containerTypes = append(containerTypes, pc.Type)
+		containerRows := []printer.TableRow{}
+
+		// Add ALREADY_USED row
+		// Recalculate drives used to ensure accuracy
+		drivesUsedByOthers := CalculateAllocatedDrives(existingContainers, nodeName)
+		drivesStr := "-"
+		if drivesUsedByOthers > 0 {
+			drivesStr = fmt.Sprintf("%d", drivesUsedByOthers)
 		}
+
+		containerRows = append(containerRows, printer.TableRow{
+			Values: map[string]interface{}{
+				"COMPONENT": createContainerLegend("<ALREADY_USED>"),
+				"CORES":     fmt.Sprintf("%.1f", float64(currentUsedCPU.MilliValue())/1000),
+				"RAM":       fmt.Sprintf("%.1fGi", float64(currentUsedMem.Value())/(1024*1024*1024)),
+				"HP":        fmt.Sprintf("%.1fGi", float64(currentUsedHP.Value())/(1024*1024*1024)),
+				"DRIVES":    drivesStr,
+			},
+		})
+
+		// Add each container row with unique legend of color and pattern
+		for _, pc := range np.Containers {
+			drivesStr := "-"
+			if pc.Drives > 0 {
+				drivesStr = fmt.Sprintf("%d", pc.Drives)
+			}
+			containerRows = append(containerRows, printer.TableRow{
+				Values: map[string]interface{}{
+					"COMPONENT": createContainerLegend(pc.Type),
+					"CORES":     fmt.Sprintf("%d", pc.Cores),
+					"RAM":       fmt.Sprintf("%.1fGi", float64(pc.Memory)/1024),
+					"HP":        fmt.Sprintf("%.1fGi", float64(pc.Hugepages)/1024),
+					"DRIVES":    drivesStr,
+				},
+			})
+			// Only add to containerTypes if this type uses resources on this node
+			if pc.Cores > 0 || pc.Memory > 0 || pc.Hugepages > 0 || pc.Drives > 0 {
+				containerTypes = append(containerTypes, pc.Type)
+			}
+		}
+
+		// Render container table to string
+		containerPrinter := &printer.TablePrinter{}
+		containerPrinter.SetOptions(printer.PrinterOptions{
+			ShowHeader: true,
+			TableStyle: printer.TableStyleMinimal,
+		})
+
+		sb := &strings.Builder{}
+		_ = containerPrinter.Print(containerCols, containerRows, sb)
+		containersStr := strings.TrimSpace(sb.String())
 
 		// Get allocatable resources from node
 		allocCores := kubernetes.QuantityOrZero(node.Status.Allocatable, v1.ResourceCPU)
@@ -803,26 +881,49 @@ func printPlacementDetailsWithResourceAllocation(placements []NodePlacement, nod
 		// Drives bar (only show if node has drives)
 		if np.UsedDrives > 0 || hasNodeDrives(node, hostChecksMap) {
 			totalDrives := getNodeTotalDrives(node, hostChecksMap)
-			currentDrivesUsed := CalculateAllocatedDrives(existingContainers, nodeName)
+
+			// Calculate percentages for the bar
+			currentDrivesPercent := 0.0
 			wekaDrivesPercent := 0.0
+			// For drives bar, only include container types that actually use drives
+			var driveContainerTypes []string
+			for _, pc := range np.Containers {
+				if pc.Drives > 0 {
+					driveContainerTypes = append(driveContainerTypes, pc.Type)
+				}
+			}
+
 			if totalDrives > 0 {
+				// Drives already used by other WEKA clusters - recalculate to be sure
+				drivesUsedByOthers := CalculateAllocatedDrives(existingContainers, nodeName)
+				// Drives used by THIS deployment
+				currentDrivesPercent = float64(drivesUsedByOthers) * 100.0 / float64(totalDrives)
 				wekaDrivesPercent = float64(np.UsedDrives) * 100.0 / float64(totalDrives)
 			}
-			// Create bar showing drive allocation (with currently allocated drives from existing containers)
-			drivesBar := createResourceBar(float64(currentDrivesUsed), wekaDrivesPercent, containerTypes)
+
+			// Create bar showing drive allocation (used from other clusters + used by this deployment)
+			// Use only drive container types, not all types
+			drivesBar := createResourceBar(currentDrivesPercent, wekaDrivesPercent, driveContainerTypes)
 			resourceBarsStr += fmt.Sprintf("Drives: %s", drivesBar)
 		}
 
-		t.AppendRow(table.Row{
-			nodeName,
-			containersStr,
-			resourceBarsStr,
+		placementRows = append(placementRows, printer.TableRow{
+			Values: map[string]interface{}{
+				"NODE":                   nodeName,
+				"CONTAINERS & RESOURCES": containersStr,
+				"RESOURCE ALLOCATION":    resourceBarsStr,
+			},
 		})
-		t.AppendSeparator()
 	}
 
-	t.SetStyle(table.StyleLight)
-	t.Render()
+	// Render placement table using printer.TablePrinter
+	placementPrinter := &printer.TablePrinter{}
+	placementPrinter.SetOptions(printer.PrinterOptions{
+		ShowHeader:        true,
+		TableStyle:        printer.TableStyleRoundedBox,
+		PrintRowSeparator: true,
+	})
+	_ = placementPrinter.Print(placementCols, placementRows, os.Stdout)
 }
 
 // hasNodeDrives checks if a node has any drives available
@@ -895,42 +996,10 @@ func getNodeTotalDrives(node *v1.Node, hostChecksMap hostcheck.HostChecksMap) in
 	return 0
 }
 
-func validateDrives(nodes []v1.Node, driveContainers, numDrives int) error {
-	totalDrivesNeeded := driveContainers * numDrives
-	if totalDrivesNeeded == 0 {
-		return nil
-	}
-
-	totalDrivesAvailable := 0
-	for _, node := range nodes {
-		// Count drives from allocatable resources first
-		if drivesQuantity, ok := node.Status.Allocatable["weka.io/drives"]; ok {
-			totalDrivesAvailable += int(drivesQuantity.Value())
-		} else if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
-			// Fallback to annotation if allocatable not set
-			var drives []string
-			if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
-				totalDrivesAvailable += len(drives)
-			}
-		}
-	}
-
-	if totalDrivesAvailable == 0 {
-		return fmt.Errorf("❌ No NVMe drives suitable for WEKA deployment found in cluster.\n" +
-			"   Make sure that drives were signed by applying DriveSign WekaPolicy first")
-	}
-
-	if totalDrivesAvailable < totalDrivesNeeded {
-		return fmt.Errorf("❌ Insufficient drives: need %d drives (%d containers × %d drives/container), but only %d available",
-			totalDrivesNeeded, driveContainers, numDrives, totalDrivesAvailable)
-	}
-
-	return nil
-}
-
 // validateDrivesDetailed performs detailed drive validation using hostcheck data
 // This function analyzes physical drives vs annotated drives vs allocated drives
-func validateDrivesDetailed(hostChecksMap hostcheck.HostChecksMap, nodes []v1.Node, driveContainers, numDrives int) error {
+// This is the ONLY reliable validation since it checks what the kernel actually sees (physical drives)
+func validateDrivesDetailed(hostChecksMap hostcheck.HostChecksMap, nodes []v1.Node, allNodes []v1.Node, driveContainers, numDrives int) error {
 	totalDrivesNeeded := driveContainers * numDrives
 	if totalDrivesNeeded == 0 {
 		return nil
@@ -944,6 +1013,7 @@ func validateDrivesDetailed(hostChecksMap hostcheck.HostChecksMap, nodes []v1.No
 		FreeDrives        []string // Drives that are physical + annotated but not mounted
 		UnsignedDrives    []string // Drives that are physical but not annotated
 		MissingDrives     []string // Drives that are annotated but not physical (used)
+		IsReady           bool     // Whether node is in Ready state
 	}
 
 	var nodeStatuses []NodeDriveStatus
@@ -953,6 +1023,16 @@ func validateDrivesDetailed(hostChecksMap hostcheck.HostChecksMap, nodes []v1.No
 	for _, node := range nodes {
 		status := NodeDriveStatus{
 			NodeName: node.Name,
+			IsReady:  kubernetes.IsNodeReady(node),
+		}
+
+		// Skip validation for not-ready nodes - no reliable hostcheck data
+		if !status.IsReady {
+			warnings = append(warnings, fmt.Sprintf(
+				"   Node %s: Not Ready - excluding from drive validation (no hostcheck data available)",
+				node.Name))
+			nodeStatuses = append(nodeStatuses, status)
+			continue
 		}
 
 		// Get physical drives from hostcheck
@@ -1026,41 +1106,158 @@ func validateDrivesDetailed(hostChecksMap hostcheck.HostChecksMap, nodes []v1.No
 
 	// Check if we have enough free drives
 	if totalFreeDrives == 0 {
-		return fmt.Errorf("❌ No free NVMe drives found in cluster.\n" +
-			"   Drives must be:\n" +
-			"   1. Physically present (detected in /dev)\n" +
-			"   2. Signed (included in weka.io/weka-drives annotation)\n" +
-			"   3. Not mounted or in use\n\n" +
-			"   Apply DriveSign WekaPolicy to sign drives.")
-	}
-
-	if totalFreeDrives < totalDrivesNeeded {
-		msg := fmt.Sprintf("❌ Insufficient free drives: need %d drives (%d containers × %d drives/container), but only %d available\n\n",
-			totalDrivesNeeded, driveContainers, numDrives, totalFreeDrives)
-
-		// Add per-node breakdown
-		msg += "Drive availability by node:\n"
+		notReadyCount := 0
 		for _, status := range nodeStatuses {
-			if len(status.FreeDrives) > 0 || len(status.UnsignedDrives) > 0 {
-				msg += fmt.Sprintf("  %s: %d free, %d unsigned, %d in use\n",
-					status.NodeName, len(status.FreeDrives), len(status.UnsignedDrives), len(status.MissingDrives))
+			if !status.IsReady {
+				notReadyCount++
 			}
+		}
+
+		msg := "❌ No free NVMe drives found on nodes matching the drive role selector.\n"
+		if notReadyCount > 0 {
+			msg += fmt.Sprintf("   (%d node(s) were Not Ready and excluded from validation)\n", notReadyCount)
+		}
+		msg += "   Drives must be:\n" +
+			"   1. Physically present (detected in /dev)\n" +
+			"   2. Signed (by configuring WekaPolicy of type \"sign-drives\")\n" +
+			"   3. Not mounted or in use by existing WEKA clusters\n\n"
+
+		// Check if drives exist on other nodes (not in the drive role selector)
+		drivesOnOtherNodes := 0
+		if allNodes != nil && len(allNodes) > len(nodes) {
+			// Build set of nodes in drive role for comparison
+			driveNodeSet := make(map[string]bool)
+			for _, n := range nodes {
+				driveNodeSet[n.Name] = true
+			}
+
+			// Check all nodes for drives not in drive role selector
+			for _, node := range allNodes {
+				if !driveNodeSet[node.Name] && kubernetes.IsNodeReady(node) {
+					if hc, ok := hostChecksMap[node.Name]; ok {
+						// Count annotated drives on this node
+						if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
+							var drives []string
+							if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
+								// Build annotated map to count physical+annotated
+								annotatedMap := make(map[string]bool)
+								for _, serial := range drives {
+									annotatedMap[serial] = true
+								}
+
+								// Count physical+annotated drives
+								for _, drive := range hc.NVMeDrives {
+									if drive.SerialNumber != "" && annotatedMap[drive.SerialNumber] {
+										drivesOnOtherNodes++
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if drivesOnOtherNodes > 0 {
+			msg += fmt.Sprintf("💡 Note: %d drive(s) are available on other nodes in the cluster,\n", drivesOnOtherNodes)
+			msg += "   but these nodes do not match your drive role node selector.\n"
+			msg += "   To use those drives, update your drive role node selector.\n\n"
+			msg += "   Apply DriveSign WekaPolicy to sign any unsigned drives."
+		} else {
+			msg += "   Apply DriveSign WekaPolicy to sign drives."
 		}
 
 		return errors.New(msg)
 	}
 
-	// Print warnings if any unsigned drives were found
+	if totalFreeDrives < totalDrivesNeeded {
+		msg := fmt.Sprintf("❌ Insufficient free drives: need %d drives (%d containers × %d drives/container), but only %d available on nodes matching the drive role selector\n\n",
+			totalDrivesNeeded, driveContainers, numDrives, totalFreeDrives)
+
+		// Add per-node breakdown
+		msg += "Drive availability by node (matching drive role selector):\n"
+		for _, status := range nodeStatuses {
+			if status.IsReady {
+				if len(status.FreeDrives) > 0 || len(status.UnsignedDrives) > 0 {
+					msg += fmt.Sprintf("  %s: %d free, %d unsigned, %d in use\n",
+						status.NodeName, len(status.FreeDrives), len(status.UnsignedDrives), len(status.MissingDrives))
+				}
+			} else {
+				msg += fmt.Sprintf("  %s: Not Ready (excluded from validation)\n", status.NodeName)
+			}
+		}
+
+		// Check if drives exist on other nodes (not in the drive role selector)
+		drivesOnOtherNodes := 0
+		if allNodes != nil && len(allNodes) > len(nodes) {
+			// Build set of nodes in drive role for comparison
+			driveNodeSet := make(map[string]bool)
+			for _, n := range nodes {
+				driveNodeSet[n.Name] = true
+			}
+
+			// Check all nodes for drives not in drive role selector
+			for _, node := range allNodes {
+				if !driveNodeSet[node.Name] && kubernetes.IsNodeReady(node) {
+					if hc, ok := hostChecksMap[node.Name]; ok {
+						// Count annotated drives on this node
+						if drivesAnnotation, ok := node.Annotations["weka.io/weka-drives"]; ok {
+							var drives []string
+							if err := json.Unmarshal([]byte(drivesAnnotation), &drives); err == nil {
+								// Build annotated map to count physical+annotated
+								annotatedMap := make(map[string]bool)
+								for _, serial := range drives {
+									annotatedMap[serial] = true
+								}
+
+								// Count physical+annotated drives
+								for _, drive := range hc.NVMeDrives {
+									if drive.SerialNumber != "" && annotatedMap[drive.SerialNumber] {
+										drivesOnOtherNodes++
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if drivesOnOtherNodes > 0 {
+			msg += fmt.Sprintf("\n💡 Note: %d drive(s) are available on other nodes in the cluster,\n", drivesOnOtherNodes)
+			msg += "   but these nodes do not match your drive role node selector.\n"
+			msg += "   To use those drives, update your drive role node selector."
+		}
+
+		return errors.New(msg)
+	}
+
+	// Print warnings if any (not-ready nodes or unsigned drives)
 	if len(warnings) > 0 {
-		fmt.Println("\n⚠️ Drive Warnings:")
+		fmt.Println("\n⚠️ Drive Validation Warnings:")
 		for _, warning := range warnings {
 			fmt.Println(warning)
 		}
 		fmt.Println()
 	}
 
+	// Print per-node drive availability for successful validation
+	fmt.Println("\nDrive availability by node:")
+	for _, status := range nodeStatuses {
+		if status.IsReady {
+			if len(status.FreeDrives) > 0 || len(status.UnsignedDrives) > 0 {
+				fmt.Printf("  %s: %d free, %d unsigned, %d in use\n",
+					status.NodeName, len(status.FreeDrives), len(status.UnsignedDrives), len(status.MissingDrives))
+			} else {
+				fmt.Printf("  %s: 0 free drives\n", status.NodeName)
+			}
+		} else {
+			fmt.Printf("  %s: Not Ready (excluded from validation)\n", status.NodeName)
+		}
+	}
+
 	// Success message
-	fmt.Printf("✅ Drive validation passed: %d free drives available (need %d)\n", totalFreeDrives, totalDrivesNeeded)
+	fmt.Printf("\n✅ Drive validation passed: %d free drives available (need %d)\n", totalFreeDrives, totalDrivesNeeded)
 
 	return nil
 }

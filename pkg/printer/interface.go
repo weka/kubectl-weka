@@ -32,6 +32,7 @@ type PrinterOptions struct {
 	HideEmptyColumns  bool     // omit columns that are empty in all rows
 	IndentByNumSpaces int      // if >0, indent table output by this many spaces
 	TableStyle        TableStyle
+	PrintRowSeparator bool
 }
 
 type ResourcePrinter interface {
