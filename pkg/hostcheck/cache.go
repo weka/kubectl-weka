@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/weka/kubectl-weka/pkg/version"
+
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -28,6 +30,10 @@ type CachedHostCheckResult struct {
 	// BootID is the node's boot ID at the time of caching
 	// If boot ID changes, the cache is invalidated
 	BootID string `json:"boot_id"`
+
+	// PluginVersion is the version of kubectl-weka that created this cache entry
+	// Used to invalidate cache on minor/major version changes
+	PluginVersion string `json:"plugin_version"`
 }
 
 // HostCheckResultCache manages cached hostcheck results with boot ID validation
@@ -55,7 +61,7 @@ func GetBootIDFromNode(node *corev1.Node) string {
 }
 
 // Get retrieves a cached result if it's still valid for the given node
-// Returns nil if cache miss or if boot ID has changed
+// Returns nil if cache miss, boot ID has changed, or plugin version incompatibility detected
 func (c *HostCheckResultCache) Get(nodeName string, node *corev1.Node) *HostChecksResult {
 	if nodeName == "" {
 		return nil
@@ -73,6 +79,10 @@ func (c *HostCheckResultCache) Get(nodeName string, node *corev1.Node) *HostChec
 	currentBootID := GetBootIDFromNode(node)
 	if currentBootID == "" {
 		// If we can't get boot ID, use cached result (better than nothing)
+		// But still check version compatibility
+		if !isVersionCompatible(cached.PluginVersion) {
+			return nil
+		}
 		return cached.Result
 	}
 
@@ -81,11 +91,16 @@ func (c *HostCheckResultCache) Get(nodeName string, node *corev1.Node) *HostChec
 		return nil
 	}
 
+	// Check plugin version compatibility (minor/major version changes invalidate cache)
+	if !isVersionCompatible(cached.PluginVersion) {
+		return nil
+	}
+
 	// Cache is still valid
 	return cached.Result
 }
 
-// Set stores a hostcheck result in the cache with the node's boot ID
+// Set stores a hostcheck result in the cache with the node's boot ID and plugin version
 func (c *HostCheckResultCache) Set(nodeName string, node *corev1.Node, result *HostChecksResult) {
 	if nodeName == "" || result == nil {
 		return
@@ -96,9 +111,10 @@ func (c *HostCheckResultCache) Set(nodeName string, node *corev1.Node, result *H
 
 	bootID := GetBootIDFromNode(node)
 	c.cache[nodeName] = &CachedHostCheckResult{
-		Result:    result,
-		Timestamp: time.Now(),
-		BootID:    bootID,
+		Result:        result,
+		Timestamp:     time.Now(),
+		BootID:        bootID,
+		PluginVersion: version.Version,
 	}
 	c.bootIDs[nodeName] = bootID
 }
@@ -161,6 +177,7 @@ func (c *HostCheckResultCache) MarshalJSON() ([]byte, error) {
 }
 
 // GetValidCacheEntries returns only cache entries that still have matching boot IDs
+// Also filters out entries with incompatible plugin versions (minor/major changes)
 // Accepts a map of node names to their current kernel status info
 func (c *HostCheckResultCache) GetValidCacheEntries(nodes map[string]*corev1.Node) HostChecksMap {
 	c.mu.RLock()
@@ -172,6 +189,12 @@ func (c *HostCheckResultCache) GetValidCacheEntries(nodes map[string]*corev1.Nod
 		node, exists := nodes[nodeName]
 		if !exists {
 			// Node no longer exists, skip
+			continue
+		}
+
+		// Check version compatibility first
+		if !isVersionCompatible(cached.PluginVersion) {
+			// Version incompatible, skip this cached entry
 			continue
 		}
 
@@ -357,4 +380,52 @@ func decryptData(encoded string) ([]byte, error) {
 	}
 
 	return plaintext, nil
+}
+
+// ============================================================================
+// Version Compatibility Helpers - Cache invalidation on version changes
+// ============================================================================
+
+// isVersionCompatible checks if a cached plugin version is compatible with the current version
+// Returns false if the minor or major version has changed (indicating incompatibility)
+// Returns true if: version is empty AND current is "dev", or same minor version
+func isVersionCompatible(cachedPluginVersion string) bool {
+	// Empty version (old cache format without version tracking)
+	// Special handling: only treat as compatible if current version is also "dev"
+	// This allows dev builds to use old caches, but invalidates on production release
+	if cachedPluginVersion == "" {
+		// If current version is "dev", treat old cache as compatible (dev consistency)
+		if version.Version == "dev" {
+			return true
+		}
+		// If upgrading from dev to production, invalidate old caches
+		return false
+	}
+
+	// Parse both versions
+	currentVersion := version.ParseSemver(version.Version)
+	cachedVersion := version.ParseSemver(cachedPluginVersion)
+
+	// Check if minor version (or major) has changed
+	// If minor version has changed, cache is invalid and requires redownload
+	return currentVersion.IsSameMinorVersion(cachedVersion)
+}
+
+// GetVersionChangeStatus returns a human-readable message about version compatibility
+// Used for logging/debugging
+func GetVersionChangeStatus(cachedPluginVersion string) string {
+	if cachedPluginVersion == "" {
+		return "cache version tracking not available"
+	}
+
+	currentVersion := version.ParseSemver(version.Version)
+	cachedVersion := version.ParseSemver(cachedPluginVersion)
+
+	if currentVersion.IsSameMinorVersion(cachedVersion) {
+		return fmt.Sprintf("compatible (cached: %s, current: %s)",
+			cachedPluginVersion, version.Version)
+	}
+
+	return fmt.Sprintf("incompatible version change (cached: %s, current: %s) - redownload required",
+		cachedPluginVersion, version.Version)
 }
