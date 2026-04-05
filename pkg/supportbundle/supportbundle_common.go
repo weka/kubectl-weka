@@ -173,7 +173,8 @@ func runSupportBundleCommand(ctx context.Context, clients *kubernetes.K8sClients
 	}
 
 	// Now create the main bundle temp directory with logger active
-	tempDir, err := utils.MkdirTemp(bundleName, "")
+	// Parameters: dir (parent), pattern (prefix) - using empty string for parent to use OS temp dir
+	tempDir, err := utils.MkdirTemp("", bundleName)
 	if err != nil {
 		return fmt.Errorf("failed to create temporary directory: %w", err)
 	}
