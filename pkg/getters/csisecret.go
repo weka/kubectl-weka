@@ -3,13 +3,15 @@ package getters
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/printer"
 	"github.com/weka/kubectl-weka/pkg/utils"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/api/storage/v1"
-	v2 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sort"
-	"strings"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // SecretInfo holds information about a CSI secret
@@ -22,7 +24,7 @@ type SecretInfo struct {
 }
 
 // GenerateCSISecretsOutput generates the CSI secrets table as a string
-func GenerateCSISecretsOutput(ctx context.Context, clients *kubernetes.K8sClients, printerObj printer.ResourcePrinter) (string, error) {
+func GenerateCSISecretsOutput(ctx context.Context, clients *kubernetes.K8sClients, namespace string, allNamespaces bool, printerObj printer.ResourcePrinter) (string, error) {
 	crClient := clients.CRClient
 
 	// Get all WEKA CSI drivers
@@ -61,14 +63,17 @@ func GenerateCSISecretsOutput(ctx context.Context, clients *kubernetes.K8sClient
 		// Extract secrets from this storage class
 		secretRefs := kubernetes.ExtractSecretReferencesFromStorageClass(&sc)
 		for _, secretRef := range secretRefs {
-			key := secretRef.Namespace + "/" + secretRef.Name
-			scCountMap[key]++
+			// only list secrets in speficied namespaces
+			if secretRef.Namespace == namespace || allNamespaces {
+				key := secretRef.Namespace + "/" + secretRef.Name
+				scCountMap[key]++
 
-			// Create entry if not exists
-			if _, exists := secretMap[key]; !exists {
-				secretMap[key] = &SecretInfo{
-					Name:      secretRef.Name,
-					Namespace: secretRef.Namespace,
+				// Create entry if not exists
+				if _, exists := secretMap[key]; !exists {
+					secretMap[key] = &SecretInfo{
+						Name:      secretRef.Name,
+						Namespace: secretRef.Namespace,
+					}
 				}
 			}
 		}
@@ -81,9 +86,12 @@ func GenerateCSISecretsOutput(ctx context.Context, clients *kubernetes.K8sClient
 	// Validate each secret
 	for key, secretInfo := range secretMap {
 		secretInfo.StorageClassCount = scCountMap[key]
-
+		secret := &corev1.Secret{}
 		// Get and validate the secret
-		secret, err := clients.Clientset.CoreV1().Secrets(secretInfo.Namespace).Get(ctx, secretInfo.Name, v2.GetOptions{})
+		err := clients.CRClient.Get(ctx, types.NamespacedName{
+			Namespace: secretInfo.Namespace,
+			Name:      secretInfo.Name,
+		}, secret)
 		if err != nil {
 			secretInfo.Valid = false
 			secretInfo.ValidationErrors = []string{fmt.Sprintf("failed to get secret: %v", err)}
@@ -117,7 +125,7 @@ func GenerateCSISecretsOutput(ctx context.Context, clients *kubernetes.K8sClient
 	columns := []printer.TableColumn{
 		{Name: "NAME", VisibleInWide: false},
 		{Name: "NAMESPACE", VisibleInWide: false},
-		{Name: "STORAGECLASS COUNT", VisibleInWide: false},
+		{Name: "STORAGECLASS_COUNT", VisibleInWide: false},
 		{Name: "VALIDITY", VisibleInWide: false},
 		{Name: "DETAIL", VisibleInWide: false},
 	}
@@ -128,7 +136,7 @@ func GenerateCSISecretsOutput(ctx context.Context, clients *kubernetes.K8sClient
 		row := printer.TableRow{Values: map[string]interface{}{
 			"NAME":               secret.Name,
 			"NAMESPACE":          secret.Namespace,
-			"STORAGECLASS COUNT": secret.StorageClassCount,
+			"STORAGECLASS_COUNT": secret.StorageClassCount,
 			"VALIDITY":           utils.BoolToOkError(secret.Valid),
 			"DETAIL": func() string {
 				if len(secret.ValidationErrors) > 0 {

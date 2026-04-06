@@ -34,6 +34,9 @@ func init() {
 	supportBundleClusterCmd.Flags().StringVarP(&flagNamespace, "namespace", "n", "", "Namespace (defaults to current kubeconfig namespace)")
 	supportBundleClusterCmd.Flags().BoolVarP(&flagAllNamespaces, "all-namespaces", "A", false, "Collect clusters from all namespaces")
 
+	supportBundleClusterCmd.RegisterFlagCompletionFunc("namespace", completionListNamespaces)
+	supportBundleClusterCmd.ValidArgsFunction = completionListWekaClustersAsArgs
+
 	supportBundleClusterCmd.SilenceUsage = true
 }
 

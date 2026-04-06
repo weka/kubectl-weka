@@ -29,6 +29,10 @@ func init() {
 	getPoliciesCmd.Flags().StringVarP(&flagNamespace, "namespace", "n", "", "Namespace. Defaults to current kubeconfig namespace")
 	getPoliciesCmd.Flags().BoolVar(&flagNoHeaders, "no-headers", false, "Don't print headers")
 	getPoliciesCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "Output format. Supported: json, yaml, wide, custom-columns=<COLS...>")
+
+	getPoliciesCmd.RegisterFlagCompletionFunc("namespace", completionListNamespaces)
+	getPoliciesCmd.RegisterFlagCompletionFunc("output", completionGetPoliciesOutput)
+
 	getPoliciesCmd.SilenceUsage = true
 }
 

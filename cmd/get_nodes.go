@@ -3,7 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+
 	"github.com/spf13/cobra"
+	"github.com/weka/kubectl-weka/pkg/completion"
 	"github.com/weka/kubectl-weka/pkg/getters"
 	"github.com/weka/kubectl-weka/pkg/printer"
 )
@@ -23,6 +25,13 @@ func init() {
 	getNodesCmd.Flags().BoolVar(&flagNoHeaders, "no-headers", false, "Don't print headers")
 	getNodesCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "Output format. Supported: json, yaml, wide, custom-columns=<COLS...>")
 	getNodesCmd.Flags().StringVar(&getNodesSelector, "node-selector", "", "Label selector to filter nodes (e.g., role=storage)")
+	getNodesCmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		flags := completion.SuggestAllUnusedFlagsWithUsageForCompletion(cmd, args, toComplete)
+		return flags, cobra.ShellCompDirectiveNoFileComp
+	}
+	getNodesCmd.RegisterFlagCompletionFunc("output", completionGetNodesOutput)
+	getNodesCmd.RegisterFlagCompletionFunc("node-selector", completionListNodeSelectors)
+
 	getNodesCmd.SilenceUsage = true
 }
 

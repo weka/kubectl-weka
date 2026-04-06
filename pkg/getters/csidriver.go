@@ -3,15 +3,19 @@ package getters
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/printer"
 	"github.com/weka/kubectl-weka/pkg/utils"
-	v2 "k8s.io/api/apps/v1"
-	v3 "k8s.io/api/core/v1"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/api/storage/v1"
-	v4 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sort"
-	"strings"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // CSIDriverInfo holds information about a CSI driver deployment
@@ -27,7 +31,7 @@ type CSIDriverInfo struct {
 	PVCount            int
 	PVCCount           int
 	BoundPVCount       int
-	CreationTime       v4.Time
+	CreationTime       metav1.Time
 }
 
 // GenerateCSIDriversOutput generates the CSI driver output for printing
@@ -53,13 +57,13 @@ func GenerateCSIDriversOutput(ctx context.Context, clients *kubernetes.K8sClient
 	}
 
 	// List all deployments across all namespaces
-	var deploymentList v2.DeploymentList
+	var deploymentList appsv1.DeploymentList
 	if err := crClient.List(ctx, &deploymentList); err != nil {
 		return "", fmt.Errorf("failed to list deployments: %w", err)
 	}
 
 	// List all daemonsets across all namespaces
-	var daemonsetList v2.DaemonSetList
+	var daemonsetList appsv1.DaemonSetList
 	if err := crClient.List(ctx, &daemonsetList); err != nil {
 		return "", fmt.Errorf("failed to list daemonsets: %w", err)
 	}
@@ -89,13 +93,13 @@ func GenerateCSIDriversOutput(ctx context.Context, clients *kubernetes.K8sClient
 		boundPvCountByDriver = make(map[string]int)
 
 		// List all PersistentVolumes
-		var pvList v3.PersistentVolumeList
+		var pvList corev1.PersistentVolumeList
 		if err := crClient.List(ctx, &pvList); err != nil {
 			return "", fmt.Errorf("failed to list PersistentVolumes: %w", err)
 		}
 
 		// List all PersistentVolumeClaims
-		var pvcList v3.PersistentVolumeClaimList
+		var pvcList corev1.PersistentVolumeClaimList
 		if err := crClient.List(ctx, &pvcList); err != nil {
 			return "", fmt.Errorf("failed to list PersistentVolumeClaims: %w", err)
 		}
@@ -104,7 +108,7 @@ func GenerateCSIDriversOutput(ctx context.Context, clients *kubernetes.K8sClient
 		for _, pv := range pvList.Items {
 			if pv.Spec.CSI != nil && kubernetes.IsWekaCSI(pv.Spec.CSI.Driver) {
 				pvCountByDriver[pv.Spec.CSI.Driver]++
-				if pv.Status.Phase == v3.VolumeBound {
+				if pv.Status.Phase == corev1.VolumeBound {
 					boundPvCountByDriver[pv.Spec.CSI.Driver]++
 				}
 			}
@@ -127,8 +131,8 @@ func GenerateCSIDriversOutput(ctx context.Context, clients *kubernetes.K8sClient
 	}
 
 	// Build maps of deployments and daemonsets by CSI driver name
-	controllersByDriver := make(map[string]*v2.Deployment)
-	nodesByDriver := make(map[string]*v2.DaemonSet)
+	controllersByDriver := make(map[string]*appsv1.Deployment)
+	nodesByDriver := make(map[string]*appsv1.DaemonSet)
 
 	// Index deployments by CSI driver name (using CSI_DRIVER_NAME env var)
 	for i := range deploymentList.Items {
@@ -162,7 +166,7 @@ func GenerateCSIDriversOutput(ctx context.Context, clients *kubernetes.K8sClient
 		// Determine managed-by and namespace from whichever component exists
 		var managedBy string
 		var namespace string
-		var creationTime v4.Time
+		var creationTime metav1.Time
 
 		if hasController {
 			managedBy = getManagedBy(controller)
@@ -215,15 +219,15 @@ func GenerateCSIDriversOutput(ctx context.Context, clients *kubernetes.K8sClient
 
 	// Build columns
 	columns := []printer.TableColumn{
-		{Name: "CSI DRIVER", VisibleInWide: false},
-		{Name: "MANAGED BY", VisibleInWide: false},
+		{Name: "CSI_DRIVER", VisibleInWide: false},
+		{Name: "MANAGED_BY", VisibleInWide: false},
 		{Name: "NAMESPACE", VisibleInWide: false},
 		{Name: "CONTROLLER", VisibleInWide: false},
-		{Name: "NODE DAEMONSET", VisibleInWide: false},
+		{Name: "NODE_DAEMONSET", VisibleInWide: false},
 		{Name: "STORAGECLASSES", VisibleInWide: false},
 		{Name: "PVS", VisibleInWide: true},
 		{Name: "PVCS", VisibleInWide: true},
-		{Name: "BOUND PVS", VisibleInWide: true},
+		{Name: "BOUND_PVS", VisibleInWide: true},
 		{Name: "AGE", VisibleInWide: false, FormatFuncs: printer.TableFormatFunctions{utils.HumanAge}},
 	}
 
@@ -231,16 +235,16 @@ func GenerateCSIDriversOutput(ctx context.Context, clients *kubernetes.K8sClient
 	var rows []printer.TableRow
 	for _, info := range deployments {
 		row := printer.TableRow{Values: map[string]interface{}{}}
-		row.Values["CSI DRIVER"] = info.DriverName
-		row.Values["MANAGED BY"] = info.ManagedBy
+		row.Values["CSI_DRIVER"] = info.DriverName
+		row.Values["MANAGED_BY"] = info.ManagedBy
 		row.Values["NAMESPACE"] = info.Namespace
 		row.Values["CONTROLLER"] = info.ControllerName
-		row.Values["NODE DAEMONSET"] = info.NodeDaemonsetName
+		row.Values["NODE_DAEMONSET"] = info.NodeDaemonsetName
 		row.Values["STORAGECLASSES"] = info.StorageClassCount
 		row.Values["AGE"] = info.CreationTime.Time
 		row.Values["PVS"] = info.PVCount
 		row.Values["PVCS"] = info.PVCCount
-		row.Values["BOUND PVS"] = info.BoundPVCount
+		row.Values["BOUND_PVS"] = info.BoundPVCount
 		rows = append(rows, row)
 	}
 	var sb strings.Builder
@@ -252,7 +256,7 @@ func GenerateCSIDriversOutput(ctx context.Context, clients *kubernetes.K8sClient
 }
 
 // getCSIDriverNameFromDeployment extracts CSI_DRIVER_NAME from deployment's first container
-func getCSIDriverNameFromDeployment(deploy *v2.Deployment) string {
+func getCSIDriverNameFromDeployment(deploy *appsv1.Deployment) string {
 	if deploy.Spec.Template.Spec.Containers == nil || len(deploy.Spec.Template.Spec.Containers) == 0 {
 		return ""
 	}
@@ -272,7 +276,7 @@ func getCSIDriverNameFromDeployment(deploy *v2.Deployment) string {
 }
 
 // getCSIDriverNameFromDaemonset extracts CSI_DRIVER_NAME from daemonset's first container
-func getCSIDriverNameFromDaemonset(ds *v2.DaemonSet) string {
+func getCSIDriverNameFromDaemonset(ds *appsv1.DaemonSet) string {
 	if ds.Spec.Template.Spec.Containers == nil || len(ds.Spec.Template.Spec.Containers) == 0 {
 		return ""
 	}
@@ -296,9 +300,9 @@ func getManagedBy(obj interface{}) string {
 	var labels map[string]string
 
 	switch v := obj.(type) {
-	case *v2.Deployment:
+	case *appsv1.Deployment:
 		labels = v.GetLabels()
-	case *v2.DaemonSet:
+	case *appsv1.DaemonSet:
 		labels = v.GetLabels()
 	}
 
@@ -317,4 +321,25 @@ func getManagedBy(obj interface{}) string {
 	}
 
 	return "Unknown"
+}
+
+func GetCSIDrivers(ctx context.Context, c client.Client, ns string, allNS bool, name string) ([]v1.CSIDriver, error) {
+	// disregards namespaces as those are cluster wide objects
+	if name != "" {
+		var d v1.CSIDriver
+		err := c.Get(ctx, types.NamespacedName{Name: name}, &d)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("failed to get WekaClient %q in namespace %q: %w", name, ns, err)
+		}
+		return []v1.CSIDriver{d}, nil
+	}
+	var lst v1.CSIDriverList
+	opts := []client.ListOption{}
+	if err := c.List(ctx, &lst, opts...); err != nil {
+		return nil, fmt.Errorf("failed to list WekaCluster CRs: %w", err)
+	}
+	return lst.Items, nil
 }

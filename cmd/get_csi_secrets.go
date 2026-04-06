@@ -3,8 +3,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+
 	"github.com/spf13/cobra"
 	"github.com/weka/kubectl-weka/pkg/getters"
+	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/printer"
 )
 
@@ -29,6 +31,11 @@ Validation checks for:
 
 func init() {
 	getCmd.AddCommand(getCSISecretsCmd)
+
+	getCSISecretsCmd.Flags().StringVarP(&flagNamespace, "namespace", "n", "", "Namespace of CSI secrets")
+
+	getCSISecretsCmd.RegisterFlagCompletionFunc("namespace", completionListNamespaces)
+
 	getCSISecretsCmd.SilenceUsage = true
 }
 
@@ -36,7 +43,11 @@ func runGetCSISecrets(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	p, _ := printer.GetPrinterFromFlags(flagOutput, true, nil, false, 0, printer.TableStyleMinimal)
-	output, err := getters.GenerateCSISecretsOutput(ctx, KubeClients, p)
+	ns, all, err := kubernetes.GetNamespaceFromFlags(false, flagNamespace)
+	if err != nil {
+		return err
+	}
+	output, err := getters.GenerateCSISecretsOutput(ctx, KubeClients, ns, all, p)
 	if err != nil {
 		return err
 	}

@@ -3,6 +3,8 @@ package kubernetes
 import (
 	"context"
 	"fmt"
+
+	"github.com/go-logr/logr"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -12,6 +14,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // ============================================================================
@@ -91,6 +94,8 @@ func GetKubeNamespace() (string, error) {
 // The caller should call Stop() on the returned client when done to clean up resources
 func NewK8sClients(ctx context.Context) (*K8sClients, error) {
 	cfg, err := GetKubeConfig()
+	log.SetLogger(logr.Discard())
+
 	if err != nil {
 		return nil, err
 	}

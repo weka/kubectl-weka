@@ -3,16 +3,17 @@ package getters
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/printer"
 	"github.com/weka/weka-k8s-api/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sort"
-	"strings"
 )
 
 // GenerateClientInstancesOutput generates the client instances table as a string
@@ -137,7 +138,7 @@ func GenerateClientInstancesOutput(
 				}
 
 				// Pod has same name as the WekaContainer CR
-				p, err := k8s.CoreV1().Pods(clientNS).Get(ctx, wContName, v1.GetOptions{})
+				p, err := k8s.CoreV1().Pods(clientNS).Get(ctx, wContName, metav1.GetOptions{})
 				if err == nil {
 					podPhase = string(p.Status.Phase)
 				} else {
@@ -166,4 +167,28 @@ func GenerateClientInstancesOutput(
 	var sb strings.Builder
 	_ = printerObj.Print(columns, rows, &sb)
 	return sb.String(), nil
+}
+
+func GetWekaClients(ctx context.Context, c client.Client, ns string, allNS bool, name string) ([]v1alpha1.WekaClient, error) {
+	if name != "" {
+		var wc v1alpha1.WekaClient
+		err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &wc)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("failed to get WekaClient %q in namespace %q: %w", name, ns, err)
+		}
+		return []v1alpha1.WekaClient{wc}, nil
+	}
+
+	var lst v1alpha1.WekaClientList
+	opts := []client.ListOption{}
+	if !allNS {
+		opts = append(opts, client.InNamespace(ns))
+	}
+	if err := c.List(ctx, &lst, opts...); err != nil {
+		return nil, fmt.Errorf("failed to list WekaClient CRs: %w", err)
+	}
+	return lst.Items, nil
 }

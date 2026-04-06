@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
+	"github.com/weka/kubectl-weka/pkg/completion"
 	"github.com/weka/kubectl-weka/pkg/supportbundle"
 	"github.com/weka/kubectl-weka/pkg/types"
 )
@@ -24,6 +25,11 @@ func init() {
 	supportBundleCSICmd.Flags().StringVarP(&flagOutput, "output", "o", ".", "Output directory for the support bundle archive")
 	supportBundleCSICmd.Flags().StringVarP(&flagNamespace, "namespace", "n", "", "Namespace (defaults to current kubeconfig namespace)")
 	supportBundleCSICmd.Flags().BoolVarP(&flagAllNamespaces, "all-namespaces", "A", false, "Collect CSI resources from all namespaces")
+
+	supportBundleCSICmd.RegisterFlagCompletionFunc("namespace", completionListNamespaces)
+	supportBundleCSICmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return completion.SuggestAllUnusedFlagsWithUsageForCompletion(cmd, args, toComplete), cobra.ShellCompDirectiveNoFileComp
+	}
 
 	supportBundleCSICmd.SilenceUsage = true
 }

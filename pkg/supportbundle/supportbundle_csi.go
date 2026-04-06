@@ -3,11 +3,12 @@ package supportbundle
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+
 	"github.com/weka/kubectl-weka/pkg/getters"
 	"github.com/weka/kubectl-weka/pkg/logging"
 	"github.com/weka/kubectl-weka/pkg/printer"
-	"os"
-	"path/filepath"
 )
 
 // CSIResourcesCollector collects CSI driver components and diagnostics
@@ -109,7 +110,7 @@ func (c *CSIResourcesCollector) Collect(ctx context.Context) CollectorResult {
 	includeSensitive := getCollectSensitiveData(ctx)
 
 	logger.Debug("Collecting CSI secrets", "include_sensitive", includeSensitive)
-	secretsOutput, err := getters.GenerateCSISecretsOutput(ctx, clients, p)
+	secretsOutput, err := getters.GenerateCSISecretsOutput(ctx, clients, "", true, p)
 	if err != nil {
 		errors = append(errors, fmt.Sprintf("failed to get CSI secrets: %v", err))
 		logger.Warn("Failed to collect CSI secrets", "error", err)

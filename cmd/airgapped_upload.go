@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+
 	"github.com/spf13/cobra"
 	"github.com/weka/kubectl-weka/pkg/airgapped"
 )
@@ -84,6 +85,9 @@ func init() {
 	// Architecture
 	airgappedUploadCmd.Flags().StringVar(&flagUploadArchitecture, "architecture", "",
 		"Target architectures to upload (optional, default: all). Supported: amd64, arm64")
+
+	airgappedUploadCmd.RegisterFlagCompletionFunc("bundle", completionListAllTarGzFilesInDirectory)
+	airgappedUploadCmd.RegisterFlagCompletionFunc("architecture", completionListArchitectures)
 
 	airgappedUploadCmd.SilenceUsage = true
 }

@@ -3,10 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/weka/kubectl-weka/pkg/preflight"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/weka/kubectl-weka/pkg/completion"
+	"github.com/weka/kubectl-weka/pkg/preflight"
 
 	"github.com/spf13/cobra"
 )
@@ -33,6 +35,12 @@ func init() {
 	preflightNodesCmd.Flags().BoolVar(&preflightFailedOnly, "failed-only", false, "Only show failed nodes")
 	preflightNodesCmd.Flags().Int64Var(&preflightWekaDirFailGB, "weka-dir-min-fail", 100, "Minimum GB for weka directory (FAIL if below, default 100)")
 	preflightNodesCmd.Flags().Int64Var(&preflightWekaDirWarnGB, "weka-dir-min-warn", 300, "Minimum GB for weka directory (WARN if below, default 300)")
+
+	preflightNodesCmd.RegisterFlagCompletionFunc("node-selector", completionListNodeSelectors)
+	preflightNodesCmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return completion.SuggestAllUnusedFlagsWithUsageForCompletion(cmd, args, toComplete), cobra.ShellCompDirectiveNoFileComp
+	}
+
 	preflightNodesCmd.SilenceUsage = true
 
 }
