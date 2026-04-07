@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+
 	"github.com/spf13/cobra"
 	"github.com/weka/kubectl-weka/pkg/version"
 )
@@ -21,4 +22,5 @@ var versionCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(versionCmd)
 	versionCmd.SilenceUsage = true
+	versionCmd.CompletionOptions.SetDefaultShellCompDirective(cobra.ShellCompDirectiveNoFileComp)
 }

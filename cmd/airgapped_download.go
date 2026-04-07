@@ -3,11 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/spf13/cobra"
 	"github.com/weka/kubectl-weka/pkg/airgapped"
 	"github.com/weka/kubectl-weka/pkg/logging"
-	"strings"
-	"time"
 )
 
 var (
@@ -92,6 +93,10 @@ func init() {
 	// Architecture flag
 	airgappedDownloadCmd.Flags().StringVar(&flagDownloadArchitecture, "architecture", "amd64,arm64",
 		"Target architectures (default: amd64,arm64). Supported: amd64, arm64")
+
+	airgappedDownloadCmd.RegisterFlagCompletionFunc("operator-version", completionListOperatorVersions)
+	airgappedDownloadCmd.RegisterFlagCompletionFunc("csi-version", completionListCSIVersions)
+	airgappedDownloadCmd.RegisterFlagCompletionFunc("architecture", completionListArchitectures)
 
 	airgappedDownloadCmd.SilenceUsage = true
 }

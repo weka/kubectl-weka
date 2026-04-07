@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+
 	"github.com/spf13/cobra"
 	"github.com/weka/kubectl-weka/pkg/getters"
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
@@ -23,6 +24,10 @@ func init() {
 	getClusterInstancesCmd.Flags().StringVarP(&flagNamespace, "namespace", "n", "", "Namespace. Defaults to current kubeconfig namespace")
 	getClusterInstancesCmd.Flags().BoolVar(&flagNoHeaders, "no-headers", false, "Don't print headers")
 	getClusterInstancesCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "Output format. Supported: json, yaml, wide, custom-columns=<COLS...>")
+
+	getClusterInstancesCmd.ValidArgsFunction = completionListWekaClustersAsArgs
+	getClusterInstancesCmd.RegisterFlagCompletionFunc("namespace", completionListNamespaces)
+	getClusterInstancesCmd.RegisterFlagCompletionFunc("output", completionGetClusterInstancesOutput)
 
 	getClusterInstancesCmd.SilenceUsage = true
 }

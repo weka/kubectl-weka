@@ -32,8 +32,9 @@ func init() {
 	supportBundleClientCmd.Flags().StringVarP(&flagOutput, "output", "o", ".", "Output directory for the support bundle archive")
 	supportBundleClientCmd.Flags().StringVarP(&flagNamespace, "namespace", "n", "", "Namespace (defaults to current kubeconfig namespace)")
 	supportBundleClientCmd.Flags().BoolVarP(&flagAllNamespaces, "all-namespaces", "A", false, "Collect clients from all namespaces")
+	supportBundleClientCmd.RegisterFlagCompletionFunc("namespace", completionListNamespaces)
 
-	supportBundleClientCmd.SilenceUsage = true
+	supportBundleClientCmd.ValidArgsFunction = completionListWekaClientsAsArgs
 }
 
 func runSupportBundleClient(cmd *cobra.Command, args []string) error {

@@ -12,7 +12,7 @@ import (
 )
 
 var logsWekaContainerCmd = &cobra.Command{
-	Use:   "wekacontainer <client-name>",
+	Use:   "wekacontainer",
 	Short: "Show WekaContainer logs",
 	Long: `Show logs from all or arbitrary WekaContainers.
 
@@ -61,6 +61,10 @@ func init() {
 		"Maximum number of log files to process in parallel. If set to 0 –unlimited")
 
 	logsWekaContainerCmd.Flags().BoolVar(&flagLogsNoPrefix, "no-prefix", false, "Do not prepend log steams with container names")
+
+	logsWekaContainerCmd.RegisterFlagCompletionFunc("namespace", completionListNamespaces)
+	logsWekaContainerCmd.RegisterFlagCompletionFunc("wekacontainer", completionListWekaContainers)
+	logsWekaContainerCmd.RegisterFlagCompletionFunc("node-selector", completionListNodeSelectors)
 
 	logsWekaContainerCmd.SilenceUsage = true
 }

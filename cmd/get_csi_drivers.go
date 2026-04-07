@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+
 	"github.com/spf13/cobra"
 	"github.com/weka/kubectl-weka/pkg/getters"
 	"github.com/weka/kubectl-weka/pkg/printer"
@@ -50,6 +51,9 @@ func init() {
 	getCSIDriversCmd.Flags().BoolVar(&flagOnlyOperator, "only-operator", false, "Only show CSI drivers installed by Weka operator")
 	getCSIDriversCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "Output format. Supported: json, yaml, wide, custom-columns=<COLS...>")
 	getCSIDriversCmd.Flags().BoolVar(&flagNoHeaders, "no-headers", false, "Don't print headers")
+
+	getCSIDriversCmd.ValidArgsFunction = completionListWekaCsiDriversAsArgs
+	getCSIDriversCmd.RegisterFlagCompletionFunc("output", completionGetCsiDriversOutput)
 	getCSIDriversCmd.SilenceUsage = true
 }
 

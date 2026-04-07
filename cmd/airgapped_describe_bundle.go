@@ -44,5 +44,6 @@ Examples:
 
 func init() {
 	airgappedDescribeBundleCmd.Flags().BoolVarP(&describeBundleVerbose, "verbose", "v", false, "Show verbose output with detailed image and chart information")
+	airgappedDescribeBundleCmd.ValidArgsFunction = completionListAllTarGzFilesInDirectory
 	airgappedCmd.AddCommand(airgappedDescribeBundleCmd)
 }

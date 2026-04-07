@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
+	"github.com/weka/kubectl-weka/pkg/completion"
 	"github.com/weka/kubectl-weka/pkg/supportbundle"
 	"github.com/weka/kubectl-weka/pkg/types"
 )
@@ -22,6 +23,11 @@ func init() {
 
 	supportBundleOperatorCmd.Flags().StringVarP(&flagOutput, "output", "o", ".", "Output directory for the support bundle archive")
 	supportBundleOperatorCmd.Flags().StringVarP(&flagLogOperatorNamespace, "namespace", "n", "weka-operator-system", "Namespace where the operator is running")
+
+	supportBundleOperatorCmd.RegisterFlagCompletionFunc("namespace", completionListNamespaces)
+	supportBundleOperatorCmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return completion.SuggestAllUnusedFlagsWithUsageForCompletion(cmd, args, toComplete), cobra.ShellCompDirectiveNoFileComp
+	}
 
 	supportBundleOperatorCmd.SilenceUsage = true
 }

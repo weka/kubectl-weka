@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+
 	"github.com/spf13/cobra"
 	"github.com/weka/kubectl-weka/pkg/getters"
 	"github.com/weka/kubectl-weka/pkg/printer"
@@ -49,6 +50,12 @@ func init() {
 	getCSIInstancesCmd.Flags().StringVarP(&flagRole, "role", "r", "", "Filter by pod role (controller or node)")
 	getCSIInstancesCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "Output format. Supported: json, yaml, wide, custom-columns=<COLS...>")
 	getCSIInstancesCmd.Flags().BoolVar(&flagUnhealthy, "unhealthy", false, "Show only pods with frequent restarts (>1 restart in last 5 minutes)")
+
+	getCSIInstancesCmd.RegisterFlagCompletionFunc("namespace", completionListNamespaces)
+	getCSIInstancesCmd.RegisterFlagCompletionFunc("output", completionGetCsiInstancesOutput)
+	getCSIInstancesCmd.RegisterFlagCompletionFunc("role", completionGetCsiInstancesRoles)
+	getCSIInstancesCmd.ValidArgsFunction = completionListWekaCsiDriversAsArgs
+
 	getCSIInstancesCmd.SilenceUsage = true
 }
 

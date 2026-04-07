@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+
 	"github.com/spf13/cobra"
 	"github.com/weka/kubectl-weka/pkg/plan"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
@@ -18,6 +19,9 @@ var planClientCmd = &cobra.Command{
 func init() {
 	planCmd.AddCommand(planClientCmd)
 	planClientCmd.Flags().BoolVar(&flagFailFast, "fail-fast", false, "Stop validation on first error (default: collect all errors)")
+
+	planClientCmd.ValidArgsFunction = completionListAllYamlFilesInDirectory
+
 	planClientCmd.SilenceUsage = true
 }
 

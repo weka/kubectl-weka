@@ -60,6 +60,11 @@ func init() {
 
 	logsWekaClusterCmd.Flags().BoolVar(&flagLogsNoPrefix, "no-prefix", false, "Do not prepend log steams with container names")
 
+	logsWekaClusterCmd.RegisterFlagCompletionFunc("namespace", completionListNamespaces)
+	logsWekaClusterCmd.RegisterFlagCompletionFunc("wekacontainer", completionListWekaContainers)
+	logsWekaClusterCmd.RegisterFlagCompletionFunc("role", completionListWekaContainerRoles)
+	logsWekaClusterCmd.ValidArgsFunction = completionListWekaClustersAsArgs
+
 	logsWekaClusterCmd.SilenceUsage = true
 }
 

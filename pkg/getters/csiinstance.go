@@ -3,15 +3,16 @@ package getters
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
+	"time"
+
 	"github.com/weka/kubectl-weka/pkg/kubernetes"
 	"github.com/weka/kubectl-weka/pkg/printer"
 	"github.com/weka/kubectl-weka/pkg/utils"
 	corev1 "k8s.io/api/core/v1"
 	v2 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sort"
-	"strings"
-	"time"
 )
 
 // CSIInstanceInfo holds information about a CSI pod instance
@@ -170,14 +171,14 @@ func GenerateCSIInstancesOutput(ctx context.Context, clients *kubernetes.K8sClie
 
 	// Define columns
 	columns := []printer.TableColumn{
-		{Name: "CSI DRIVER", VisibleInWide: false},
+		{Name: "CSI_DRIVER", VisibleInWide: false},
 		{Name: "NAMESPACE", VisibleInWide: false},
 		{Name: "NODE", VisibleInWide: false},
 		{Name: "ROLE", VisibleInWide: false},
-		{Name: "POD NAME", VisibleInWide: false},
+		{Name: "POD_NAME", VisibleInWide: false},
 		{Name: "STATUS", VisibleInWide: false},
 		{Name: "RESTARTS", VisibleInWide: true},
-		{Name: "LAST RESTART", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{utils.HumanAge}},
+		{Name: "LAST_RESTART", VisibleInWide: true, FormatFuncs: printer.TableFormatFunctions{utils.HumanAge}},
 		{Name: "AGE", VisibleInWide: false, FormatFuncs: printer.TableFormatFunctions{utils.HumanAge}},
 	}
 	// Build rows
@@ -189,14 +190,14 @@ func GenerateCSIInstancesOutput(ctx context.Context, clients *kubernetes.K8sClie
 		}
 		age := info.CreatedTime.Time
 		row := printer.TableRow{Values: map[string]interface{}{
-			"CSI DRIVER":   info.DriverName,
+			"CSI_DRIVER":   info.DriverName,
 			"NAMESPACE":    info.Namespace,
 			"NODE":         info.NodeName,
 			"ROLE":         info.Role,
-			"POD NAME":     info.PodName,
+			"POD_NAME":     info.PodName,
 			"STATUS":       info.PodStatus,
 			"RESTARTS":     info.RestartCount,
-			"LAST RESTART": lastRestart,
+			"LAST_RESTART": lastRestart,
 			"AGE":          age,
 		}}
 		rows = append(rows, row)

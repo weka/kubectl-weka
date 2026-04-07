@@ -2,10 +2,11 @@ package kubernetes
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/weka/kubectl-weka/pkg/types"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/api/storage/v1"
-	"strings"
 )
 
 // IsWekaCSI checks if a string contains "weka.io" (for provisioners, drivers, or names)
