@@ -3,8 +3,9 @@ package hostcheck
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/weka/kubectl-weka/pkg/types"
 	"strings"
+
+	"github.com/weka/kubectl-weka/pkg/types"
 )
 
 // CPUModule validates CPU and memory resources
@@ -90,11 +91,18 @@ func (m *CPUModule) Validate(podOutput string) (HostCheckModuleResponse, error) 
 
 	status := types.StatusPass
 	var warningMsg string
+	var errorMsg string
 
 	// Check for dual-socket AMD - not recommended for WEKA
 	if hc.CPUSockets == 2 && strings.ToLower(hc.CPUFamily) == "amd" {
 		status = types.StatusWarn
 		warningMsg = "Dual-socket AMD architecture detected! This architecture does not provide best performance with WEKA"
+	}
+
+	// Check for AVX2 support (required)
+	if !hc.AVX2Supported {
+		status = types.StatusFail
+		errorMsg = "CPU does not support AVX2 instructions. WEKA requires AVX2 (Haswell or newer Intel, or appropriate AMD)."
 	}
 
 	// Format detail string with both physical cores and logical cores for clarity
@@ -105,6 +113,13 @@ func (m *CPUModule) Validate(podOutput string) (HostCheckModuleResponse, error) 
 	} else {
 		// HT is on - show physical cores and threads
 		detail = fmt.Sprintf("%d cores (%d threads), %.0f GB RAM", hc.PhysicalCores, hc.LogicalCores, float64(hc.MemoryBytes)/(1024*1024*1024))
+	}
+
+	// Add AVX2 support status
+	if hc.AVX2Supported {
+		detail += " [AVX2: yes]"
+	} else {
+		detail += " [AVX2: NO]"
 	}
 
 	// Add CPU family and socket info
@@ -124,6 +139,9 @@ func (m *CPUModule) Validate(podOutput string) (HostCheckModuleResponse, error) 
 	if warningMsg != "" {
 		displayDetail = detail + "\n     " + warningMsg
 	}
+	if errorMsg != "" {
+		displayDetail = detail + "\n     " + errorMsg
+	}
 
 	return &CPUModuleResponse{
 		status:          status,
@@ -140,7 +158,13 @@ func (m *CPUModule) Validate(podOutput string) (HostCheckModuleResponse, error) 
 		CPUArch:         hc.CPUArch,
 		CPUSockets:      hc.CPUSockets,
 		moduleName:      m.Name(),
-		err:             nil,
+		err: func() error {
+			if errorMsg != "" {
+				return fmt.Errorf("%s", errorMsg)
+			} else {
+				return nil
+			}
+		}(),
 	}, nil
 }
 
