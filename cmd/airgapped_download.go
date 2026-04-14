@@ -112,17 +112,17 @@ func runDownload(_ *cobra.Command, _ []string) error {
 
 	opts := airgapped.NewDownloadOptions(ctx, flagDownloadOutput, flagWekaVersion, flagOperatorVersion, flagCSIVersion, flagOperatorHelmPath, flagCSIHelmPath, flagDownloadArchitecture)
 
+	// Validate all options before creating the log file
+	if err := opts.Validate(); err != nil {
+		return err
+	}
+
 	logPath := generateLogPath(opts.OutputFile)
 	logger := logging.GetLogger(ctx, logPath)
 	defer logger.Close()
 	opts.Ctx = logging.WithLogger(ctx, logger)
 
 	logger.Info("logging to file", "logPath", logPath)
-
-	// Validate all options are correct (at this stage at least)
-	if err := opts.Validate(); err != nil {
-		return err
-	}
 
 	// Normalize options: ensure all fields are populated
 	// - If version is specified, construct helm path
