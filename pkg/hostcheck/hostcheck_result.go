@@ -2,8 +2,9 @@ package hostcheck
 
 import (
 	"fmt"
-	ds "github.com/weka/kubectl-weka/pkg/device-support"
 	"slices"
+
+	ds "github.com/weka/kubectl-weka/pkg/device-support"
 )
 
 // CNIDetection contains detected CNI configuration from the node
@@ -992,16 +993,18 @@ type HostChecksResult struct {
 	CNIDetection *CNIDetection `json:"cni_detection,omitempty"` // Detected CNI Pod CIDR configuration
 
 	// CPU and Memory info
-	HTEnabled       bool   `json:"ht_enabled"`
-	PhysicalCores   int    `json:"physical_cores"`
-	LogicalCores    int    `json:"logical_cores"`
-	MemoryBytes     int64  `json:"memory_bytes"`
-	FreeMemoryBytes int64  `json:"free_memory_bytes"`
-	HugepagesFree   int64  `json:"hugepages_free_bytes"`
-	CPUModel        string `json:"cpu_model"`
-	CPUFamily       string `json:"cpu_family"`  // e.g., "Intel", "AMD", "ARM"
-	CPUArch         string `json:"cpu_arch"`    // e.g., "x86_64", "aarch64"
-	CPUSockets      int    `json:"cpu_sockets"` // Number of CPU sockets
+	HTEnabled       bool     `json:"ht_enabled"`
+	PhysicalCores   int      `json:"physical_cores"`
+	LogicalCores    int      `json:"logical_cores"`
+	MemoryBytes     int64    `json:"memory_bytes"`
+	FreeMemoryBytes int64    `json:"free_memory_bytes"`
+	HugepagesFree   int64    `json:"hugepages_free_bytes"`
+	CPUModel        string   `json:"cpu_model"`
+	CPUFamily       string   `json:"cpu_family"`  // e.g., "Intel", "AMD", "ARM"
+	CPUArch         string   `json:"cpu_arch"`    // e.g., "x86_64", "aarch64"
+	CPUSockets      int      `json:"cpu_sockets"` // Number of CPU sockets
+	AVX2Supported   bool     `json:"avx2_supported"`
+	CPUFlags        []string `json:"cpu_flags"`
 
 	// NVMe drive detection
 	NVMeDrives     []NvmeDrive `json:"nvme_drives"`

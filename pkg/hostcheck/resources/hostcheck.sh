@@ -980,6 +980,7 @@ for iface_dir in /host-sys/class/net/*; do
   NETWORK_IFACES_COUNT=$((NETWORK_IFACES_COUNT+1))
 done
 
+
 # ----- CPU and Memory detection -----
 HT_ENABLED=0
 PHYSICAL_CORES=0
@@ -991,6 +992,8 @@ CPU_MODEL=""
 CPU_FAMILY=""
 CPU_ARCH=""
 CPU_SOCKETS=0
+AVX2_SUPPORTED=false
+CPU_FLAGS_JSON="[]"
 
 # Get logical cores (number of processors)
 LOGICAL_CORES="$(grep -c '^processor' /host/proc/cpuinfo 2>/dev/null || echo 1)"
@@ -1056,6 +1059,28 @@ if [ -f /host/proc/cpuinfo ]; then
       # Count actual sockets from physical_id
       CPU_SOCKETS="$(grep 'physical id' /host/proc/cpuinfo 2>/dev/null | sort -u | wc -l)"
     fi
+  fi
+
+  # Check for AVX2 support and collect CPU flags
+  CPU_FLAGS_LINE="$(grep -m1 '^flags' /host/proc/cpuinfo 2>/dev/null | cut -d: -f2-)"
+  CPU_FLAGS_JSON="["
+  AVX2_SUPPORTED=false
+  if [ -n "$CPU_FLAGS_LINE" ]; then
+    first=true
+    for flag in $CPU_FLAGS_LINE; do
+      if [ "$flag" = "avx2" ]; then
+        AVX2_SUPPORTED=true
+      fi
+      if [ "$first" = true ]; then
+        CPU_FLAGS_JSON="$CPU_FLAGS_JSON\"$flag\""
+        first=false
+      else
+        CPU_FLAGS_JSON="$CPU_FLAGS_JSON,\"$flag\""
+      fi
+    done
+    CPU_FLAGS_JSON="$CPU_FLAGS_JSON]"
+  else
+    CPU_FLAGS_JSON="[]"
   fi
 fi
 
@@ -1418,6 +1443,8 @@ printf '"cpu_model":"%s",' "$(json_escape "$CPU_MODEL")"
 printf '"cpu_family":"%s",' "$(json_escape "$CPU_FAMILY")"
 printf '"cpu_arch":"%s",' "$(json_escape "$CPU_ARCH")"
 printf '"cpu_sockets":%d,' "$CPU_SOCKETS"
+printf '"avx2_supported":%s,' "$([ "$AVX2_SUPPORTED" = true ] && echo true || echo false)"
+printf '"cpu_flags":%s,' "$CPU_FLAGS_JSON"
 printf '"nvme_drives":[%s],' "$NVME_DRIVES_JSON"
 printf '"nvme_drive_count":%d' "$NVME_DRIVES_COUNT"
 printf '}\n'
