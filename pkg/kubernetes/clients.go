@@ -2,7 +2,9 @@ package kubernetes
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 
 	"github.com/go-logr/logr"
 	wekaapi "github.com/weka/weka-k8s-api/api/v1alpha1"
@@ -11,6 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/rest"
+	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -118,6 +121,20 @@ func NewK8sClients(ctx context.Context) (*K8sClients, error) {
 	// Create a cache for efficient listing and watching
 	cacheObj, err := cache.New(cfg, cache.Options{
 		Scheme: runtimeScheme,
+		DefaultWatchErrorHandler: func(ctx context.Context, r *toolscache.Reflector, err error) {
+			switch {
+			case err == nil:
+				return
+			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+				// normal during shutdown of a short-lived command
+				return
+			case err == io.EOF:
+				// also commonly benign
+				return
+			default:
+				toolscache.DefaultWatchErrorHandler(ctx, r, err)
+			}
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cache: %w", err)

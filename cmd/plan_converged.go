@@ -18,7 +18,9 @@ var planConvergedCmd = &cobra.Command{
 func init() {
 	planCmd.AddCommand(planConvergedCmd)
 	planConvergedCmd.SilenceUsage = true
-	planConvergedCmd.ValidArgsFunction = completionListAllYamlFilesInDirectory
+
+	planClusterCmd.ValidArgs = []cobra.Completion{"yml", "yaml"}
+	planClusterCmd.CompletionOptions.SetDefaultShellCompDirective(cobra.ShellCompDirectiveFilterFileExt | cobra.ShellCompDirectiveFilterDirs | cobra.ShellCompDirectiveNoSpace)
 
 }
 

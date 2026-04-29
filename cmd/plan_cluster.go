@@ -20,7 +20,8 @@ func init() {
 	planCmd.AddCommand(planClusterCmd)
 	planClusterCmd.Flags().BoolVar(&flagFailFast, "fail-fast", false, "Stop validation on first error (default: collect all errors)")
 
-	planClusterCmd.ValidArgsFunction = completionListAllYamlFilesInDirectory
+	planClusterCmd.ValidArgs = []cobra.Completion{"yml", "yaml"}
+	planClusterCmd.CompletionOptions.SetDefaultShellCompDirective(cobra.ShellCompDirectiveFilterFileExt | cobra.ShellCompDirectiveFilterDirs | cobra.ShellCompDirectiveNoSpace)
 
 	planClusterCmd.SilenceUsage = true
 }
