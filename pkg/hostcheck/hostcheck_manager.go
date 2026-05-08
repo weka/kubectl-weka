@@ -96,6 +96,13 @@ func RunHostChecks(ctx context.Context, clients *kubernetes.K8sClients, nodes []
 			},
 		}
 
+		if isOpenShiftCluster(ctx, clients) {
+			// Add OpenShift-specific label to avoid SCC issues
+			ns.ObjectMeta.Labels["pod-security.kubernetes.io/warn"] = "privileged"
+			ns.ObjectMeta.Labels["pod-security.kubernetes.io/audit"] = "privileged"
+			ns.ObjectMeta.Labels["pod-security.kubernetes.io/enforce"] = "privileged"
+		}
+
 		if err := clients.CRClient.Create(ctx, ns); err != nil {
 			return nil, fmt.Errorf("failed to create temporary namespace: %w", err)
 		}
@@ -165,6 +172,27 @@ func RunHostChecks(ctx context.Context, clients *kubernetes.K8sClients, nodes []
 		defer cleanupFunc()
 	}
 
+	// Detect if running on OpenShift
+	isOpenShift := isOpenShiftCluster(ctx, clients)
+
+	// Setup service account and SCC binding ONCE per namespace (not per pod)
+	if err := createHostCheckServiceAccount(ctx, clients, namespace); err != nil {
+		if opts.Verbose {
+			fmt.Printf("Warning: Failed to create service account for hostcheck: %v\n", err)
+		}
+		// Continue anyway - service account might be pre-created
+	}
+
+	// If OpenShift, attempt to bind service account to privileged SCC (once per namespace)
+	if isOpenShift {
+		if err := bindServiceAccountToPrivilegedSCC(ctx, clients, namespace); err != nil {
+			if opts.Verbose {
+				fmt.Printf("Warning: SCC binding encountered issue: %v\n", err)
+			}
+			// Continue anyway - SCC binding might be manually configured
+		}
+	}
+
 	if opts.Verbose {
 		fmt.Printf("Creating hostcheck pods on %d nodes...\n", len(nodes))
 	}
@@ -173,7 +201,13 @@ func RunHostChecks(ctx context.Context, clients *kubernetes.K8sClients, nodes []
 	createdPods := make(map[string]*corev1.Pod)
 	for _, node := range nodes {
 		podName := fmt.Sprintf("hostchk-%s-%s", kubernetes.SanitizeName(node.Name), utils.RandomString(5))
-		pod := makeHostChecksPod(namespace, node.Name, podName, opts.LabelKey, opts.LabelValue)
+		pod, err := makeHostChecksPod(namespace, node.Name, podName, opts.LabelKey, opts.LabelValue, isOpenShift)
+		if err != nil {
+			if opts.Verbose {
+				fmt.Printf("  [%s] Failed to create pod spec: %v\n", node.Name, err)
+			}
+			continue
+		}
 
 		if err := clients.CRClient.Create(ctx, pod); err != nil {
 			if opts.Verbose {
