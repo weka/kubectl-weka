@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/weka/kubectl-weka/compare/v0.4.0...v0.4.1) (2026-08-17)
+
+
+### Bug Fixes
+
+* **airgapped:** deep-merge chart values so the rewrite keeps what it did not change ([d85c471](https://github.com/weka/kubectl-weka/commit/d85c47170a497a8d69445da393b78b59016e484f))
+* **cmd:** only require a kubeconfig for commands that use the cluster ([0903b1c](https://github.com/weka/kubectl-weka/commit/0903b1c2b2bd4f07e3066718246467805c24f5bc))
+
 ## [0.4.0](https://github.com/weka/kubectl-weka/compare/v0.3.2...v0.4.0) (2026-08-17)
 
 
