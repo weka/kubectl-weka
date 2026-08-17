@@ -12,4 +12,7 @@ This command group helps you prepare and deploy WEKA in air-gapped environments 
 - Uploading images to custom registries
 - Updating Helm charts with custom image URLs
 - Providing step-by-step deployment guidance`,
+	// Bundling and registry uploads talk to registries, never to a cluster, and run
+	// on hosts that may have no kubeconfig at all.
+	Annotations: map[string]string{annotationSkipClusterAccess: "true"},
 }
