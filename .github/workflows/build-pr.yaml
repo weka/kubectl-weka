@@ -49,7 +49,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.25.0'
+          # track go.mod like ci.yaml and release.yaml, so the version cannot drift
+          go-version-file: go.mod
           cache: true
 
       - name: Get version information

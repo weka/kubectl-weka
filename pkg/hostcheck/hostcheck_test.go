@@ -307,10 +307,10 @@ func TestNetworkInterface(t *testing.T) {
 		t.Errorf("Expected PCIAddress '0000:01:00.0', got %q", iface.PCIAddress)
 	}
 	if iface.MaxSpeed != 10000 {
-		t.Errorf("Expected MaxSpeed '10Gbps', got %q", iface.MaxSpeed)
+		t.Errorf("Expected MaxSpeed '10Gbps', got %d", iface.MaxSpeed)
 	}
 	if iface.EffectiveSpeed != 10000 {
-		t.Errorf("Expected EffectiveSpeed '10Gbps', got %q", iface.EffectiveSpeed)
+		t.Errorf("Expected EffectiveSpeed '10Gbps', got %d", iface.EffectiveSpeed)
 	}
 	if iface.Metrics == nil {
 		t.Errorf("Expected Metrics to be set, got nil")
@@ -339,7 +339,7 @@ func TestNetworkInterfaceInfiniBand(t *testing.T) {
 		t.Errorf("Expected type 'infiniband', got %q", iface.Type)
 	}
 	if iface.MaxSpeed != 400000 {
-		t.Errorf("Expected MaxSpeed '400Gbps', got %q", iface.MaxSpeed)
+		t.Errorf("Expected MaxSpeed '400Gbps', got %d", iface.MaxSpeed)
 	}
 	if iface.Model != "Mellanox ConnectX-7" {
 		t.Errorf("Expected Model 'Mellanox ConnectX-7', got %q", iface.Model)
