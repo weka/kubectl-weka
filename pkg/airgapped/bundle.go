@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -363,6 +364,9 @@ func (b *Bundle) downloadOperatorImages(ctx context.Context, ch *chart.Chart, au
 		"csi.resizerImage":       "CSI resizer image",
 		"csi.snapshotterImage":   "CSI snapshotter image",
 		"csi.registrarImage":     "CSI registrar image",
+		// csi.healthMonitorImage is only present in operator charts that deploy the
+		// external health monitor sidecar; older charts skip it as an empty value.
+		"csi.healthMonitorImage": "CSI external health monitor image",
 	}
 
 	for pathKey, description := range nestedPaths {
@@ -416,26 +420,20 @@ func (b *Bundle) downloadCSIImages(ctx context.Context, ch *chart.Chart, auth au
 	// Nested image paths: navigate through the values map hierarchy
 	// Structure from values.yaml:
 	//  images:
-	//    livenessprobesidecar: registry.k8s.io/sig-storage/livenessprobe:v2.16.0
-	//    attachersidecar: registry.k8s.io/sig-storage/csi-attacher:v4.9.0
-	//    provisionersidecar: registry.k8s.io/sig-storage/csi-provisioner:v5.3.0
-	//    registrarsidecar: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.14.0
-	//    resizersidecar: registry.k8s.io/sig-storage/csi-resizer:v1.14.0
-	//    snapshottersidecar: registry.k8s.io/sig-storage/csi-snapshotter:v8.3.0
+	//    livenessprobesidecar: registry.k8s.io/sig-storage/livenessprobe:v2.19.0
+	//    attachersidecar: registry.k8s.io/sig-storage/csi-attacher:v4.12.0
+	//    provisionersidecar: registry.k8s.io/sig-storage/csi-provisioner:v6.3.0
+	//    registrarsidecar: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.17.0
+	//    resizersidecar: registry.k8s.io/sig-storage/csi-resizer:v2.2.1
+	//    snapshottersidecar: registry.k8s.io/sig-storage/csi-snapshotter:v8.6.0
+	//    healthmonitorsidecar: registry.k8s.io/sig-storage/csi-external-health-monitor-controller:v0.18.0
 	//    csidriver: quay.io/weka.io/csi-wekafs
 	//    csidriverTag: <version>
 
-	// Sidecar images
-	sidecarPaths := map[string]string{
-		"images.livenessprobesidecar": "CSI liveness probe sidecar",
-		"images.attachersidecar":      "CSI attacher sidecar",
-		"images.provisionersidecar":   "CSI provisioner sidecar",
-		"images.registrarsidecar":     "CSI registrar sidecar",
-		"images.resizersidecar":       "CSI resizer sidecar",
-		"images.snapshottersidecar":   "CSI snapshotter sidecar",
-	}
+	// Sidecar images (see csiSidecarImagePaths in constants.go)
+	warnUnknownCSISidecars(ctx, ch)
 
-	for pathKey, description := range sidecarPaths {
+	for pathKey, description := range csiSidecarImagePaths {
 		if img := helm.GetNestedValue(ch.Values, pathKey); img != "" {
 			logger.Debug("Downloading CSI sidecar image", "path", pathKey, "description", description, "image", img)
 			archive, err := docker.Download(ctx, img, "", b.opts.Archs, "linux", auth)
@@ -470,6 +468,27 @@ func (b *Bundle) downloadCSIImages(ctx context.Context, ch *chart.Chart, auth au
 	}
 
 	return ret, nil
+}
+
+// warnUnknownCSISidecars reports sidecar images present in the chart values but
+// not covered by csiSidecarImagePaths, so that sidecars added by newer CSI plugin
+// releases surface instead of being silently left out of the bundle.
+func warnUnknownCSISidecars(ctx context.Context, ch *chart.Chart) {
+	images, ok := ch.Values["images"].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	for key := range images {
+		if !strings.HasSuffix(strings.ToLower(key), "sidecar") {
+			continue
+		}
+		if _, known := csiSidecarImagePaths["images."+key]; known {
+			continue
+		}
+		logging.GetLogger(ctx).Warn("unknown CSI sidecar image in chart values, not included in bundle",
+			"path", "images."+key, "image", helm.GetNestedValue(ch.Values, "images."+key))
+	}
 }
 
 func (b *Bundle) Download(ctx context.Context) error {

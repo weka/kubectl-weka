@@ -395,6 +395,7 @@ func updateOperatorChartValues(values map[string]interface{}, imageMapping map[s
 		"csi.resizerImage":       "image",
 		"csi.snapshotterImage":   "image",
 		"csi.registrarImage":     "image",
+		"csi.healthMonitorImage": "image",
 	}
 
 	for dotPath := range nestedPaths {
@@ -429,17 +430,8 @@ func updateOperatorChartValues(values map[string]interface{}, imageMapping map[s
 func updateCSIChartValues(values map[string]interface{}, imageMapping map[string]string) map[string]interface{} {
 	updatedValues := make(map[string]interface{})
 
-	// Sidecar image paths
-	sidecarPaths := map[string]string{
-		"images.livenessprobesidecar": "image",
-		"images.attachersidecar":      "image",
-		"images.provisionersidecar":   "image",
-		"images.registrarsidecar":     "image",
-		"images.resizersidecar":       "image",
-		"images.snapshottersidecar":   "image",
-	}
-
-	for dotPath := range sidecarPaths {
+	// Sidecar image paths (see csiSidecarImagePaths in constants.go)
+	for dotPath := range csiSidecarImagePaths {
 		if imgRef := helm.GetNestedValue(values, dotPath); imgRef != "" {
 			if newRef, found := imageMapping[imgRef]; found {
 				helm.SetNestedValue(updatedValues, dotPath, newRef)
