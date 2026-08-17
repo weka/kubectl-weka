@@ -1,10 +1,41 @@
 package airgapped
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/weka/kubectl-weka/pkg/helm"
+	"helm.sh/helm/v3/pkg/chart"
 )
+
+// The rewritten chart must keep images.csidriverTag. The chart builds the driver
+// reference as "{{ .images.csidriver }}:v{{ .images.csidriverTag }}", so losing the
+// tag renders "<registry>/csi-wekafs:v" and every CSI pod lands in ImagePullBackOff.
+func TestUpdatedCSIChartKeepsDriverTag(t *testing.T) {
+	values := csiChartValues()
+	imageMapping := map[string]string{
+		"quay.io/weka.io/csi-wekafs:v2.8.0": "my-registry.local:5000/csi-wekafs:v2.8.0",
+	}
+
+	updated := updateCSIChartValues(values, imageMapping)
+
+	ch := &chart.Chart{
+		Metadata: &chart.Metadata{APIVersion: "v2", Name: "csi-wekafsplugin", Version: "2.9.2"},
+		Values:   values,
+	}
+	out := filepath.Join(t.TempDir(), "csi.tgz")
+	if err := helm.CreateUpdatedChartArchive(context.Background(), ch, updated, out); err != nil {
+		t.Fatalf("CreateUpdatedChartArchive: %v", err)
+	}
+
+	if got := helm.GetNestedValue(ch.Values, "images.csidriverTag"); got != "2.8.0" {
+		t.Errorf("images.csidriverTag = %q, want %q kept so the driver tag is not empty", got, "2.8.0")
+	}
+	if got := helm.GetNestedValue(ch.Values, "images.csidriver"); got != "my-registry.local:5000/csi-wekafs" {
+		t.Errorf("images.csidriver = %q, want the rewritten repository", got)
+	}
+}
 
 // csiChartValues mimics the images section of the csi-wekafsplugin chart values
 func csiChartValues() map[string]interface{} {

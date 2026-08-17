@@ -5,6 +5,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// MergeValuesDeep recursively merges src into dst.
+//
+// Where both sides hold a map under the same key it recurses, so keys present only
+// in dst survive. A shallow assignment would replace the whole nested map and drop
+// them - for a sparse update such as {"images": {"csidriver": ...}} that silently
+// deletes every other images.* key, including the tag the chart needs.
+//
+// dst is modified in place. Non-map values in src always win.
+func MergeValuesDeep(dst, src map[string]interface{}) {
+	for key, srcVal := range src {
+		srcMap, srcIsMap := srcVal.(map[string]interface{})
+		if srcIsMap {
+			if dstMap, dstIsMap := dst[key].(map[string]interface{}); dstIsMap {
+				MergeValuesDeep(dstMap, srcMap)
+				continue
+			}
+		}
+		dst[key] = srcVal
+	}
+}
+
 // mergeValuesWithComments applies changes from modifiedValues to originalContent while preserving comments
 // Uses gopkg.in/yaml.v3 which preserves comments during parsing and marshaling
 func mergeValuesWithComments(originalContent []byte, modifiedValues map[string]interface{}) ([]byte, error) {

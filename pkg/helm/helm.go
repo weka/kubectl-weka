@@ -337,10 +337,11 @@ func CreateUpdatedChartArchive(ctx context.Context, chart *chart.Chart, updatedV
 		chart.Values = make(map[string]interface{})
 	}
 
-	// Deep merge: apply updates to existing values
-	for key, value := range updatedValues {
-		chart.Values[key] = value
-	}
+	// Deep merge, so values the caller did not rewrite are kept. updatedValues is
+	// sparse (only the image references that changed), so replacing top-level keys
+	// outright would drop their siblings - e.g. images.csidriverTag, leaving the
+	// driver image with an empty tag.
+	MergeValuesDeep(chart.Values, updatedValues)
 
 	// Create archive directory
 	outputDir := filepath.Dir(outputPath)
