@@ -14,6 +14,13 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         with:
-          release-type: go
-          package-name: kubectl-weka
+          # Version state lives in .release-please-manifest.json, pinned to the
+          # newest shipped tag. Without it release-please tracks only its own
+          # release commits, and since skip-github-release means it never tags,
+          # it drifts away from the tags that are actually released.
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          # Tagging stays manual: pushing a v* tag is what triggers release.yaml
+          # (GoReleaser + krew). release-please only prepares the version bump
+          # and CHANGELOG in a PR.
           skip-github-release: true
