@@ -29,3 +29,26 @@ var csiSidecarImagePaths = map[string]string{
 	"images.snapshottersidecar":   "CSI snapshotter sidecar",
 	"images.healthmonitorsidecar": "CSI external health monitor sidecar",
 }
+
+// operatorImagePaths maps the dot-notation paths of images in the weka-operator
+// chart values to a human readable description. Like csiSidecarImagePaths it is
+// shared by image listing, download and chart rewriting on upload.
+// The operator image itself is built from image.repository and the chart
+// appVersion and is handled separately.
+var operatorImagePaths = map[string]string{
+	"sign-drive-image":       "sign drive image",
+	"kubeProxyImage":         "kube proxy image",
+	"maintenanceImage":       "maintenance image",
+	"taskmon.defaultImage":   "taskmon default image",
+	"metrics.clusters.image": "metrics clusters image",
+	"csi.image":              "CSI driver image",
+	"csi.provisionerImage":   "CSI provisioner image",
+	"csi.attacherImage":      "CSI attacher image",
+	"csi.livenessProbeImage": "CSI liveness probe image",
+	"csi.resizerImage":       "CSI resizer image",
+	"csi.snapshotterImage":   "CSI snapshotter image",
+	"csi.registrarImage":     "CSI registrar image",
+	// csi.healthMonitorImage is only present in operator charts that deploy the
+	// external health monitor sidecar; older charts skip it as an empty value.
+	"csi.healthMonitorImage": "CSI external health monitor image",
+}

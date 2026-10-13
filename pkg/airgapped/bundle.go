@@ -321,153 +321,37 @@ func (b *Bundle) downloadWekaComponent(ctx context.Context) error {
 
 // downloadOperatorImages downloads all images from Operator Helm chart
 func (b *Bundle) downloadOperatorImages(ctx context.Context, ch *chart.Chart, auth authn.Authenticator) (*ComponentManifest, error) {
-	logger := logging.GetLogger(ctx)
-	ret := &ComponentManifest{
-		Name:    "operator-images",
-		Version: ch.Metadata.Version,
-		Images:  []*docker.ImageArchive{},
-		Size:    0,
-	}
-
-	if ch.Values == nil {
-		return ret, nil
-	}
-
-	// Image paths to extract: simple root-level paths
-	simplePaths := []string{
-		"sign-drive-image",
-		"kubeProxyImage",
-		"maintenanceImage",
-	}
-
-	for _, path := range simplePaths {
-		if img, ok := ch.Values[path].(string); ok && img != "" {
-			logger.Debug("Downloading image", "path", path, "image", img)
-			archive, err := docker.Download(ctx, img, "", b.opts.Archs, "linux", auth)
-			if err != nil {
-				logger.Warn("failed to download image", "path", path, "image", img, "error", err)
-				continue
-			}
-			ret.Images = append(ret.Images, archive)
-			ret.Size += archive.Size
-		}
-	}
-
-	// Nested image paths: navigate through the values map hierarchy
-	nestedPaths := map[string]string{
-		"taskmon.defaultImage":   "taskmon default image",
-		"metrics.clusters.image": "metrics clusters image",
-		"csi.image":              "CSI driver image",
-		"csi.provisionerImage":   "CSI provisioner image",
-		"csi.attacherImage":      "CSI attacher image",
-		"csi.livenessProbeImage": "CSI liveness probe image",
-		"csi.resizerImage":       "CSI resizer image",
-		"csi.snapshotterImage":   "CSI snapshotter image",
-		"csi.registrarImage":     "CSI registrar image",
-		// csi.healthMonitorImage is only present in operator charts that deploy the
-		// external health monitor sidecar; older charts skip it as an empty value.
-		"csi.healthMonitorImage": "CSI external health monitor image",
-	}
-
-	for pathKey, description := range nestedPaths {
-		if img := helm.GetNestedValue(ch.Values, pathKey); img != "" {
-			logger.Debug("Downloading image", "path", pathKey, "description", description, "image", img)
-			archive, err := docker.Download(ctx, img, "", b.opts.Archs, "linux", auth)
-			if err != nil {
-				logger.Warn("failed to download image", "path", pathKey, "image", img, "error", err)
-				continue
-			}
-			ret.Images = append(ret.Images, archive)
-			ret.Size += archive.Size
-		}
-	}
-
-	// Special case: operatorImage built from image.repository + chart.appVersion
-	if repo := helm.GetNestedValue(ch.Values, "image.repository"); repo != "" {
-		tag := ch.Metadata.AppVersion
-		if tag == "" {
-			tag = ch.Metadata.Version
-		}
-		fullImage := repo + ":" + tag
-
-		logger.Debug("Downloading operator image", "repository", repo, "tag", tag, "full_image", fullImage)
-		archive, err := docker.Download(ctx, repo, tag, b.opts.Archs, "linux", auth)
-		if err != nil {
-			logger.Warn("failed to download operator image", "image", fullImage, "error", err)
-		} else {
-			ret.Images = append(ret.Images, archive)
-			ret.Size += archive.Size
-		}
-	}
-
-	return ret, nil
+	return b.downloadImages(ctx, "operator-images", ch, operatorImageRefs(ch), auth), nil
 }
 
 // downloadCSIImages downloads all images from CSI plugin Helm chart
 func (b *Bundle) downloadCSIImages(ctx context.Context, ch *chart.Chart, auth authn.Authenticator) (*ComponentManifest, error) {
+	warnUnknownCSISidecars(ctx, ch)
+	return b.downloadImages(ctx, "csi-images", ch, csiImageRefs(ch), auth), nil
+}
+
+// downloadImages downloads the given image references of a chart into a component.
+// Failed downloads are logged and skipped.
+func (b *Bundle) downloadImages(ctx context.Context, name string, ch *chart.Chart, refs []ImageRef, auth authn.Authenticator) *ComponentManifest {
 	logger := logging.GetLogger(ctx)
 	ret := &ComponentManifest{
-		Name:    "csi-images",
+		Name:    name,
 		Version: ch.Metadata.Version,
 		Images:  []*docker.ImageArchive{},
 		Size:    0,
 	}
 
-	if ch.Values == nil {
-		return ret, nil
-	}
-
-	// Nested image paths: navigate through the values map hierarchy
-	// Structure from values.yaml:
-	//  images:
-	//    livenessprobesidecar: registry.k8s.io/sig-storage/livenessprobe:v2.19.0
-	//    attachersidecar: registry.k8s.io/sig-storage/csi-attacher:v4.12.0
-	//    provisionersidecar: registry.k8s.io/sig-storage/csi-provisioner:v6.3.0
-	//    registrarsidecar: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.17.0
-	//    resizersidecar: registry.k8s.io/sig-storage/csi-resizer:v2.2.1
-	//    snapshottersidecar: registry.k8s.io/sig-storage/csi-snapshotter:v8.6.0
-	//    healthmonitorsidecar: registry.k8s.io/sig-storage/csi-external-health-monitor-controller:v0.18.0
-	//    csidriver: quay.io/weka.io/csi-wekafs
-	//    csidriverTag: <version>
-
-	// Sidecar images (see csiSidecarImagePaths in constants.go)
-	warnUnknownCSISidecars(ctx, ch)
-
-	for pathKey, description := range csiSidecarImagePaths {
-		if img := helm.GetNestedValue(ch.Values, pathKey); img != "" {
-			logger.Debug("Downloading CSI sidecar image", "path", pathKey, "description", description, "image", img)
-			archive, err := docker.Download(ctx, img, "", b.opts.Archs, "linux", auth)
-			if err != nil {
-				logger.Warn("failed to download sidecar image", "path", pathKey, "image", img, "error", err)
-				continue
-			}
-			ret.Images = append(ret.Images, archive)
-			ret.Size += archive.Size
-		}
-	}
-
-	// CSI driver main image: built from images.csidriver + images.csidriverTag
-	if driver := helm.GetNestedValue(ch.Values, "images.csidriver"); driver != "" {
-		tag := helm.GetNestedValue(ch.Values, "images.csidriverTag")
-		if tag == "" {
-			tag = ch.Metadata.AppVersion
-		}
-		if tag == "" {
-			tag = ch.Metadata.Version
-		}
-
-		fullImage := driver + ":v" + tag
-		logger.Debug("Downloading CSI driver image", "driver", driver, "tag", tag, "full_image", fullImage)
-		archive, err := docker.Download(ctx, fullImage, "", b.opts.Archs, "linux", auth)
+	for _, ref := range refs {
+		logger.Debug("Downloading image", "path", ref.Path, "description", ref.Description, "image", ref.Image)
+		archive, err := docker.Download(ctx, ref.Image, "", b.opts.Archs, "linux", auth)
 		if err != nil {
-			logger.Warn("failed to download CSI driver image", "image", fullImage, "error", err)
-		} else {
-			ret.Images = append(ret.Images, archive)
-			ret.Size += archive.Size
+			logger.Warn("failed to download image", "path", ref.Path, "image", ref.Image, "error", err)
+			continue
 		}
+		ret.Images = append(ret.Images, archive)
+		ret.Size += archive.Size
 	}
-
-	return ret, nil
+	return ret
 }
 
 // warnUnknownCSISidecars reports sidecar images present in the chart values but

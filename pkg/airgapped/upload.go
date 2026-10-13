@@ -374,31 +374,8 @@ func updateCSIChart(ctx context.Context, chartPath string, imageMapping map[stri
 func updateOperatorChartValues(values map[string]interface{}, imageMapping map[string]string) map[string]interface{} {
 	updatedValues := make(map[string]interface{})
 
-	// Image paths that need updating for the operator chart
-	simplePaths := []string{"sign-drive-image", "kubeProxyImage", "maintenanceImage"}
-	for _, path := range simplePaths {
-		if imgRef, ok := values[path].(string); ok && imgRef != "" {
-			if newRef, found := imageMapping[imgRef]; found {
-				updatedValues[path] = newRef
-			}
-		}
-	}
-
-	// Nested image paths
-	nestedPaths := map[string]string{
-		"taskmon.defaultImage":   "image",
-		"metrics.clusters.image": "image",
-		"csi.image":              "image",
-		"csi.provisionerImage":   "image",
-		"csi.attacherImage":      "image",
-		"csi.livenessProbeImage": "image",
-		"csi.resizerImage":       "image",
-		"csi.snapshotterImage":   "image",
-		"csi.registrarImage":     "image",
-		"csi.healthMonitorImage": "image",
-	}
-
-	for dotPath := range nestedPaths {
+	// Image paths that need updating for the operator chart (see operatorImagePaths in constants.go)
+	for dotPath := range operatorImagePaths {
 		if imgRef := helm.GetNestedValue(values, dotPath); imgRef != "" {
 			if newRef, found := imageMapping[imgRef]; found {
 				helm.SetNestedValue(updatedValues, dotPath, newRef)
