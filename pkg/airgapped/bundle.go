@@ -642,6 +642,9 @@ func (b *Bundle) processOperator(ctx context.Context) error {
 		return fmt.Errorf("failed to download operator images: %w", err)
 	}
 	b.RegisterComponent(comp)
+
+	logger.Info("Processing WEKA driver builder images")
+	b.RegisterComponent(b.downloadImages(ctx, "builder-images", b.opts.OperatorChart, builderImageRefs(b.opts.OperatorChart.Values), nil))
 	return nil
 }
 

@@ -29,6 +29,8 @@ own tooling (skopeo, crane, a registry proxy).
 
 Images are resolved exactly as 'download' does:
 - Operator chart: the known image keys in values.yaml, plus image.repository:<appVersion>
+- Driver builders: every image under the operator chart's builderImages, one per
+  node OS, listed as the "builder" component
 - CSI chart: the images.*sidecar keys, plus images.csidriver:v<csidriverTag>
 - WEKA software: quay.io/weka.io/weka-in-container:<weka-version>
 

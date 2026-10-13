@@ -12,6 +12,7 @@ import (
 // Component names reported for each image reference
 const (
 	ComponentOperator = "operator"
+	ComponentBuilder  = "builder"
 	ComponentCSI      = "csi"
 	ComponentWeka     = "weka"
 )
@@ -52,6 +53,28 @@ func operatorImageRefs(ch *chart.Chart) []ImageRef {
 			tag = ch.Metadata.Version
 		}
 		refs = append(refs, ImageRef{Component: ComponentOperator, Path: "image.repository", Description: "operator image", Image: repo + ":" + tag})
+	}
+	return refs
+}
+
+// builderImageRefs resolves the driver builder images from the operator chart
+// values, one per node OS
+func builderImageRefs(values map[string]interface{}) []ImageRef {
+	section, ok := values[operatorBuilderImagesPath].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	found := map[string]string{}
+	walkStringValues(section, operatorBuilderImagesPath, func(path, value string) {
+		if value != "" {
+			found[path] = value
+		}
+	})
+
+	var refs []ImageRef
+	for _, path := range sortedKeys(found) {
+		refs = append(refs, ImageRef{Component: ComponentBuilder, Path: path, Description: "driver builder image", Image: found[path]})
 	}
 	return refs
 }
@@ -145,8 +168,13 @@ func ListImages(opts *DownloadOptions, discover bool) []ImageRef {
 
 	operator := operatorImageRefs(opts.OperatorChart)
 	refs = append(refs, operator...)
+	var builder []ImageRef
+	if opts.OperatorChart != nil {
+		builder = builderImageRefs(opts.OperatorChart.Values)
+		refs = append(refs, builder...)
+	}
 	if discover {
-		refs = append(refs, discoverImageRefs(ComponentOperator, opts.OperatorChart, operator)...)
+		refs = append(refs, discoverImageRefs(ComponentOperator, opts.OperatorChart, append(operator, builder...))...)
 	}
 
 	csi := csiImageRefs(opts.CSIChart)

@@ -37,6 +37,8 @@ var csiSidecarImagePaths = map[string]string{
 // appVersion and is handled separately.
 var operatorImagePaths = map[string]string{
 	"sign-drive-image":       "sign drive image",
+	"signDrivesImage":        "sign drives tool image",
+	"envoyImage":             "envoy proxy image",
 	"kubeProxyImage":         "kube proxy image",
 	"maintenanceImage":       "maintenance image",
 	"taskmon.defaultImage":   "taskmon default image",
@@ -52,3 +54,10 @@ var operatorImagePaths = map[string]string{
 	// external health monitor sidecar; older charts skip it as an empty value.
 	"csi.healthMonitorImage": "CSI external health monitor image",
 }
+
+// operatorBuilderImagesPath is the operator chart values section holding the
+// driver builder images, keyed by node OS (default, ubuntu24, nixos.gcc15, ...).
+// Every image under it is bundled, so builders added by newer charts are picked
+// up without a code change. The images are multi-arch and are filtered by the
+// requested architectures like any other image.
+const operatorBuilderImagesPath = "builderImages"

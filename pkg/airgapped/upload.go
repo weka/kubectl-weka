@@ -383,6 +383,13 @@ func updateOperatorChartValues(values map[string]interface{}, imageMapping map[s
 		}
 	}
 
+	// Driver builder images (see operatorBuilderImagesPath in constants.go)
+	for _, ref := range builderImageRefs(values) {
+		if newRef, found := imageMapping[ref.Image]; found {
+			helm.SetNestedValue(updatedValues, ref.Path, newRef)
+		}
+	}
+
 	// Special case: operator image built from image.repository + tag
 	if repo := helm.GetNestedValue(values, "image.repository"); repo != "" {
 		// Try to find matching entry in imageMapping by partial match

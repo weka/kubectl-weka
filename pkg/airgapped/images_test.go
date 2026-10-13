@@ -137,3 +137,56 @@ func TestListImages(t *testing.T) {
 		t.Errorf("ListImages(discover=true) = %+v, want the new sidecar discovered after the CSI images", refs)
 	}
 }
+
+// operatorBuilderValues mimics the builderImages section of the weka-operator chart values
+func operatorBuilderValues() map[string]interface{} {
+	return map[string]interface{}{
+		"signDrivesImage": "quay.io/weka.io/weka-sign-tool:cfbc608-multiarch",
+		"envoyImage":      "docker.io/envoyproxy/envoy:v1.31-latest",
+		"builderImages": map[string]interface{}{
+			"default":  "quay.io/weka.io/weka-drivers-build-images:builder-ubuntu22-v1",
+			"ubuntu24": "quay.io/weka.io/weka-drivers-build-images:builder-ubuntu24-v1",
+			"nixos": map[string]interface{}{
+				"gcc15": "quay.io/weka.io/weka-drivers-build-images:builder-nixos-gcc15-v2",
+			},
+		},
+	}
+}
+
+func TestBuilderImageRefs(t *testing.T) {
+	got := builderImageRefs(operatorBuilderValues())
+	want := []ImageRef{
+		{Component: ComponentBuilder, Path: "builderImages.default", Description: "driver builder image", Image: "quay.io/weka.io/weka-drivers-build-images:builder-ubuntu22-v1"},
+		{Component: ComponentBuilder, Path: "builderImages.nixos.gcc15", Description: "driver builder image", Image: "quay.io/weka.io/weka-drivers-build-images:builder-nixos-gcc15-v2"},
+		{Component: ComponentBuilder, Path: "builderImages.ubuntu24", Description: "driver builder image", Image: "quay.io/weka.io/weka-drivers-build-images:builder-ubuntu24-v1"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("builderImageRefs =\n%+v\nwant\n%+v", got, want)
+	}
+
+	// older charts have no builderImages section
+	if refs := builderImageRefs(map[string]interface{}{"kubeProxyImage": "quay.io/brancz/kube-rbac-proxy:v0.21.0"}); refs != nil {
+		t.Errorf("builderImageRefs without builderImages = %v, want nil", refs)
+	}
+}
+
+// with the builders, sign tool and envoy covered, a current operator chart has
+// nothing left for discovery to report
+func TestListImagesOperatorNothingDiscovered(t *testing.T) {
+	opts := &DownloadOptions{OperatorChart: &chart.Chart{
+		Metadata: &chart.Metadata{Name: "weka-operator", Version: "v1.16.3"},
+		Values:   operatorBuilderValues(),
+	}}
+
+	var components []string
+	for _, ref := range ListImages(opts, true) {
+		if ref.Discovered {
+			t.Errorf("discovered %s at %s, want it bundled", ref.Image, ref.Path)
+		}
+		components = append(components, ref.Component)
+	}
+	want := []string{ComponentOperator, ComponentOperator, ComponentBuilder, ComponentBuilder, ComponentBuilder}
+	if !reflect.DeepEqual(components, want) {
+		t.Errorf("components = %v, want %v", components, want)
+	}
+}
