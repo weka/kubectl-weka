@@ -114,3 +114,25 @@ func TestUpdateCSIChartValuesRewritesHealthMonitorSidecar(t *testing.T) {
 		t.Errorf("images.resizersidecar = %q, want empty (not in image mapping)", got)
 	}
 }
+
+func TestUpdateOperatorChartValuesRewritesBuilderImages(t *testing.T) {
+	imageMapping := map[string]string{
+		"quay.io/weka.io/weka-drivers-build-images:builder-ubuntu22-v1":    "my-registry.local:5000/weka-drivers-build-images:builder-ubuntu22-v1",
+		"quay.io/weka.io/weka-drivers-build-images:builder-nixos-gcc15-v2": "my-registry.local:5000/weka-drivers-build-images:builder-nixos-gcc15-v2",
+		"quay.io/weka.io/weka-sign-tool:cfbc608-multiarch":                 "my-registry.local:5000/weka-sign-tool:cfbc608-multiarch",
+	}
+
+	updated := updateOperatorChartValues(operatorBuilderValues(), imageMapping)
+
+	for path, want := range map[string]string{
+		"builderImages.default":     "my-registry.local:5000/weka-drivers-build-images:builder-ubuntu22-v1",
+		"builderImages.nixos.gcc15": "my-registry.local:5000/weka-drivers-build-images:builder-nixos-gcc15-v2",
+		"signDrivesImage":           "my-registry.local:5000/weka-sign-tool:cfbc608-multiarch",
+		// not uploaded, so left out of the overrides
+		"builderImages.ubuntu24": "",
+	} {
+		if got := helm.GetNestedValue(updated, path); got != want {
+			t.Errorf("%s = %q, want %q", path, got, want)
+		}
+	}
+}
